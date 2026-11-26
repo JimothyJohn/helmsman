@@ -1,7 +1,6 @@
 //! The diagram's Q and E keys: the view jumps to the previous or next
 //! part of the program that carries the logic, framed with some room
-//! around it (Nick, 2026-11-15). The keys sit beside W A S D, which move
-//! the view.
+//! around it (Nick, 2026-11-15).
 //!
 //! A stop is a function block call with the blocks that feed it (a timer,
 //! a counter, an instance of a block of the project's own) or a top-level

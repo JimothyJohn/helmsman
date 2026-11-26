@@ -129,8 +129,8 @@ switch its inputs. What you can do:
   to look inside it. The name beside the zoom buttons says which level
   you are on and steps to any other. A drag on empty space draws a box that selects; move the view
   with the hand button beside the zoom buttons (a drag on empty space then
-  moves it), with Space and a drag, the middle button, or the arrow keys or
-  W A S D while the pointer is over the diagram. The diagram never leaves the view, and a
+  moves it), with Space and a drag, the middle button, or the arrow keys
+  while the pointer is over the diagram. The diagram never leaves the view, and a
   double-click on empty space fits it again.
 - **Jump.** With the pointer over the diagram, <kbd>E</kbd> goes to the
   next function block call, IF, CASE or loop and <kbd>Q</kbd> to the

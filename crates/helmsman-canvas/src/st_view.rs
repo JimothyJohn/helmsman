@@ -62,7 +62,7 @@ pub const FIT_MAX: f32 = 1.6;
 /// Points of wheel or two-finger scroll that zoom the diagram by e
 /// (egui's own figure for a Ctrl scroll).
 pub const SCROLL_ZOOM: f32 = 200.0;
-/// How fast a held arrow key (or W A S D) moves the view, points a second.
+/// How fast a held arrow key moves the view, points a second.
 pub const KEY_PAN: f32 = 900.0;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
@@ -372,11 +372,6 @@ pub struct TreeRow {
     pub has_kids: bool,
     pub folded: bool,
 }
-
-/// What hovering empty diagram space says.
-const EMPTY_TIP: &str = "Click a block to select it, or drag to select the blocks the box touches; \
-Shift or Ctrl adds. The Describe tab then asks about them. Esc, a click here or a click off the diagram \
-lets them go. Move the view with Space and a drag, the middle button, or the arrow keys.";
 
 /// What a drag on the diagram holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2362,12 +2357,13 @@ impl Viewer {
         }
         let glided = (cam.offset, cam.zoom);
         // The wheel (or a two-finger scroll) zooms about the pointer, as
-        // a pinch does; a drag on empty space, the arrow keys or W A S D
-        // move the view (Nick, 2026-11-14: scroll moved it up and down).
+        // a pinch does; a drag on empty space or the arrow keys move the
+        // view (Nick, 2026-11-14: scroll moved it up and down; 2026-11-26:
+        // no W A S D, those letters are the views' keys).
         // Q and E jump to the previous and the next stop.
         let (hover, scroll, zoom, keys, jump, dt) = ui.ctx().input(|i| {
             use egui::Key;
-            let held = |a: Key, b: Key| f32::from(u8::from(i.key_down(a) || i.key_down(b)));
+            let held = |k: Key| f32::from(u8::from(i.key_down(k)));
             // The key's own modifiers: a chord with E or Q is not a jump.
             let jump = i.events.iter().find_map(|e| match e {
                 egui::Event::Key {
@@ -2382,8 +2378,8 @@ impl Viewer {
                 Vec2::ZERO
             } else {
                 Vec2::new(
-                    held(Key::ArrowRight, Key::D) - held(Key::ArrowLeft, Key::A),
-                    held(Key::ArrowDown, Key::S) - held(Key::ArrowUp, Key::W),
+                    held(Key::ArrowRight) - held(Key::ArrowLeft),
+                    held(Key::ArrowDown) - held(Key::ArrowUp),
                 )
             };
             (
@@ -2726,15 +2722,8 @@ impl Viewer {
                     .on_hover_text_at_pointer("Double-click draws what this arm does as one block.");
             }
         }
-        if response.hovered()
-            && carded.is_none()
-            && let Some(p) = hover
-            && self.grab.is_none()
-            && !self.on_pin(cam, p)
-            && matches!(self.grab_at(cam, p), Grab::Empty)
-        {
-            response.clone().on_hover_text_at_pointer(EMPTY_TIP);
-        }
+        // Empty space says nothing (Nick, 2026-11-26: tooltips only over
+        // something that does something).
         if response.hovered()
             && carded.is_none()
             && let Some(p) = hover

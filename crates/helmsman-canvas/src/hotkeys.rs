@@ -39,7 +39,7 @@
 //! | Find in the Structured Text | Ctrl/⌘ F | (a key of our own) |
 //! | Next / previous match | Ctrl/⌘ G, Ctrl/⌘ Shift G | (a key of our own) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
-//! | Next / previous function block call, IF, CASE or loop, framed | E, Q | (`jump`; keys of our own beside W A S D, read by the diagram while the pointer is over it and nothing is typed in) |
+//! | Next / previous function block call, IF, CASE or loop, framed | E, Q | (`jump`; keys of our own, read by the diagram while the pointer is over it and nothing is typed in) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
 //! has had its say: a text editor with the focus keeps its own Ctrl+Z.
@@ -559,8 +559,8 @@ pub fn markdown() -> String {
          stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F and Ctrl G, as in every editor on the \
          web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. \
          Every view has a key of one letter, the first of its name; it works whenever you are \
-         not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, W A S D \
-         and E, Q stay the diagram's own. Help › Show hotkeys writes each key beside its \
+         not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, \
+         E and Q stay the diagram's own. Help › Show hotkeys writes each key beside its \
          button.\n\n\
          | key | does | CODESYS command on that key |\n|---|---|---|\n",
     );
@@ -623,7 +623,7 @@ fn compact(label: &str) -> String {
 /// is returned while a widget has the keyboard (a text field, the code
 /// editor, the find bar), and a letter with any modifier held is left to
 /// the browser and the chords. `diagram`: the pointer is over the diagram,
-/// whose W A S D pan it and E and Q jump along it; those keys stay its.
+/// whose E and Q jump along it; those keys stay its.
 pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
     if ctx.egui_wants_keyboard_input() {
         return Vec::new();
@@ -641,7 +641,7 @@ pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
             else {
                 return true;
             };
-            let diagram_key = matches!(key, Key::W | Key::A | Key::S | Key::D | Key::E | Key::Q);
+            let diagram_key = matches!(key, Key::E | Key::Q);
             if !modifiers.is_none() || (diagram && diagram_key) {
                 return true;
             }
