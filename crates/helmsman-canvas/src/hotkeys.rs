@@ -230,11 +230,13 @@ pub const TABLE: &[Hotkey] = &[
     view(Action::Monitor, Key::M),
     view(Action::Proposals, Key::P),
     view(Action::Describe, Key::D),
+    // Nick, 2026-11-26: A for the Agent tab too, its field ready to type in.
+    view(Action::Describe, Key::A),
     view(Action::St, Key::S),
     view(Action::Io, Key::I),
     view(Action::Devices, Key::V),
     view(Action::Files, Key::F),
-    view(Action::Messages, Key::A),
+    view(Action::Messages, Key::G),
     view(Action::Trend, Key::T),
 ];
 
@@ -244,8 +246,10 @@ pub const TABLE: &[Hotkey] = &[
 /// row, then the Messages and the Trend. A name whose first letter an
 /// earlier view holds takes the next free letter of its own name:
 /// Devices (D is Describe's) takes V, since E is the Editor's, and
-/// Messages (M is the Monitor's) takes A, since E and S are taken. The
-/// keys are in [`TABLE`] as plain letters; a test keeps the two in step.
+/// Messages (M is the Monitor's) takes G, since E and S are taken and A
+/// went to Describe as the Agent tab (Nick, 2026-11-26: A opens it with
+/// its field ready to type in; D still does too). The keys are in
+/// [`TABLE`] as plain letters; a test keeps the two in step.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const VIEWS: &[(Action, &str)] = &[
     (Action::Editor, "Editor"),

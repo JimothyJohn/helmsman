@@ -802,7 +802,10 @@ impl App {
             Action::Files => self.chrome.show(crate::editor::Pane::Files),
             Action::Devices => self.chrome.show(crate::editor::Pane::Devices),
             Action::St => self.chrome.show(crate::editor::Pane::Code),
-            Action::Describe => self.chrome.show(crate::editor::Pane::Claude),
+            Action::Describe => {
+                self.chrome.show(crate::editor::Pane::Claude);
+                self.chrome.focus_describe = true;
+            }
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
             Action::Messages => self.chrome.toggle_messages(),
             Action::Trend => self.chrome.toggle_trend(),

@@ -2796,12 +2796,17 @@ fn box_ui(
     let (field, enter) = if let Some(run) = &s.run {
         // While it works the box shows what was sent, and takes no typing.
         let mut sent = run.instruction.clone();
+        // A key that asked for the field while it works asks for nothing.
+        chrome.focus_describe = false;
         ui.add_enabled_ui(false, |ui| {
             chat_box_sized(ui, &mut sent, "agent-instruction", hint, tip, height)
         })
         .inner
     } else {
         let out = chat_box_sized(ui, &mut s.draft, "agent-instruction", hint, tip, height);
+        if std::mem::take(&mut chrome.focus_describe) {
+            out.0.request_focus();
+        }
         // Up in the empty box: the last message sent, the caret at its end.
         if out.0.has_focus() && ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) && s.recall() {
             use egui::text::{CCursor, CCursorRange};

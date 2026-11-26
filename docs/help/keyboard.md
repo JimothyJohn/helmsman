@@ -34,11 +34,12 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | M | The Monitor screen; on the Monitor it flips to the Editor |  |
 | P | The box's Proposals screen |  |
 | D | The Describe tab |  |
+| A | The Describe tab |  |
 | S | The Code tab (the Structured Text) |  |
 | I | The I/O tab |  |
 | V | The Devices tab (the I/O map's devices and points) |  |
 | F | The Files tab |  |
-| A | The Messages, the bottom panel's tab beside the Trend |  |
+| G | The Messages, the bottom panel's tab beside the Trend |  |
 | T | The trend along the bottom |  |
 | Alt ↑ | Up one level in the diagram | |
 | . , | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (with the pointer over the diagram) | |

@@ -220,6 +220,10 @@ pub struct Chrome {
     pub scan: bool,
     /// View › Light mode: the light page instead of the dark one.
     pub light: bool,
+    /// The Describe tab's key was pressed: its instruction field takes the
+    /// keyboard the next time it is drawn (Nick, 2026-11-26: A, then type,
+    /// then Enter). Not remembered.
+    pub focus_describe: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
@@ -287,6 +291,7 @@ impl Default for Chrome {
             msgs: false,
             scan: false,
             light: false,
+            focus_describe: false,
             line: None,
             jump: None,
             hits: Vec::new(),
