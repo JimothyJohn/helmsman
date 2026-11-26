@@ -1170,25 +1170,35 @@ mod tests {
 
     #[test]
     fn over_the_diagram_the_diagrams_keys_are_left_alone() {
-        for key in [Key::W, Key::A, Key::S, Key::D, Key::E, Key::Q] {
+        // Nick, 2026-11-26: . and , jump along the diagram; W A S D no
+        // longer pan it, so no letter is the diagram's any more.
+        for key in [Key::Period, Key::Comma] {
             assert_eq!(
                 views_in(vec![down(Modifiers::NONE, key)], true),
                 (vec![], 1),
-                "{key:?}"
+                "{key:?} over the diagram stays the diagram's"
+            );
+            assert_eq!(
+                views_in(vec![down(Modifiers::NONE, key)], false),
+                (vec![], 1),
+                "{key:?} is no view anywhere"
             );
         }
-        for (a, key) in [
-            (Action::Files, Key::F),
-            (Action::Io, Key::I),
-            (Action::Trend, Key::T),
-            (Action::Monitor, Key::M),
-            (Action::Devices, Key::V),
-            (Action::Proposals, Key::P),
-        ] {
+        // Every view letter works over the diagram as off it, E (once a
+        // jump key) and A, S, D (once a pan) among them.
+        for (a, _) in VIEWS {
+            let key = plain_keys(*a)[0];
             assert_eq!(
                 views_in(vec![down(Modifiers::NONE, key)], true),
-                (vec![a], 0),
-                "{key:?}"
+                (vec![*a], 0),
+                "{key:?} over the diagram"
+            );
+        }
+        for key in [Key::W, Key::Q] {
+            assert_eq!(
+                views_in(vec![down(Modifiers::NONE, key)], true),
+                (vec![], 1),
+                "{key:?} is nobody's"
             );
         }
     }
@@ -1321,5 +1331,23 @@ mod tests {
                 "no row for {name}'s {letter}:\n{md}"
             );
         }
+    }
+
+    /// docs/help/keyboard.md is what scripts/build-help.sh writes from
+    /// [`super::markdown`]: the page a user reads says what the keys do
+    /// (it said E and Q after they moved to . and , on 2026-11-26).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_shipped_keyboard_page_is_the_generated_one() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/help/keyboard.md");
+        let shipped = std::fs::read_to_string(&path).unwrap();
+        let md = super::markdown();
+        assert_eq!(
+            shipped.trim_end(),
+            md.trim_end(),
+            "docs/help/keyboard.md is stale: run scripts/build-help.sh"
+        );
+        assert!(md.contains("| . , |"), "the jump keys' row:\n{md}");
+        assert!(!md.contains("| E, Q |"), "E and Q no longer jump:\n{md}");
     }
 }

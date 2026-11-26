@@ -462,10 +462,8 @@ mod tests {
         l.error(3.0, "c");
         l.error(4.0, "d");
         assert_eq!(l.counts(), [1, 1, 2]);
-        assert_eq!(l.show, [false, false, true], "errors only to start");
-        let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
-        assert_eq!(shown, ["c", "d"]);
-        l.show = [true; 3];
+        // Nick, 2026-11-26: every level shows to start.
+        assert_eq!(l.show, [true; 3], "all three levels to start");
         assert_eq!(l.shown().count(), 4);
         l.show = [false, false, true];
         let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
@@ -497,10 +495,11 @@ mod tests {
         assert!(full.contains(&"x".repeat(500)), "nothing cut from the whole");
         assert!(l.text().contains("third"), "Copy all has the whole");
         // Hidden levels still reach the box's Help request.
+        l.show = [false, false, true];
         let mut a = Outcome::new(Kind::Applied, "Updated main.st.");
         a.why = Some("Because.".into());
         l.outcome(2.0, &a);
-        assert_eq!(l.shown().count(), 1, "info is not shown");
+        assert_eq!(l.shown().count(), 1, "info is hidden");
         assert!(l.full_text().contains("Updated main.st. Why: Because."));
         assert_eq!(l.counts(), [1, 0, 1]);
     }

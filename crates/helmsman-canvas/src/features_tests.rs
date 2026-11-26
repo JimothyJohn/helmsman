@@ -10,8 +10,8 @@ use helmsman_compat::features::{self, Manifest, Surface};
 
 use crate::editor::Pane;
 
-/// The panels that are not a side pane's tabs: the trend along the whole
-/// bottom and the Messages under the left pane's tabs.
+/// The panels that are not a side pane's tabs: the bottom panel's two
+/// tabs, the Trend and the Messages (Nick, 2026-11-26).
 const PANELS: [&str; 2] = ["trend", "messages"];
 
 const FILE: &str = "docs/FEATURES.md";

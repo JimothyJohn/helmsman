@@ -354,26 +354,26 @@ END_PROGRAM
     }
 
     #[test]
-    fn e_and_q_frame_the_next_and_the_previous_stop() {
+    fn period_and_comma_frame_the_next_and_the_previous_stop() {
         let mut h = Harness::new();
         assert_eq!(h.view.pick, None);
-        // The fitted program is the whole view: E takes the nearest stop
+        // The fitted program is the whole view: . takes the nearest stop
         // right of its centre, then goes on in program order and round.
-        h.press(Modifiers::NONE, Key::E);
+        h.press(Modifiers::NONE, Key::Period);
         let first = h.framed();
         let order = ["t", "IF", "c"];
         let k = order.iter().position(|n| *n == first).unwrap();
-        h.press(Modifiers::NONE, Key::E);
+        h.press(Modifiers::NONE, Key::Period);
         assert_eq!(h.framed(), order[(k + 1) % 3]);
-        h.press(Modifiers::NONE, Key::E);
+        h.press(Modifiers::NONE, Key::Period);
         assert_eq!(h.framed(), order[(k + 2) % 3]);
-        h.press(Modifiers::NONE, Key::E);
+        h.press(Modifiers::NONE, Key::Period);
         assert_eq!(h.framed(), first, "round the end");
-        h.press(Modifiers::NONE, Key::Q);
-        assert_eq!(h.framed(), order[(k + 2) % 3], "Q goes back");
+        h.press(Modifiers::NONE, Key::Comma);
+        assert_eq!(h.framed(), order[(k + 2) % 3], ", goes back");
         // Two presses before the view rests still go two stops on.
         let ev = |pressed| Event::Key {
-            key: Key::Q,
+            key: Key::Comma,
             physical_key: None,
             pressed,
             repeat: false,
@@ -381,17 +381,17 @@ END_PROGRAM
         };
         h.frame(vec![ev(true)]);
         h.frame(vec![ev(false)]);
-        h.press(Modifiers::NONE, Key::Q);
+        h.press(Modifiers::NONE, Key::Comma);
         assert_eq!(h.framed(), first);
     }
 
     #[test]
     fn a_view_moved_by_hand_jumps_by_where_it_is() {
         let mut h = Harness::new();
-        h.press(Modifiers::NONE, Key::E);
-        h.press(Modifiers::NONE, Key::E);
-        // Pan until every stop is left of the centre: Q takes the nearest
-        // one there, E has none on its side and goes round to the first.
+        h.press(Modifiers::NONE, Key::Period);
+        h.press(Modifiers::NONE, Key::Period);
+        // Pan until every stop is left of the centre: , takes the nearest
+        // one there, . has none on its side and goes round to the first.
         let rightmost = |h: &Harness| {
             let cam = h.view.cams[h.view.scope];
             h.view
@@ -401,7 +401,7 @@ END_PROGRAM
                 .fold(f32::MIN, f32::max)
         };
         let held = |pressed| Event::Key {
-            key: Key::D,
+            key: Key::ArrowRight,
             physical_key: None,
             pressed,
             repeat: false,
@@ -420,7 +420,7 @@ END_PROGRAM
         let centre = cam.to_world(Pos2::new(SIZE.x / 2.0, f32::midpoint(SIZE.y, GLYPH_BAND)));
         let all = h.view.stops();
         let nearest = next(&all, None, centre, false).unwrap();
-        h.press(Modifiers::NONE, Key::Q);
+        h.press(Modifiers::NONE, Key::Comma);
         assert_eq!(h.view.pick, Some(all[nearest].pick));
         h.framed();
     }
@@ -430,23 +430,66 @@ END_PROGRAM
         let mut h = Harness::new();
         let before = h.view.cams[0];
         for m in [Modifiers::COMMAND, Modifiers::ALT, Modifiers::SHIFT] {
-            h.press(m, Key::E);
-            h.press(m, Key::Q);
+            h.press(m, Key::Period);
+            h.press(m, Key::Comma);
         }
         h.typing = true;
         h.frame(vec![]);
-        h.press(Modifiers::NONE, Key::E);
-        h.press(Modifiers::NONE, Key::Q);
+        h.press(Modifiers::NONE, Key::Period);
+        h.press(Modifiers::NONE, Key::Comma);
         let after = h.view.cams[0];
         assert_eq!(h.view.pick, None);
         assert_eq!((after.offset, after.zoom), (before.offset, before.zoom));
         // The pointer off the diagram (over the field's panel): not its keys.
         h.typing = false;
         h.frame(vec![Event::PointerMoved(Pos2::new(600.0, 4.0))]);
-        h.press(Modifiers::NONE, Key::E);
+        h.press(Modifiers::NONE, Key::Period);
         assert_eq!(h.view.pick, None);
         h.frame(vec![Event::PointerMoved(Pos2::new(600.0, 500.0))]);
-        h.press(Modifiers::NONE, Key::E);
+        h.press(Modifiers::NONE, Key::Period);
         assert!(h.view.pick.is_some());
+    }
+
+    /// Nick, 2026-11-26: W A S D no longer move the view (the arrow keys
+    /// still do), and E and Q no longer jump.
+    #[test]
+    fn w_a_s_d_do_not_pan_and_e_and_q_do_not_jump_but_the_arrows_pan() {
+        let mut h = Harness::new();
+        let before = h.view.cams[0];
+        for key in [Key::W, Key::A, Key::S, Key::D, Key::E, Key::Q] {
+            let ev = |pressed| Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            };
+            h.frame(vec![ev(true)]);
+            for _ in 0..12 {
+                h.frame(vec![]);
+            }
+            h.frame(vec![ev(false)]);
+            h.press(Modifiers::NONE, key);
+            let after = h.view.cams[0];
+            assert_eq!(
+                (after.offset, after.zoom),
+                (before.offset, before.zoom),
+                "{key:?} moved the view"
+            );
+            assert_eq!(h.view.pick, None, "{key:?} jumped");
+        }
+        let ev = |pressed| Event::Key {
+            key: Key::ArrowRight,
+            physical_key: None,
+            pressed,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        h.frame(vec![ev(true)]);
+        for _ in 0..12 {
+            h.frame(vec![]);
+        }
+        h.frame(vec![ev(false)]);
+        assert_ne!(h.view.cams[0].offset, before.offset, "the right arrow pans");
     }
 }
