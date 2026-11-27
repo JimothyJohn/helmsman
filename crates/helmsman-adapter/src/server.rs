@@ -118,14 +118,31 @@ impl std::fmt::Debug for Adapter {
 /// The encapsulation port, TCP and UDP on one number. With `port` 0 the OS
 /// picks the TCP port and its UDP twin may already be someone else's, so
 /// pick again (a bounded number of times) until both bind.
+///
+/// Windows refuses a UDP twin inside an excluded port range, or held by
+/// another account, with WSAEACCES ("permission denied"), not "address in
+/// use": the box exited on CI with `CIP sockets: … (os error 10013)`
+/// (2026-11-27). Both mean "not this number" when the OS picked it. The
+/// refused TCP listeners are held until a pair binds, so the OS cannot hand
+/// the same number back, and the tries outlast a whole excluded block.
 fn bind_encap(ip: Ipv4Addr, port: u16) -> io::Result<(TcpListener, UdpSocket)> {
-    const TRIES: usize = 64;
+    const TRIES: usize = 256;
     let mut last = None;
+    let mut held = Vec::new();
     for _ in 0..if port == 0 { TRIES } else { 1 } {
         let tcp = TcpListener::bind((ip, port))?;
         match UdpSocket::bind((ip, tcp.local_addr()?.port())) {
             Ok(udp) => return Ok((tcp, udp)),
-            Err(e) if port == 0 && e.kind() == io::ErrorKind::AddrInUse => last = Some(e),
+            Err(e)
+                if port == 0
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+                    ) =>
+            {
+                last = Some(e);
+                held.push(tcp);
+            }
             Err(e) => return Err(e),
         }
     }
