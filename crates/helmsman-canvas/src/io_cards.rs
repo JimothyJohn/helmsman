@@ -37,8 +37,10 @@ use crate::tips::Tip;
 
 /// What the tab leaves free at its right for the scroll bar, pt.
 pub const BAR: f32 = 12.0;
-/// The narrowest a tile gets before the grid drops a column, pt.
-const TILE: f32 = 96.0;
+/// The narrowest a tile gets before the grid drops a column, pt: 88 since
+/// the side panes' ribbon (2026-11-26) left the right pane 185 pt, where
+/// two tiles of 96 no longer fit and the grid went to one a row.
+const TILE: f32 = 88.0;
 
 /// One output of the program and what sets it, from the diagram alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
