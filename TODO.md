@@ -1030,12 +1030,13 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-26
   by: session e16d1c3b
 
-- [ ] **Update the guided tour to the new layout and flow** — Nick, 2026-11-26: once the bench rounds of 2026-11-26 land (#656 and feat/bench-round-2: Messages as the bottom panel's Log tab, the Help tab, the History arrows and H, the I/O card glyphs, the fit glyph and Z, the new hotkeys, the side-pane ribbon, the zoom ladder and lamps gone), walk crates/helmsman-canvas/src/tour.rs step by step against the page and rewrite every step that points at something moved or removed.
+- [x] **Update the guided tour to the new layout and flow** — Nick, 2026-11-26: once the bench rounds of 2026-11-26 land (#656 and feat/bench-round-2: Messages as the bottom panel's Log tab, the Help tab, the History arrows and H, the I/O card glyphs, the fit glyph and Z, the new hotkeys, the side-pane ribbon, the zoom ladder and lamps gone), walk crates/helmsman-canvas/src/tour.rs step by step against the page and rewrite every step that points at something moved or removed.
   result: every tour step points at what is on the page and says what it does now
   difficulty: med
   id: tour-after-bench-rounds
   asked: 2026-11-26
   by: session e16d1c3b
+  status: done
 
 ## Canvas overhaul (interview 2026-11-21)
 
