@@ -1989,6 +1989,10 @@ pub fn busy(ui: &mut egui::Ui, chrome: &mut Chrome, stage: &str, hit: &str) {
     chrome.hit(hit, r.rect.union(s.rect));
 }
 
+/// The Code header's Back, (i) and Forward, points a side: a little under
+/// the row's glyphs, so the row still fits the 307 pt pane.
+const STEP: f32 = crate::glyphs::ROW * 0.8;
+
 /// What was pressed at the header's right end.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Pressed {
@@ -2009,6 +2013,10 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
     // What is left of the row, up to the pane's right edge.
     chrome.hit("code header rest", ui.available_rect_before_wrap());
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Close together, as the Agent tab's row: with Back, (i) and
+        // Forward the default spacing ran the clock over the wrap glyph
+        // in the 307 pt pane (2026-11-27).
+        ui.spacing_mut().item_spacing.x = 2.0;
         let tip = s.deploy.as_ref().err().map_or(s.deploy_tip, String::as_str);
         let r = crate::glyphs::deploy(ui, s.deploy.is_ok()).tip(tip);
         chrome.hit("code deploy", r.rect);
@@ -2043,7 +2051,7 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
                     } else {
                         "Details: step Back to an older version first, then see its details here."
                     };
-                    let r = crate::glyphs::button_sized(ui, icon, crate::glyphs::ROW, steps.shown.is_some(), false, tip);
+                    let r = crate::glyphs::button_sized(ui, icon, STEP, steps.shown.is_some(), false, tip);
                     chrome.hit(key, r.rect);
                     if r.clicked() {
                         out.info = steps.shown;
@@ -2051,7 +2059,7 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
                     continue;
                 }
                 let tip = to.as_ref().map_or(end, |(_, t)| t.as_str());
-                let r = crate::glyphs::button_sized(ui, icon, crate::glyphs::ROW, to.is_some(), false, tip);
+                let r = crate::glyphs::button_sized(ui, icon, STEP, to.is_some(), false, tip);
                 chrome.hit(key, r.rect);
                 if r.clicked() {
                     out.revision = to.as_ref().map(|(n, _)| *n);
