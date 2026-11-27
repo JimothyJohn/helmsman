@@ -39,7 +39,7 @@
 //! | Find in the Structured Text | Ctrl/⌘ F | (a key of our own) |
 //! | Next / previous match | Ctrl/⌘ G, Ctrl/⌘ Shift G | (a key of our own) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
-//! | Next / previous function block call, IF, CASE or loop, framed | E, Q | (`jump`; keys of our own beside W A S D, read by the diagram while the pointer is over it and nothing is typed in) |
+//! | Next / previous function block call, IF, CASE or loop, framed | . , | (`jump`; keys of our own, read by the diagram while the pointer is over it and nothing is typed in) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
 //! has had its say: a text editor with the focus keeps its own Ctrl+Z.
@@ -83,6 +83,24 @@ pub enum Action {
     Restart,
     Upload,
     Download,
+    /// The Describe tab (the Agent's).
+    Describe,
+    /// The Help tab.
+    HelpTab,
+    /// The I/O tab.
+    Io,
+    /// The Messages, a tab of the bottom panel beside the Trend.
+    Messages,
+    /// The Editor screen.
+    Editor,
+    /// The Monitor screen.
+    Monitor,
+    /// The box's Proposals screen.
+    Proposals,
+    /// The Describe tab, in its history: the newest instruction and answer.
+    History,
+    /// Fit the diagram: all of it, or the selected blocks centred.
+    Fit,
 }
 
 /// One shortcut: the action, its keys and the CODESYS command the keys
@@ -212,7 +230,76 @@ pub const TABLE: &[Hotkey] = &[
         Key::Num5,
         "",
     ),
+    // One plain letter for every view, the first of its name (see
+    // [`VIEWS`]); read only while nothing is taking text ([`pressed_views`]).
+    view(Action::Editor, Key::E),
+    view(Action::Monitor, Key::M),
+    view(Action::Proposals, Key::P),
+    // Nick, 2026-11-26: A for the Agent tab (D is the Devices'), its field
+    // ready to type in.
+    view(Action::Describe, Key::A),
+    view(Action::St, Key::C),
+    view(Action::Io, Key::I),
+    view(Action::Devices, Key::D),
+    view(Action::Files, Key::F),
+    Hotkey {
+        action: Action::HelpTab,
+        keys: KeyboardShortcut::new(Modifiers::SHIFT, Key::Questionmark),
+        codesys: "",
+        mac: true,
+    },
+    view(Action::Messages, Key::L),
+    view(Action::Trend, Key::T),
+    // Not views: Fit (the diagram's fit glyph) and the Describe tab's
+    // history (H for history).
+    view(Action::Fit, Key::Z),
+    view(Action::History, Key::H),
 ];
+
+/// Every view a user switches to, in the order the letters were given out
+/// (Nick, 2026-11-26): the screens (Editor, Monitor, Proposals), then the
+/// left pane's tabs in their row (Agent A, Code C, I/O I, Devices D, Files
+/// F), then Help (`?`, the one view whose name has no free letter), the Log
+/// (L) and the Trend (T). Z (fit the diagram), H (the Agent's history) and
+/// Space (run or stop) are keys but no views. The keys are in [`TABLE`] as
+/// plain letters; a test keeps the two in step.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const VIEWS: &[(Action, &str)] = &[
+    (Action::Editor, "Editor"),
+    (Action::Monitor, "Monitor"),
+    (Action::Proposals, "Proposals"),
+    (Action::Describe, "Describe"),
+    (Action::St, "Structured Text"),
+    (Action::Io, "I/O"),
+    (Action::Devices, "Devices"),
+    (Action::Files, "Files"),
+    (Action::HelpTab, "Help"),
+    (Action::Messages, "Log"),
+    (Action::Trend, "Trend"),
+];
+
+const fn view(action: Action, logical_key: Key) -> Hotkey {
+    Hotkey {
+        action,
+        keys: KeyboardShortcut::new(Modifiers::NONE, logical_key),
+        codesys: "",
+        mac: true,
+    }
+}
+
+impl Hotkey {
+    /// A bare letter: a view's key, which a text field takes first.
+    #[must_use]
+    pub fn plain(&self) -> bool {
+        (self.keys.modifiers == Modifiers::NONE && self.keys.logical_key.name().len() == 1)
+            || (self.keys.modifiers == Modifiers::SHIFT && self.keys.logical_key == Key::Questionmark)
+    }
+}
+
+/// The chords of [`TABLE`], without the plain letters.
+fn chords() -> impl Iterator<Item = &'static Hotkey> {
+    TABLE.iter().filter(|h| !h.plain())
+}
 
 /// The chords the browsers own in our key space, read on 2026-11-08 from
 /// Chrome's and Edge's shortcut pages (Windows and macOS), Safari's, and
@@ -443,6 +530,17 @@ const fn does(action: Action) -> &'static str {
         Action::Find => "Find in the Structured Text (Enter: next, Esc: close)",
         Action::FindNext => "The next match",
         Action::FindPrevious => "The previous match",
+        Action::Describe => "The Agent tab, its instruction field ready to type in",
+        Action::HelpTab => "The Help tab",
+        Action::Io => "The I/O tab",
+        Action::Messages => "The Log, the bottom panel's tab beside the Trend",
+        Action::Editor => "The Editor screen; on the Editor it flips to the Monitor",
+        Action::Monitor => "The Monitor screen; on the Monitor it flips to the Editor",
+        Action::Proposals => "The box's Proposals screen",
+        Action::History => {
+            "The Describe tab's history: the newest instruction and its answer, then Back and Forward"
+        }
+        Action::Fit => "Fit the diagram: all of it, or the selected blocks centred",
         Action::Restart | Action::Upload | Action::Download => "",
     }
 }
@@ -483,7 +581,11 @@ pub fn markdown() -> String {
          owns (Ctrl D bookmarks the page, Alt 1 is Firefox's first tab, F10 the toolbar), \
          checked against Chrome, Edge, Firefox and Safari. The editor's own conventions \
          stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F and Ctrl G, as in every editor on the \
-         web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key.\n\n\
+         web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. \
+         Every view has a key of one letter (Help has ?); it works whenever you are \
+         not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, \
+         . and , jump along it. Help › Show hotkeys writes each key beside its \
+         button.\n\n\
          | key | does | CODESYS command on that key |\n|---|---|---|\n",
     );
     for h in TABLE {
@@ -499,9 +601,14 @@ pub fn markdown() -> String {
         };
         let _ = writeln!(out, "| {keys} | {d} | {codesys} |");
     }
+    out.push_str(
+        "| Space | Run or stop the program. On a machine it asks first (\"Stop the machine?\"; \
+         Enter or Space confirms, Esc cancels). Space held while you drag pans the diagram and \
+         does not run or stop | |\n",
+    );
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
     out.push_str(
-        "| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, \
+        "| . , | The next or the previous function block call, IF, CASE or loop on the diagram, \
          zoomed in and framed (with the pointer over the diagram) | |\n",
     );
     out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Describe tab.\n");
@@ -520,6 +627,88 @@ pub fn label(ctx: &egui::Context, action: Action) -> String {
         .unwrap_or_default()
 }
 
+/// What a control's superscript says (Help > Show hotkeys): the view's
+/// letter where it has one, else [`label`].
+#[must_use]
+pub fn short(ctx: &egui::Context, action: Action) -> String {
+    TABLE
+        .iter()
+        .find(|h| h.action == action && h.plain())
+        .map_or_else(
+            || compact(&label(ctx, action)),
+            |h| {
+                if h.keys.logical_key == Key::Questionmark {
+                    "?".to_string()
+                } else {
+                    ctx.format_shortcut(&h.keys)
+                }
+            },
+        )
+}
+
+/// A chord in the few characters a superscript has room for: the
+/// modifiers as their symbols (`⇧⌘↵` for Shift+Cmd+Enter).
+fn compact(label: &str) -> String {
+    label
+        .replace("Ctrl+", "^")
+        .replace("Cmd+", "⌘")
+        .replace("Shift+", "⇧")
+        .replace("Alt+", "⌥")
+        .replace("Enter", "↵")
+}
+
+/// The views whose plain letter was pressed this frame, consumed. Nothing
+/// is returned while a widget has the keyboard (a text field, the code
+/// editor, the find bar), and a letter with any modifier held is left to
+/// the browser and the chords. `diagram`: the pointer is over the diagram,
+/// whose . and , jump along it; those keys stay its.
+pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
+    if ctx.egui_wants_keyboard_input() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    ctx.input_mut(|i| {
+        i.events.retain(|e| {
+            let Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                modifiers,
+                ..
+            } = e
+            else {
+                return true;
+            };
+            let diagram_key = matches!(key, Key::Period | Key::Comma);
+            if modifiers.alt
+                || modifiers.ctrl
+                || modifiers.command
+                || modifiers.mac_cmd
+                || (diagram && diagram_key)
+            {
+                return true;
+            }
+            // `?` is Shift and the question mark (some platforms say Slash).
+            let key = if *key == Key::Slash && modifiers.shift {
+                Key::Questionmark
+            } else {
+                *key
+            };
+            match TABLE
+                .iter()
+                .find(|h| h.plain() && h.keys.logical_key == key && h.keys.modifiers.shift == modifiers.shift)
+            {
+                Some(h) => {
+                    out.push(h.action);
+                    false
+                }
+                None => true,
+            }
+        });
+    });
+    out
+}
+
 /// Drops the text a chord of ours would type: an Alt chord puts a
 /// character into a focused editor on a Mac (⌥⇧D is Î, ⌥] is ‘), so a
 /// frame with one of our Alt chords down has no text. Called first in
@@ -535,8 +724,7 @@ pub fn swallow_text(ctx: &egui::Context) {
                     pressed: true,
                     ..
                 } if modifiers.alt
-                    && TABLE
-                        .iter()
+                    && chords()
                         .any(|h| h.keys.logical_key == *key && modifiers.matches_logically(h.keys.modifiers))
             )
         });
@@ -559,8 +747,7 @@ pub fn pressed(ctx: &egui::Context) -> Vec<Action> {
         .memory(egui::Memory::focused)
         .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
-    let mut order: Vec<&Hotkey> = TABLE
-        .iter()
+    let mut order: Vec<&Hotkey> = chords()
         .filter(|h| h.mac || !mac)
         .filter(|h| !(typing && matches!(h.action, Action::Undo | Action::Redo)))
         .collect();
@@ -589,14 +776,13 @@ pub fn wants(e: &Event) -> bool {
             modifiers,
             pressed: true,
             ..
-        } => TABLE
-            .iter()
-            .any(|h| h.keys.logical_key == *key && modifiers.matches_logically(h.keys.modifiers)),
+        } => chords().any(|h| h.keys.logical_key == *key && modifiers.matches_logically(h.keys.modifiers)),
         _ => false,
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::assert_is_empty)]
 mod tests {
     use eframe::egui::{self, Event, Key, Modifiers, RawInput};
 
@@ -833,5 +1019,415 @@ mod tests {
                 .iter()
                 .any(|h| h.action == Action::Save && h.codesys == "Save Project")
         );
+    }
+
+    // ---- the plain letter of every view -------------------------------
+
+    use super::{VIEWS, pressed_views, short};
+    use crate::app::Screen;
+    use crate::editor::Pane;
+
+    /// The view action each pane opens. Exhaustive: a new pane does not
+    /// compile until it is given a key here, and the test below then
+    /// holds it to [`VIEWS`].
+    const fn pane_action(p: Pane) -> Action {
+        match p {
+            Pane::Claude => Action::Describe,
+            Pane::Code => Action::St,
+            Pane::Io => Action::Io,
+            Pane::Devices => Action::Devices,
+            Pane::Files => Action::Files,
+            Pane::Help => Action::HelpTab,
+        }
+    }
+
+    const fn screen_action(s: Screen) -> Action {
+        match s {
+            Screen::Editor => Action::Editor,
+            Screen::Monitor => Action::Monitor,
+            Screen::Proposals => Action::Proposals,
+        }
+    }
+
+    /// The modifier a view's key is pressed with: `?` is Shift's.
+    fn held(a: Action) -> Modifiers {
+        if a == Action::HelpTab {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        }
+    }
+
+    fn plain_keys(action: Action) -> Vec<Key> {
+        TABLE
+            .iter()
+            .filter(|h| h.action == action && h.plain())
+            .map(|h| h.keys.logical_key)
+            .collect()
+    }
+
+    #[test]
+    fn every_view_has_a_plain_letter() {
+        let mut views: Vec<(Action, String)> = Pane::ALL
+            .iter()
+            .map(|p| (pane_action(*p), p.label().to_string()))
+            .collect();
+        for s in [Screen::Editor, Screen::Monitor, Screen::Proposals] {
+            views.push((screen_action(s), format!("{s:?}")));
+        }
+        views.push((Action::Messages, "Log".into()));
+        views.push((Action::Trend, "Trend".into()));
+        for (a, name) in &views {
+            let entry = VIEWS.iter().find(|(v, _)| v == a);
+            let Some((_, vname)) = entry else {
+                panic!("view {name} ({a:?}) has no entry in VIEWS");
+            };
+            assert!(
+                vname.eq_ignore_ascii_case(name),
+                "{a:?} is {vname} in VIEWS but {name} in the app"
+            );
+            assert_eq!(plain_keys(*a).len(), 1, "{name} needs exactly one plain key");
+        }
+        assert_eq!(VIEWS.len(), views.len(), "VIEWS has a view the app lacks");
+    }
+
+    #[test]
+    fn views_and_plain_table_entries_match_one_to_one() {
+        for (a, name) in VIEWS {
+            assert_eq!(VIEWS.iter().filter(|(b, _)| b == a).count(), 1, "{name} twice");
+            let keys = plain_keys(*a);
+            assert_eq!(keys.len(), 1, "{name}: {keys:?}");
+            let letter = keys[0].name();
+            assert!(letter.chars().count() == 1 || *a == Action::HelpTab);
+            assert!(
+                matches!(*a, Action::HelpTab | Action::Describe)
+                    || name.to_ascii_lowercase().contains(&letter.to_ascii_lowercase()),
+                "{name}'s key {letter} is not a letter of its name"
+            );
+        }
+        let plain: Vec<_> = TABLE.iter().filter(|h| h.plain()).collect();
+        // Fit and the Agent's history have a plain key and are no view.
+        assert_eq!(plain.len(), VIEWS.len() + 2, "a plain key that is no view");
+        for h in plain {
+            assert!(
+                matches!(h.action, Action::Fit | Action::History)
+                    || VIEWS.iter().any(|(a, _)| *a == h.action),
+                "{:?} is plain but no view",
+                h.action
+            );
+            assert_eq!(h.keys.modifiers, held(h.action));
+        }
+        let mut letters: Vec<_> = VIEWS.iter().map(|(a, _)| plain_keys(*a)[0]).collect();
+        letters.sort_by_key(|k| k.name());
+        let n = letters.len();
+        letters.dedup();
+        assert_eq!(letters.len(), n, "two views share a letter");
+    }
+
+    #[test]
+    fn the_letters_are_the_documented_ones() {
+        let want = [
+            (Action::Editor, Key::E),
+            (Action::Monitor, Key::M),
+            (Action::Proposals, Key::P),
+            (Action::Describe, Key::A),
+            (Action::St, Key::C),
+            (Action::Io, Key::I),
+            (Action::Devices, Key::D),
+            (Action::Files, Key::F),
+            (Action::Messages, Key::L),
+            (Action::Trend, Key::T),
+            (Action::Fit, Key::Z),
+            (Action::History, Key::H),
+        ];
+        for (a, k) in want {
+            assert_eq!(plain_keys(a), [k], "{a:?}");
+        }
+    }
+
+    /// What `pressed_views` reports for one frame of `events`, and the
+    /// events that were left for everyone else.
+    fn views_in(events: Vec<Event>, diagram: bool) -> (Vec<Action>, usize) {
+        let ctx = egui::Context::default();
+        let (mut out, mut left) = (Vec::new(), 0);
+        let mut full = ctx.run_ui(
+            RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                out = pressed_views(ui.ctx(), diagram);
+                left = ui.input(|i| i.events.iter().filter(|e| matches!(e, Event::Key { .. })).count());
+            },
+        );
+        full.textures_delta.clear();
+        (out, left)
+    }
+
+    #[test]
+    fn each_view_letter_reports_its_view_once_and_is_consumed() {
+        for (a, name) in VIEWS {
+            let key = plain_keys(*a)[0];
+            assert_eq!(
+                views_in(vec![down(held(*a), key)], false),
+                (vec![*a], 0),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_modified_released_or_repeated_letter_is_no_view() {
+        for m in [
+            Modifiers::CTRL,
+            Modifiers::ALT,
+            Modifiers::SHIFT,
+            Modifiers::COMMAND,
+            Modifiers::MAC_CMD,
+        ] {
+            for (a, name) in VIEWS {
+                let key = plain_keys(*a)[0];
+                if m == held(*a) {
+                    continue;
+                }
+                assert_eq!(
+                    views_in(vec![down(m, key)], false),
+                    (vec![], 1),
+                    "{name} with {m:?}"
+                );
+            }
+        }
+        let up = Event::Key {
+            key: Key::F,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        assert!(views_in(vec![up], false).0.is_empty(), "a release is no press");
+        let rep = Event::Key {
+            key: Key::F,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        };
+        // A held key reports its first press only: egui calls a press
+        // of a key already down a repeat.
+        let ctx = egui::Context::default();
+        let mut got = Vec::new();
+        for events in [vec![down(Modifiers::NONE, Key::F)], vec![rep.clone()], vec![rep]] {
+            let mut full = ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| got.push(pressed_views(ui.ctx(), false)),
+            );
+            full.textures_delta.clear();
+        }
+        assert_eq!(
+            got,
+            [vec![Action::Files], vec![], vec![]],
+            "a held key does not repeat the switch"
+        );
+        assert_eq!(
+            views_in(vec![down(Modifiers::NONE, Key::Z)], false).0,
+            [Action::Fit],
+            "Z fits the diagram"
+        );
+        assert!(views_in(vec![down(Modifiers::NONE, Key::F8)], false).0.is_empty());
+    }
+
+    #[test]
+    fn over_the_diagram_the_diagrams_keys_are_left_alone() {
+        // Nick, 2026-11-26: . and , jump along the diagram; W A S D no
+        // longer pan it, so no letter is the diagram's any more.
+        for key in [Key::Period, Key::Comma] {
+            assert_eq!(
+                views_in(vec![down(Modifiers::NONE, key)], true),
+                (vec![], 1),
+                "{key:?} over the diagram stays the diagram's"
+            );
+            assert_eq!(
+                views_in(vec![down(Modifiers::NONE, key)], false),
+                (vec![], 1),
+                "{key:?} is no view anywhere"
+            );
+        }
+        // Every view letter works over the diagram as off it, E (once a
+        // jump key) and A, S, D (once a pan) among them.
+        for (a, _) in VIEWS {
+            let key = plain_keys(*a)[0];
+            assert_eq!(
+                views_in(vec![down(held(*a), key)], true),
+                (vec![*a], 0),
+                "{key:?} over the diagram"
+            );
+        }
+        for key in [Key::W, Key::Q] {
+            assert_eq!(
+                views_in(vec![down(Modifiers::NONE, key)], true),
+                (vec![], 1),
+                "{key:?} is nobody's"
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_is_read_while_a_widget_has_the_keyboard() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let id = egui::Id::unique("field");
+        let mut run = |events: Vec<Event>, focus: bool| {
+            let mut out = Vec::new();
+            let mut full = ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let r = ui
+                        .add(egui::TextEdit::singleline(&mut text).id(id))
+                        .on_hover_text("a field");
+                    if focus {
+                        r.request_focus();
+                    }
+                    out = pressed_views(ui.ctx(), false);
+                },
+            );
+            full.textures_delta.clear();
+            out
+        };
+        run(vec![], true);
+        run(vec![], false);
+        assert!(ctx.egui_wants_keyboard_input());
+        for (a, _) in VIEWS {
+            let key = plain_keys(*a)[0];
+            assert!(
+                run(vec![down(Modifiers::NONE, key)], false).is_empty(),
+                "{a:?} while typing"
+            );
+            run(
+                vec![Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                false,
+            );
+        }
+        // Focus gone, the letter is a view again.
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        run(vec![], false);
+        assert_eq!(run(vec![down(Modifiers::NONE, Key::F)], false), [Action::Files]);
+    }
+
+    #[test]
+    fn a_plain_letter_is_never_the_pages_to_prevent_default_on() {
+        for (a, name) in VIEWS {
+            let key = plain_keys(*a)[0];
+            assert!(
+                !wants(&down(Modifiers::NONE, key)),
+                "{name}: typing must reach the page"
+            );
+        }
+        // And pressed() (the chords) does not report a bare letter.
+        for (a, _) in VIEWS {
+            let key = plain_keys(*a)[0];
+            assert_eq!(frame(Modifiers::NONE, key), [], "{a:?}");
+        }
+    }
+
+    #[test]
+    fn an_alt_view_letter_still_types_its_text() {
+        let ctx = egui::Context::default();
+        for (a, name) in VIEWS {
+            let key = plain_keys(*a)[0];
+            let mut left = 0;
+            let mut full = ctx.run_ui(
+                RawInput {
+                    events: vec![down(Modifiers::ALT, key), Event::Text("\u{b4}".into())],
+                    ..Default::default()
+                },
+                |ui| {
+                    swallow_text(ui.ctx());
+                    left = ui.input(|i| i.events.iter().filter(|e| matches!(e, Event::Text(_))).count());
+                },
+            );
+            full.textures_delta.clear();
+            assert_eq!(left, 1, "{name}: Alt+{key:?} lost its text");
+        }
+    }
+
+    #[test]
+    fn short_is_the_letter_for_a_view_and_the_chord_otherwise() {
+        let ctx = egui::Context::default();
+        let mut full = ctx.run_ui(RawInput::default(), |_| {});
+        full.textures_delta.clear();
+        for (a, name) in VIEWS {
+            let key = plain_keys(*a)[0];
+            let want = if *a == Action::HelpTab {
+                "?".to_string()
+            } else {
+                key.name().to_ascii_uppercase()
+            };
+            assert_eq!(short(&ctx, *a), want, "{name}");
+        }
+        assert_eq!(short(&ctx, Action::Files), "F");
+        for a in [Action::RunStop, Action::Save, Action::Step, Action::Deploy] {
+            // A chord's badge is its label, compacted (Ctrl+ is ^, and so on).
+            let (s, l) = (short(&ctx, a), super::label(&ctx, a));
+            assert!(
+                !s.is_empty() && s.chars().count() <= l.chars().count(),
+                "{a:?}: {s} / {l}"
+            );
+            for long in ["Ctrl+", "Cmd+", "Shift+", "Alt+", "Enter"] {
+                assert!(!s.contains(long), "{a:?}: {s} still says {long}");
+            }
+        }
+        for a in [Action::Restart, Action::Upload, Action::Download] {
+            assert_eq!(short(&ctx, a), "", "{a:?} has no key");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_keyboard_page_lists_every_view_letter() {
+        let md = super::markdown();
+        for (a, name) in VIEWS {
+            let key = plain_keys(*a)[0];
+            let letter = key.name();
+            if *a == Action::HelpTab {
+                assert!(md.contains("| Shift ? |"), "no row for Help's ?:\n{md}");
+                continue;
+            }
+            assert!(
+                md.lines()
+                    .any(|l| l.starts_with('|') && l.contains(&format!("| {letter} |"))
+                        || l.contains(&format!("`{letter}`"))),
+                "no row for {name}'s {letter}:\n{md}"
+            );
+        }
+    }
+
+    /// docs/help/keyboard.md is what scripts/build-help.sh writes from
+    /// [`super::markdown`]: the page a user reads says what the keys do
+    /// (it said E and Q after they moved to . and , on 2026-11-26).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_shipped_keyboard_page_is_the_generated_one() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/help/keyboard.md");
+        let shipped = std::fs::read_to_string(&path).unwrap();
+        let md = super::markdown();
+        assert_eq!(
+            shipped.trim_end(),
+            md.trim_end(),
+            "docs/help/keyboard.md is stale: run scripts/build-help.sh"
+        );
+        assert!(md.contains("| . , |"), "the jump keys' row:\n{md}");
+        assert!(!md.contains("| E, Q |"), "E and Q no longer jump:\n{md}");
     }
 }

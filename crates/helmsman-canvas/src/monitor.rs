@@ -4,8 +4,8 @@
 //! [`Chrome::scan`]: card `monitor-scan-time`), then a tile per top-level
 //! instance with its outputs (a BOOL a green or red lamp, a number its
 //! value) and one for the program's own outputs; a tap goes one level
-//! down into that instance, Back and the breadcrumbs go up, and "Open
-//! diagram" hands that scope to the Editor.
+//! down into that instance and the breadcrumbs go up. The status tiles
+//! are the header's now ([`Monitor::banner`]).
 //!
 //! A box's status tiles also carry its scan load (card `scan-stats`): for
 //! an engineer with "Scan detail" on, how long the scan takes, how late it
@@ -101,6 +101,20 @@ pub struct Program<'a> {
     pub note: Option<String>,
     /// Its scan load as a box measured it; `None` in the simulation.
     pub load: Option<Load>,
+}
+
+/// A program's place in the header on the Monitor ([`Monitor::banner`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Banner {
+    pub name: String,
+    /// `RUNNING`, `FAULTED`, `HELD`, `STOPPED` or `STARTING`.
+    pub word: &'static str,
+    pub run: Run,
+    /// The source cannot be trusted now: the lamp is grey, whatever the
+    /// state last was.
+    pub stale: bool,
+    /// Everything the status tile said, one line each.
+    pub tip: String,
 }
 
 /// A box module's scan load.
@@ -424,8 +438,6 @@ pub struct Group {
 /// What a tap on the Monitor asked the app for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Wish {
-    /// The Editor's diagram of `program`, at `prefix`.
-    Diagram { program: String, prefix: String },
     /// A transport button: run or stop, step, restart.
     Act(Action),
 }
@@ -697,6 +709,51 @@ impl Monitor {
         out
     }
 
+    /// What the header says of each program shown: its name and state as
+    /// a lamp and a word, and in the tooltip all the status tile held (the
+    /// fault, who stopped it, the scan detail and load, why it is stale).
+    pub fn banner(&mut self, feed: &dyn Feed, now: f64, detail: bool) -> Vec<Banner> {
+        let mut out = Vec::new();
+        for g in self.groups(feed, now, detail) {
+            let Some(t) = g
+                .tiles
+                .into_iter()
+                .find(|t| matches!(t.kind, TileKind::Status(_)))
+            else {
+                continue;
+            };
+            let TileKind::Status(run) = &t.kind else { continue };
+            let (word, extra) = match run {
+                Run::Running => ("RUNNING", None),
+                Run::Faulted(f) => ("FAULTED", Some(f.clone())),
+                Run::Held => ("HELD", None),
+                Run::Stopped(by) => (
+                    "STOPPED",
+                    by.as_ref().map(|by| format!("outputs at safe values · by {by}")),
+                ),
+                Run::Starting => ("STARTING", None),
+            };
+            let mut tip = format!("{}: {word}", t.title);
+            let lines = std::iter::once(extra.unwrap_or_default())
+                .chain(std::iter::once(t.sub.clone()))
+                .chain(t.lines.iter().map(|l| l.text.clone()))
+                .chain(t.stale.clone())
+                .filter(|l| !l.is_empty());
+            for l in lines {
+                tip.push('\n');
+                tip.push_str(&l);
+            }
+            out.push(Banner {
+                name: t.title,
+                word,
+                run: run.clone(),
+                stale: t.stale.is_some(),
+                tip,
+            });
+        }
+        out
+    }
+
     /// The breadcrumbs of the level shown: (text, where a tap goes).
     #[must_use]
     pub fn crumbs(&self) -> Vec<(String, Option<(String, String)>)> {
@@ -717,14 +774,6 @@ impl Monitor {
             out.push((name, Some((prog.clone(), p.clone()))));
         }
         out
-    }
-
-    /// One level up.
-    pub fn back(&mut self) {
-        let crumbs = self.crumbs();
-        if crumbs.len() >= 2 {
-            self.at.clone_from(&crumbs[crumbs.len() - 2].1);
-        }
     }
 
     /// One frame: the crumbs and the tiles, filling `ui`. Draws what was
@@ -755,6 +804,10 @@ impl Monitor {
                 self.top(ui, k, trouble.as_deref(), chrome, engineer, transport);
                 // After the toggle, so a tap shows on the same frame.
                 let mut groups = self.groups(feed, now, engineer && chrome.scan);
+                // The program's state is the header's (`Self::banner`).
+                for g in &mut groups {
+                    g.tiles.retain(|t| !matches!(t.kind, TileKind::Status(_)));
+                }
                 if let Some(rows) = feed.signals()
                     && let Some(g) = self.watched_group(rows, trouble.as_deref())
                 {
@@ -765,6 +818,12 @@ impl Monitor {
                     .id_salt("monitor-scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // First, so the choice of what to watch is at the
+                        // top of the page (Nick, 2026-11-26).
+                        if let Some(rows) = feed.signals() {
+                            self.signals_ui(ui, chrome, rows, map);
+                            ui.add_space(14.0 * k);
+                        }
                         for g in &groups {
                             if groups.len() > 1 && self.at.is_none() {
                                 ui.label(
@@ -787,11 +846,6 @@ impl Monitor {
                                     .color(t.muted),
                             );
                         }
-                        // After the tiles, so the picker never pushes a
-                        // program's tiles off a wall display.
-                        if let Some(rows) = feed.signals() {
-                            self.signals_ui(ui, chrome, rows, map);
-                        }
                     });
             });
     }
@@ -807,6 +861,29 @@ impl Monitor {
     ) {
         let groups = crate::signal_picker::signal_groups(rows, map);
         let watched = self.watched.clone();
+        // Nothing watched yet: say what to do, and open the first device
+        // that has points so they are on screen without a click. Once, so
+        // a fold afterwards stays folded.
+        if watched.is_empty() && !groups.is_empty() {
+            let t = theme(ui);
+            let r = ui.add(
+                egui::Label::new(
+                    egui::RichText::new("Pick a device to choose what to watch.")
+                        .size(crate::theme::BODY)
+                        .color(t.muted),
+                )
+                .wrap(),
+            );
+            chrome.hit("monitor pick hint", r.rect);
+        }
+        if !self.picker.seeded
+            && let Some((g, _)) = groups.iter().find(|(_, names)| !names.is_empty())
+        {
+            self.picker.seeded = true;
+            if watched.is_empty() {
+                self.picker.open.insert(g.clone());
+            }
+        }
         let flip = self.picker.ui(
             ui,
             chrome,
@@ -856,8 +933,8 @@ impl Monitor {
         })
     }
 
-    /// Back, the crumbs, the simulation's transport, "Open diagram", an
-    /// engineer's "Scan detail" toggle, and a red banner when the source
+    /// The crumbs (the way up from an instance), the simulation's
+    /// transport, an engineer's "Scan detail" toggle, and a red banner when the source
     /// cannot be trusted.
     fn top(
         &mut self,
@@ -873,21 +950,6 @@ impl Monitor {
         let t = theme(ui);
         ui.horizontal_wrapped(|ui| {
             let size = 16.0 * k;
-            let back = ui
-                .add_enabled(
-                    self.at.is_some(),
-                    egui::Button::new(egui::RichText::new("‹ Back").size(size).strong())
-                        .min_size(Vec2::new(TAP * 1.6 * k, TAP * k)),
-                )
-                .tip(if self.at.is_some() {
-                    "Up one level."
-                } else {
-                    "Up one level: this is the top already."
-                });
-            chrome.hit("monitor back", back.rect);
-            if back.clicked() {
-                self.back();
-            }
             for (i, (text, to)) in crumbs.iter().enumerate() {
                 if i > 0 {
                     ui.label(egui::RichText::new("›").size(size).color(t.muted));
@@ -919,17 +981,6 @@ impl Monitor {
             }
             if let Some(t) = transport {
                 self.transport(ui, t, chrome);
-            }
-            let open = ui
-                .add(
-                    egui::Button::new(egui::RichText::new("Open diagram").size(size))
-                        .min_size(Vec2::new(TAP * 2.5 * k, TAP * k)),
-                )
-                .on_hover_text("this level's diagram in the Editor");
-            chrome.hit("monitor diagram", open.rect);
-            if open.clicked() {
-                let (program, prefix) = self.at.clone().unwrap_or_default();
-                self.wish = Some(Wish::Diagram { program, prefix });
             }
             if engineer {
                 let scan = ui
@@ -1065,7 +1116,10 @@ impl Monitor {
         // width between them, each up to twice the least width, where a
         // four-column grid left half the screen empty.
         let cols = (((width + gap) / (min + gap)).floor() as usize).clamp(1, tiles.len().max(1));
-        let w = ((width - gap * (cols - 1) as f32) / cols as f32).min(min * 2.0);
+        // All in one row (one tile, since the status card went to the
+        // header: 2026-11-26), they share the whole width.
+        let w = (width - gap * (cols - 1) as f32) / cols as f32;
+        let w = if tiles.len() > cols { w.min(min * 2.0) } else { w };
         for row in tiles.chunks(cols) {
             let laid: Vec<Laid> = row.iter().map(|t| layout_tile(ui, t, k, w)).collect();
             let h = laid.iter().map(|l| l.height).fold(TAP * 2.0 * k, f32::max);

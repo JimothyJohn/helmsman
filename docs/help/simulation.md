@@ -5,8 +5,9 @@ inputs you set yourself. It is what the playground is, and what a box's
 page falls back to when no box answers.
 
 New to it? The [guided tour](https://helmsman.advin.io/playground/?tour)
-copies the Blink example, changes it, deploys it and reads its trend,
-with each step pointing at the control it is about.
+copies the Blink example, changes it, deploys it, watches the output,
+reads its trend and describes a change in words, with each step
+pointing at the control it is about.
 
 ## Running
 
@@ -27,7 +28,7 @@ Step runs to the next change. It scans until a value changes or the
 program takes another path through its statements, and shows that scan.
 A timer's elapsed time counting up does not count as a change, so a step
 lands on the scan where the timer's output turns on. If nothing changes in 60 seconds of program time, the step stops
-there and the Messages say so.
+there and the Log says so.
 
 <img src="img/monitor-stopped.png" alt="The Monitor's header with the program paused: run, stop, step and restart beside the crumbs." width="700">
 
@@ -40,7 +41,7 @@ Pick a block in the diagram and press <kbd>Shift</kbd> <kbd>F9</kbd> (or
 **Edit › Breakpoint**): a red dot marks it. The next scan that reaches
 the block stops just before it runs, the simulation stops with it, and
 the diagram and every value show the scan as it stood at that moment.
-The block is framed in orange and the Messages name its line. <kbd>F8</kbd> runs the rest of that scan.
+The block is framed in orange and the Log names its line. <kbd>F8</kbd> runs the rest of that scan.
 <kbd>Ctrl</kbd> <kbd>Enter</kbd> goes on to the next stop: the same
 block's next pass in a loop, another breakpoint, or the next scan. An
 input you change while stopped shows at once in what the diagram shows.
@@ -74,7 +75,9 @@ scrolls to it; the box counts them. <kbd>Enter</kbd> or
 <kbd>Ctrl</kbd> <kbd>G</kbd> goes to the next match,
 <kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Shift</kbd>
 <kbd>G</kbd> to the previous one, and letters match in either case, as
-Structured Text does. <kbd>Esc</kbd> closes the box and leaves the match
+Structured Text does. The <u>ab</u> button, Whole words only, is on
+while you search for a name, so `slew` does not find the `slew` inside
+`slews`; press it to find text wherever it occurs. <kbd>Esc</kbd> closes the box and leaves the match
 selected in the editor. It works the same on a box's code.
 
 ## Inputs
@@ -210,4 +213,4 @@ that colour, the same as its lamp.
 A program that divides by zero, runs past its watchdog, or writes an
 output out of range **faults**: it stops at the statement that did it,
 outputs go to their safe values, the state reads `faulted` in red and
-the Messages record what happened. Run or Step restarts it.
+the Log records what happened. Run or Step restarts it.

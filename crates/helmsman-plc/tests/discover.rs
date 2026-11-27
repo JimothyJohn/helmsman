@@ -735,3 +735,105 @@ fn a_box_without_the_probe_says_modbus_was_not_looked_for() {
     assert_eq!(says["looked"], false);
     assert!(says["why"].as_str().unwrap().contains("Modbus"), "{j}");
 }
+
+/// The library route's `wiring=1`: the device's wiring note and its
+/// source, from the index entry's `wiring` table or else from the
+/// library's `/review.json`; nothing guessed, a hostile review refused.
+const LOOKUP: &str = "/api/devices/library?vendor=991&product=515";
+
+fn with_wiring(index: &str, wiring: &str) -> String {
+    let at = r#""kind": "remote-io","#;
+    assert!(index.contains(at));
+    index.replace(at, &format!(r#"{at} "wiring": {wiring},"#))
+}
+
+fn review(note: &str) -> String {
+    format!(
+        r#"{{ "format": "helmsman-devices-review 1", "devices": [ {{ "folder": "devices/moxa/iologik-e1213", "wiring": {{ "note": {}, "source": "the review" }} }} ] }}"#,
+        serde_json::to_string(note).unwrap()
+    )
+}
+
+fn wiring_of(files: Vec<(&'static str, String)>, path: &str) -> Json {
+    let sim = E1213Sim::start().unwrap();
+    let mut all = BTreeMap::from([("/index.json", INDEX.to_string())]);
+    all.extend(files);
+    let lib = Files::serve(all);
+    let api = box_with(&sim, Some(lib.url("/index.json")), "");
+    let r = request(api.addr(), "GET", path, true);
+    assert_eq!(r.status, 200, "{}", r.body);
+    r.json()
+}
+
+#[test]
+fn the_wiring_option_gives_the_index_entrys_note_and_source() {
+    let idx = with_wiring(
+        INDEX,
+        r#"{ "note": "Common to terminal C.", "source": "the manual p. 12" }"#,
+    );
+    let j = wiring_of(vec![("/index.json", idx)], &format!("{LOOKUP}&wiring=1"));
+    assert_eq!(
+        j["matches"][0]["wiring"],
+        json!({"note": "Common to terminal C.", "source": "the manual p. 12"}),
+        "{j}"
+    );
+    // Without the option the answer carries no wiring and fetches nothing more.
+    let j = wiring_of(
+        vec![
+            (
+                "/index.json",
+                with_wiring(INDEX, r#"{ "note": "n", "source": "s" }"#),
+            ),
+            ("/review.json", "not json".into()),
+        ],
+        LOOKUP,
+    );
+    assert!(j["matches"][0].get("wiring").is_none(), "{j}");
+    assert!(j["matches"][0].get("wiring_unavailable").is_none(), "{j}");
+    assert!(j.get("wiring_unavailable").is_none(), "{j}");
+}
+
+#[test]
+fn the_wiring_note_falls_back_to_the_librarys_review() {
+    let j = wiring_of(
+        vec![("/review.json", review("From the review."))],
+        &format!("{LOOKUP}&wiring=1"),
+    );
+    assert_eq!(
+        j["matches"][0]["wiring"],
+        json!({"note": "From the review.", "source": "the review"}),
+        "{j}"
+    );
+}
+
+#[test]
+fn no_wiring_facts_anywhere_means_no_wiring_key_and_no_complaint() {
+    let j = wiring_of(vec![], &format!("{LOOKUP}&wiring=1"));
+    assert_eq!(j["matches"].as_array().unwrap().len(), 1, "{j}");
+    assert!(j["matches"][0].get("wiring").is_none(), "{j}");
+    assert!(j["matches"][0].get("wiring_unavailable").is_none(), "{j}");
+    assert!(j.get("wiring_unavailable").is_none(), "{j}");
+}
+
+#[test]
+fn a_hostile_review_is_refused_in_words_and_gives_no_wiring() {
+    for (what, body) in [
+        ("a note over 600 characters", review(&"n".repeat(601))),
+        ("not json", "<html>nope".to_string()),
+        ("an array", "[1,2,3]".to_string()),
+        ("the wrong format", r#"{"format":"x","devices":[]}"#.to_string()),
+    ] {
+        let j = wiring_of(vec![("/review.json", body)], &format!("{LOOKUP}&wiring=1"));
+        let m = &j["matches"][0];
+        let said = m
+            .get("wiring_unavailable")
+            .or_else(|| j.get("wiring_unavailable"));
+        if what == "the wrong format" {
+            // Nothing usable in it: refused or ignored, but never used.
+            assert!(m.get("wiring").is_none(), "{what}: {j}");
+            continue;
+        }
+        assert!(said.is_some_and(Json::is_string), "{what}: {j}");
+        assert!(m.get("wiring").is_none(), "{what}: {j}");
+    }
+}

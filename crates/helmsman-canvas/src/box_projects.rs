@@ -143,10 +143,6 @@ pub enum PCall {
     /// `POST /api/devices/discover`: the Devices tab's Scan (answered by
     /// the view, not here).
     Discover,
-    /// `POST /api/devices/discover?address=A`: the Devices tab's Ask, one
-    /// address (the text is the validated IPv4 address, for the answer's
-    /// note).
-    Ask(String),
     /// `GET /api/devices/library?vendor=&product=`: a found device's
     /// profile for the quick form (answered by the view, not here).
     Library,
@@ -157,6 +153,9 @@ pub enum PCall {
     /// `GET /api/devices/library?q=`: the picker's search by the number
     /// on a label (answered by the view, not here).
     FindWired,
+    /// `GET /api/devices/library?...&wiring=1` for a device's wiring note
+    /// (the walkthrough, `wire_it.rs`; answered by the view).
+    Wiring(String),
     /// A device's own configuration (`/api/devices/{id}/config...`),
     /// answered by the Devices tab (`device_config.rs`).
     Config(String, crate::device_config::ConfigOp),
@@ -430,6 +429,19 @@ pub struct Pending {
     pub offered: bool,
 }
 
+/// A save or a deploy that went through ([`BoxProjects::flash`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flash {
+    /// The popup's word: "Saved" or "Deployed".
+    pub word: &'static str,
+    /// What the log says.
+    pub line: String,
+    pub at: f64,
+}
+
+/// How long the save glyph's popup stays, seconds.
+pub const FLASH_S: f64 = 2.5;
+
 /// Everything the Editor knows about the box's projects.
 #[derive(Debug, Default)]
 // Each flag is its own fact (available, ended, deployed, to the node).
@@ -448,6 +460,10 @@ pub struct BoxProjects {
     pub conflict: Option<String>,
     /// A one-line note: what happened, or why not (`true`: an error).
     pub notice: Option<(String, bool)>,
+    /// The last save or deploy that went through: a word for the popup
+    /// beside the save glyph, the log's line and when (page time). Nick,
+    /// 2026-11-26: a popup for a couple of seconds, not a note.
+    pub flash: Option<Flash>,
     /// An upload waiting for "Replace".
     pub pending: Option<Pending>,
     /// A 401 said the box no longer knows this page's session.
@@ -465,6 +481,11 @@ pub struct BoxProjects {
     pub history: Vec<crate::history_ui::RevisionRow>,
     /// The revision on view (the History modal).
     pub revision: Option<crate::history_ui::RevisionView>,
+    /// The revision the Code tab is stepped to, read whole: shown there,
+    /// not in a window.
+    pub stepped: Option<crate::history_ui::RevisionView>,
+    /// Revisions asked for the Code tab, not yet answered.
+    peeks: Vec<u32>,
     /// The Agent pages of the open project's latest revisions that carry
     /// one, by revision, as read (`PCall::Page`).
     pub pages: BTreeMap<u32, String>,
@@ -953,19 +974,8 @@ impl BoxProjects {
         ));
     }
 
-    /// Asks the box about the one device at `address` (the Devices tab's
-    /// Ask), for a device that does not answer the scan's broadcast.
-    pub fn ask(&mut self, address: std::net::Ipv4Addr) {
-        self.queue.push(PReq::json(
-            PCall::Ask(address.to_string()),
-            "POST",
-            format!("/api/devices/discover?address={address}"),
-            &json!({}),
-        ));
-    }
-
     /// Asks the box for the library's entry on a found device, its
-    /// profile text with it (the Devices tab's Add).
+    /// profile text with it (the Devices tab's click on a found device).
     pub fn library(&mut self, vendor: u16, product: u16) {
         self.queue.push(PReq::get(
             PCall::Library,
@@ -980,6 +990,15 @@ impl BoxProjects {
         self.queue.push(PReq::get(
             PCall::Wired(wired.to_string()),
             format!("/api/devices/library?wired={wired}"),
+        ));
+    }
+
+    /// Asks the box what the library says about wiring `device`
+    /// (`query`: [`crate::wire_it::Key::query`]); the walkthrough's note.
+    pub fn wiring(&mut self, device: &str, query: &str) {
+        self.queue.push(PReq::get(
+            PCall::Wiring(device.to_string()),
+            format!("/api/devices/library?{query}"),
         ));
     }
 
@@ -1120,6 +1139,8 @@ impl BoxProjects {
         self.pending = None;
         self.history.clear();
         self.revision = None;
+        self.stepped = None;
+        self.peeks.clear();
         self.pages.clear();
         self.queue
             .push(PReq::get(PCall::Project(name.into()), project_url(name)));
@@ -1250,6 +1271,8 @@ impl BoxProjects {
         self.conflict = None;
         self.history.clear();
         self.revision = None;
+        self.stepped = None;
+        self.peeks.clear();
         self.pages.clear();
         self.relist();
     }
@@ -1275,6 +1298,14 @@ impl BoxProjects {
             },
             format!("{}/history/{n}", project_url(name)),
         ));
+    }
+
+    /// Asks for revision `n` of project `name` for the Code tab to show
+    /// in place ([`Self::stepped`]); no window opens.
+    pub fn peek_revision(&mut self, name: &str, n: u32) {
+        self.stepped = None;
+        self.peeks.push(n);
+        self.read_revision(name, n);
     }
 
     /// The project's files back to revision `n` (an engineer; the box
@@ -1493,7 +1524,7 @@ impl BoxProjects {
             },
             "PUT",
             file_url(&project, file),
-            &json!({ "text": text, "version": version, "page": page }),
+            &json!({ "text": text, "version": version, "page": page, "what": crate::instruct::asked(page) }),
         ));
         o.current = Some(file.to_string());
         // Each scenario a new file (`version: null`: only if no file of
@@ -2303,6 +2334,11 @@ impl BoxProjects {
                 }
             }
             PCall::Revision { project, n } => {
+                let peek = self
+                    .peeks
+                    .iter()
+                    .position(|p| *p == n)
+                    .map(|k| self.peeks.remove(k));
                 if !ok {
                     self.note(format!("cannot read revision {n}: {}", error_of(a)), true);
                     return;
@@ -2319,11 +2355,16 @@ impl BoxProjects {
                     })
                     .unwrap_or_default();
                 if let Some(row) = revision_row(&j) {
-                    self.revision = Some(crate::history_ui::RevisionView {
+                    let view = crate::history_ui::RevisionView {
                         row,
                         files,
                         page: j["page"].as_str().map(str::to_string),
-                    });
+                    };
+                    if peek.is_some() {
+                        self.stepped = Some(view);
+                    } else {
+                        self.revision = Some(view);
+                    }
                 }
             }
             PCall::Restore { project, n } => {
@@ -2495,6 +2536,17 @@ impl BoxProjects {
                         "{project} is running: {mods} (snapshot {}){red}",
                         short(snap)
                     ));
+                    // The popup under the save glyph and the log's line;
+                    // a red requirement test is said in the line.
+                    self.flash = Some(Flash {
+                        word: "Deployed",
+                        line: if red.is_empty() {
+                            format!("Deployed {project}.")
+                        } else {
+                            format!("Deployed {project}{red}.")
+                        },
+                        at: self.now,
+                    });
                     self.running = Some(project);
                     self.deployed = true;
                     self.relist();
@@ -2532,7 +2584,12 @@ impl BoxProjects {
                     if let Some((m, t)) = sent {
                         m.base = t;
                     }
-                    self.deploy = Deploy::Done(format!("{name} is running the version deployed from here."));
+                    self.deploy = Deploy::Done(format!("{name} deployed."));
+                    self.flash = Some(Flash {
+                        word: "Deployed",
+                        line: format!("Deployed {name}."),
+                        at: self.now,
+                    });
                     self.deployed = true;
                 } else {
                     if a.status == 422 {
@@ -2624,10 +2681,10 @@ impl BoxProjects {
             | PCall::SavePins
             | PCall::Trend
             | PCall::Discover
-            | PCall::Ask(_)
             | PCall::Library
             | PCall::Wired(_)
             | PCall::FindWired
+            | PCall::Wiring(_)
             | PCall::Config(..)
             | PCall::Proposal
             | PCall::ProposalAccept
@@ -2739,7 +2796,12 @@ impl BoxProjects {
         if self.deploy == Deploy::Saving {
             self.check();
         } else if !matches!(&self.notice, Some((_, true))) {
-            self.note(format!("Saved {project}."), false);
+            self.clear_notice();
+            self.flash = Some(Flash {
+                word: "Saved",
+                line: format!("Saved {project}."),
+                at: self.now,
+            });
         }
     }
 

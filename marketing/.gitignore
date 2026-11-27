@@ -1,3 +1,12 @@
+# No video of any kind is committed, anywhere: media lives on the file server
+# (until then, Nick's ~/Movies/helmsman-marketing/, laid out like this repo).
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.m4v
+*.avi
+*.gif
 # Renders are rebuilt by <project>/render.sh; HyperFrames keeps its history and snapshots in .hyperframes.
 /*.mp4
 .hyperframes/

@@ -571,10 +571,14 @@ pub fn intake_ui(
         }
     });
     if let Some(e) = &docs.error {
-        let r = ui
-            .add(egui::Label::new(RichText::new(e).size(size).color(t.ink(RED))).wrap())
-            .tip("Why the last file was not added.");
-        chrome.hit("documents error", r.rect);
+        crate::messages::error_link_rich(
+            ui,
+            chrome,
+            "documents error",
+            RichText::new(e).size(size).color(t.ink(RED)),
+            e,
+            "Why the last file was not added.",
+        );
     }
     if let Some(k) = remove {
         docs.remove(k);

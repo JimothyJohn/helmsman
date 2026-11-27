@@ -99,9 +99,9 @@ one short line, for example:</p>
 <p>Done: the lamp now latches until stop is pressed.</p>
 </blockquote>
 <p>When nothing could be changed, the answer says why in red, with the
-first lines of what failed; <strong>Details in the Messages</strong>
-opens the Messages, which keep all of it: hold the pointer over a line
-there for the whole text.</p>
+first lines of what failed; <strong>Details in the Log</strong> opens
+the Log, which keeps all of it: hold the pointer over a line there for
+the whole text.</p>
 <h2 id="help-with-the-words">Help with the words</h2>
 <p>A request that names the program's inputs and outputs and says when
 is understood first time. When what you type names an input or output
@@ -112,7 +112,7 @@ anywhere.</p>
 <p>On a box nothing runs until you deploy it, as with any edit of your
 own. In the simulation the changed program runs at once.</p>
 <p>The instruction box is at the top of the tab, one row tall. It grows
-as you type, to four rows, and scrolls inside after that. Under it are
+as you type, to ten rows, and scrolls inside after that. Under it are
 the buttons, and under those the answer, down to the bottom of the tab.
 A click anywhere on the answer puts the cursor back in the box. The
 answer's text can be selected and copied.</p>
@@ -180,14 +180,29 @@ revision, so the version before the change is always there.</p>
 file back as it was before the last change (a new revision; the change
 stays in History). It is offered while the file is still as Helmsman
 left it; after an edit of your own, go back through History instead.</p>
-<p>In the simulation the arrows beside Send take Undo's place: the left
-arrow steps back one revision, the right arrow forward one, as far as
-the first revision and the newest. Each revision shown runs at once,
-marked green and red with what it changed, and its tooltip names the
-instruction behind it. Saving keeps the version shown; an edit of your
-own puts the arrows away. Each step also puts that version's instruction
-back in the box and what came of it in the answer area, and writes
-nothing to the Messages.</p>
+<p>The arrows beside Send, with an <strong>(i)</strong> between them,
+step through the changes you described: the left arrow to the one
+before, the right arrow to the next, and past the newest back to what
+you were writing. The <strong>(i)</strong> opens the version's details.
+In the simulation each version shown runs at once, marked green and red
+with what it changed, and its tooltip names the instruction behind it.
+Saving keeps the version shown; an edit of your own puts the arrows
+away. Each step also puts that version's instruction back in the box and
+what came of it in the answer area, and writes nothing to the Log.</p>
+<p>The <strong>i</strong> between the arrows opens the version on show
+in a window, the same one the Code tab's <strong>i</strong> opens. It
+starts with what you asked, in large type, and a line saying what came
+of it: whether the checks passed. Under that are who saved it and when
+("3 hours ago" and the date) and its version number. <strong>What
+changed</strong> lists each file with the lines added in green and
+removed in red, and the changed lines themselves; a long one starts
+folded. <strong>Why</strong>, <strong>Requirements it passed</strong>,
+<strong>Attempts that did not pass</strong> and <strong>The explanation
+it gave</strong> are folded until you open them. A version that was a
+plain save, an upload or a restore shows the same window with what it
+has. <strong>Restore this version</strong> puts the project's files back
+as they were then, saved as a new version; Escape or
+<strong>Close</strong> leaves the window.</p>
 <p>The clock beside the arrows turns the answer area into the list of
 the project's versions, newest first, with a box to search what each one
 says. A click runs a version, as the arrows do; the clock again brings
@@ -306,35 +321,39 @@ as an engineer, open a program file, type the instruction and press
 <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line).
 The checked change is saved on the box as a revision with its History
 entry, by you, and <strong>Undo</strong> asks the box to restore the
-revision before it. The dot beside the tab's heading says whether the
-answer service is online (green), offline (red) or not heard from yet
-(grey).</p>
+revision before it. When the answer service cannot be reached, the
+<strong>Send</strong> arrow turns red on gray like a deactivated button;
+a click says why and sends nothing. <strong>Send</strong> with an empty
+box also sends nothing and asks you to say what it should do.</p>
 <p>If Helmsman stores a <strong>proposal</strong> for review instead of
 sending the file back, the file is not touched and the tab offers
 <strong>Review</strong> to open it on the Proposals screen, where an
 approver signs it off under the box's policy.</p>
 <h2 id="get-help">Get help</h2>
-<p>On a box the Describe tab has a second mode, for someone who did not
-write the program and has a machine that does not do what it should. The
-toggle at the top right of the tab switches it: <strong>&lt;
-&gt;</strong> is <strong>Change the program</strong>, <strong>?</strong>
-is <strong>Get help</strong>.</p>
-<img src="img/get-help.png" alt="Get help in the Describe tab: the question, Ask for help, and the issue with its Copy button." width="326">
+<p>On a box the <strong>?</strong> tab (<kbd>?</kbd>) is for someone who
+did not write the program and has a machine that does not do what it
+should. It keeps its own conversation, apart from the Describe tab's.
+Every error the page shows (in the Log, a refused deploy, a device form
+that will not save) is underlined: click it and the <strong>?</strong>
+tab opens and asks about that error, with the Log. Drag over the text to
+select it instead.</p>
+<img src="img/get-help.png" alt="Get help in the ? tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 <p>Sign in (any role), say what you saw or what you want to do in your
 own words, and press <strong>Ask for help</strong>, the yellow paper
 plane (<kbd>Enter</kbd> works too; <kbd>Shift</kbd> <kbd>Enter</kbd> or
 <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line). The page sends your
-words with its recent Messages, and the box adds what it knows: its
-version, the program it runs, its devices and their errors. Passwords,
-PINs and tokens are left out. Nothing on the box changes and nothing is
-filed anywhere.</p>
+words with its recent Log, and the box adds what it knows: its version,
+the program it runs, its devices and their errors. Passwords, PINs and
+tokens are left out. Nothing on the box changes and nothing is filed
+anywhere.</p>
 <p>What comes back depends on what you asked:</p>
 <ul>
 <li>A report of trouble ("the conveyor stopped, the lamp is red") gets
 <strong>What is likely wrong</strong>, Helmsman's diagnosis from the
-box's messages and devices, and <strong>Issue to report it</strong>, a
-Markdown issue that carries your words and the box's details.
+box's messages and devices, set out with a bold headline and a short
+numbered list of what to check, and <strong>Issue to report it</strong>,
+a Markdown issue that carries your words and the box's details.
 <strong>Copy</strong> takes the whole issue, to paste into a new GitHub
 issue or to give to an AI assistant.</li>
 <li>A question about how things work ("how do I load a program?") gets

@@ -41,10 +41,12 @@ pub const DEFAULT_API_PORT: u16 = 8080;
 /// The address a node answers on when nothing is on its flash: fixed and
 /// documented, the way Moxa ships a block at 192.168.127.254 (Nick,
 /// 2026-11-08: most plants commission on static networks with no DHCP).
-/// On the same /24 as a fresh Moxa, so one laptop setting reaches both,
+/// On the same subnet as a fresh Moxa, so one laptop setting reaches both,
 /// and never that address.
 pub const FACTORY_IP: [u8; 4] = [192, 168, 127, 250];
-pub const FACTORY_PREFIX: u8 = 24;
+/// 255.255.0.0, so a fresh node reaches every 192.168.x.x device (Nick,
+/// 2026-11-26; /24 before).
+pub const FACTORY_PREFIX: u8 = 16;
 
 const OFF_VERSION: usize = 4;
 const OFF_MODE: usize = 6;

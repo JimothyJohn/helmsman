@@ -48,7 +48,7 @@ pub const MAX_BODY: usize = 4096;
 pub const MIN_SIZE: f64 = 120.0;
 pub const MAX_SIZE: f64 = 1600.0;
 /// The side tabs, by the names the page keeps them under.
-pub const TABS: [&str; 6] = ["claude", "code", "io", "devices", "files", "history"];
+pub const TABS: [&str; 7] = ["claude", "code", "io", "devices", "files", "history", "help"];
 /// The bottom panel's tabs.
 pub const BOTTOMS: [&str; 2] = ["trend", "messages"];
 
@@ -66,9 +66,10 @@ pub struct Layout {
     pub right_open: bool,
     pub bottom_open: bool,
     pub bottom_shows: String,
-    /// The Messages under the left pane's tabs are open (2026-11-23; the
-    /// bottom panel has no tabs now, and `bottom_shows` is a legacy field
-    /// the page writes as `trend`). Absent: open.
+    /// The bottom panel shows its Messages tab, not the Trend (since
+    /// 2026-11-26; from 2026-11-23 the Messages under the left pane's tabs
+    /// were open). `bottom_shows` is a legacy field the page writes as
+    /// `trend`. Absent: the page's own default, the Trend.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub messages_open: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

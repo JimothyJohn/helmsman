@@ -5,6 +5,7 @@
 
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, Vec2};
 
+use crate::hotkeys::Action;
 use crate::st_view::TAP;
 use crate::st_view::brand::{GREEN, RED, YELLOW};
 use crate::theme::theme;
@@ -92,6 +93,19 @@ pub enum Icon {
     ZoomIn,
     /// A magnifier with a minus: zoom out.
     ZoomOut,
+    /// A magnifier with a frame in it: fit the diagram, or the blocks
+    /// selected, to the view.
+    ZoomFit,
+    /// A line that rises and falls: the bottom panel's Trend tab.
+    Trend,
+    /// ↑ : move up (the Trend's ticked signals, a lane).
+    Up,
+    /// ↓ : move down.
+    Down,
+    /// A painter's palette: pick a color.
+    Palette,
+    /// A pencil: edit (a device's row on the Devices tab).
+    Edit,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -146,6 +160,25 @@ pub fn action_wide(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool, 
     r
 }
 
+/// Send when the agent cannot be reached (Nick, 2026-11-26): the arrow in
+/// red on the gray of a deactivated button, which still takes a click.
+/// The caller tips it with why.
+pub fn send_off(ui: &mut egui::Ui, width: f32) -> Response {
+    let size = Vec2::new(width, TAP * 0.75);
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    let t = theme(ui);
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(5), t.rule.gamma_multiply(0.5));
+    let side = rect.height() * 0.56;
+    draw(
+        painter,
+        Rect::from_center_size(rect.center(), Vec2::splat(side)),
+        Icon::Send,
+        t.ink(RED),
+    );
+    r
+}
+
 /// How wide the Deploy button is, points.
 pub const DEPLOY_W: f32 = ROW * 1.7;
 
@@ -176,6 +209,7 @@ pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
         Icon::Deploy,
         ink,
     );
+    badge(ui, rect, Some(Action::Deploy));
     r
 }
 
@@ -189,6 +223,21 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str)
     button_sized(ui, icon, SIZE, enabled, on, tip)
 }
 
+/// [`button`] for a control whose shortcut is not its glyph's usual one:
+/// `key` is the action Help › Show hotkeys writes on it, or none.
+pub fn button_keyed(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    enabled: bool,
+    on: bool,
+    tip: &str,
+    key: Option<Action>,
+) -> Response {
+    let r = button_raw(ui, icon, SIZE, enabled, on, tip);
+    badge(ui, r.rect, key);
+    r
+}
+
 /// [`button`] at `size` points a side: a glyph in a text row takes the
 /// row's height, not the toolbar's.
 pub fn button_sized(
@@ -199,6 +248,12 @@ pub fn button_sized(
     on: bool,
     tip: &str,
 ) -> Response {
+    let r = button_raw(ui, icon, size, enabled, on, tip);
+    badge(ui, r.rect, button_action(icon));
+    r
+}
+
+fn button_raw(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, on: bool, tip: &str) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
     let r = r.on_hover_text(tip);
@@ -268,8 +323,100 @@ pub fn tab_sensed(
             Stroke::new(2.0, if alarm.is_some() { red } else { t.accent }),
         );
     }
+    badge(ui, rect, tab_action(icon));
     r
 }
+
+/// The shortcut a glyph button's icon stands for. Stop is left out: the
+/// simulation's, a box's and the Agent's differ, so its caller says
+/// ([`button_keyed`]).
+const fn button_action(icon: Icon) -> Option<Action> {
+    match icon {
+        Icon::Run | Icon::Pause => Some(Action::RunStop),
+        Icon::Step => Some(Action::Step),
+        Icon::Save => Some(Action::Save),
+        Icon::Deploy => Some(Action::Deploy),
+        Icon::Find => Some(Action::Find),
+        _ => None,
+    }
+}
+
+/// The view a tab's icon opens.
+const fn tab_action(icon: Icon) -> Option<Action> {
+    match icon {
+        Icon::Files => Some(Action::Files),
+        Icon::Devices => Some(Action::Devices),
+        Icon::Code => Some(Action::St),
+        Icon::Agent => Some(Action::Describe),
+        Icon::Io => Some(Action::Io),
+        Icon::Help => Some(Action::HelpTab),
+        Icon::Messages => Some(Action::Messages),
+        Icon::Trend => Some(Action::Trend),
+        _ => None,
+    }
+}
+
+/// The id of the flag [`set_hotkeys`] sets and the list [`badges`] reads.
+fn flag() -> egui::Id {
+    egui::Id::NULL.with("show-hotkeys")
+}
+
+/// Called at the start of each frame with Help › Show hotkeys: clears the
+/// last frame's badges and says whether this frame draws any.
+pub fn set_hotkeys(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| {
+        d.insert_temp(flag(), on);
+        d.insert_temp(flag().with("list"), Vec::<(Action, String, Rect)>::new());
+    });
+}
+
+/// The superscripts drawn this frame: the action, its text and where.
+#[must_use]
+#[cfg(test)]
+pub fn badges(ctx: &egui::Context) -> Vec<(Action, String, Rect)> {
+    ctx.data(|d| d.get_temp(flag().with("list"))).unwrap_or_default()
+}
+
+/// Writes `action`'s shortcut over the top-right corner of `rect`, while
+/// Help › Show hotkeys is on: every glyph control draws through here, so
+/// one that gains a shortcut shows it with no new code. Painted over, on
+/// an opaque chip, and no widget: nothing moves and no click is eaten.
+pub fn badge(ui: &egui::Ui, rect: Rect, action: Option<Action>) {
+    let ctx = ui.ctx();
+    let Some(action) = action else { return };
+    if !ctx.data(|d| d.get_temp::<bool>(flag())).unwrap_or(false) {
+        return;
+    }
+    let text = crate::hotkeys::short(ctx, action);
+    if text.is_empty() {
+        return;
+    }
+    let t = theme(ui);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.clone(), egui::FontId::proportional(BADGE), t.accent);
+    let chip = Rect::from_min_size(
+        Pos2::new(rect.right() - galley.size().x - 6.0, rect.top() - 3.0),
+        galley.size() + Vec2::new(6.0, 2.0),
+    );
+    let p = ui.painter().with_clip_rect(ctx.content_rect());
+    p.rect_filled(chip, CornerRadius::same(4), t.bg);
+    p.rect_stroke(
+        chip,
+        CornerRadius::same(4),
+        Stroke::new(1.0, t.accent.gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
+    p.galley(chip.min + Vec2::new(3.0, 1.0), galley, t.accent);
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(Action, String, Rect)>>(flag().with("list"))
+            .push((action, text, chip));
+    });
+}
+
+/// The superscript's text size, points: smaller than the page's text,
+/// which it is no part of, and a chip on a glyph.
+const BADGE: f32 = 13.0;
 
 /// `icon` drawn in `rect` in `color`, outside a button (the header's
 /// signed-in role).
@@ -530,6 +677,20 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             ));
         }
+        Icon::Trend => {
+            let at = |x: f32, y: f32| Pos2::new(l + (r - l) * x, t + (bt - t) * y);
+            let line = [
+                at(0.0, 0.7),
+                at(0.25, 0.3),
+                at(0.5, 0.6),
+                at(0.75, 0.15),
+                at(1.0, 0.45),
+            ];
+            for w in line.windows(2) {
+                p.line_segment([w[0], w[1]], stroke);
+            }
+            p.line_segment([at(0.0, 1.0), at(1.0, 1.0)], stroke);
+        }
         Icon::List => {
             for k in [0.14, 0.5, 0.86] {
                 let y = t + b.height() * k;
@@ -567,6 +728,40 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 p.line_segment([lens - Vec2::new(0.0, bar), lens + Vec2::new(0.0, bar)], stroke);
             }
         }
+        Icon::Up | Icon::Down => {
+            // A shaft down the middle, an open arrowhead at one end.
+            let inset = w * 0.7;
+            let (from, to, dir) = if icon == Icon::Up {
+                (bt, t + inset, -1.0)
+            } else {
+                (t, bt - inset, 1.0)
+            };
+            p.line_segment([Pos2::new(c.x, from), Pos2::new(c.x, to)], stroke);
+            head(
+                p,
+                Pos2::new(c.x, to),
+                Vec2::new(0.0, dir),
+                b.height() * 0.36,
+                stroke,
+            );
+        }
+        Icon::Palette => {
+            // The board, and three wells of paint on it.
+            let rad = b.width() * 0.46;
+            p.circle_stroke(c, rad, stroke);
+            for (dx, dy) in [(-0.2, -0.16), (0.12, -0.24), (0.24, 0.06)] {
+                p.circle_filled(
+                    Pos2::new(c.x + b.width() * dx, c.y + b.height() * dy),
+                    w * 0.9,
+                    color,
+                );
+            }
+            p.circle_stroke(
+                Pos2::new(c.x - b.width() * 0.12, c.y + b.height() * 0.2),
+                w * 1.1,
+                stroke,
+            );
+        }
         Icon::Back | Icon::Forward => {
             // A shaft across the middle, an open arrowhead at one end.
             let inset = w * 0.7;
@@ -582,6 +777,24 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 Vec2::new(dir, 0.0),
                 b.width() * 0.36,
                 stroke,
+            );
+        }
+        Icon::ZoomFit => {
+            // The lens and handle of Find, a small frame in the lens.
+            let rad = b.width() * 0.32;
+            let at = Pos2::new(l + rad + w * 0.5, t + rad + w * 0.5);
+            p.circle_stroke(at, rad, stroke);
+            let d = rad * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment(
+                [Pos2::new(at.x + d, at.y + d), Pos2::new(r, bt)],
+                Stroke::new(w * 1.3, color),
+            );
+            let side = rad * 0.95;
+            p.rect_stroke(
+                Rect::from_center_size(at, Vec2::splat(side)),
+                CornerRadius::same(1),
+                Stroke::new(w * 0.8, color),
+                egui::StrokeKind::Middle,
             );
         }
         Icon::Find => {
@@ -719,6 +932,28 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             ));
             p.rect_stroke(front, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Edit => {
+            // A pencil on the diagonal: its tip at the lower left, a
+            // shoulder where the point ends, the body to the upper right.
+            let u = b.width();
+            let d = Vec2::new(1.0, -1.0).normalized();
+            let n = Vec2::new(1.0, 1.0).normalized();
+            let tip = Pos2::new(l + u * 0.06, bt - u * 0.06);
+            let hw = u * 0.15;
+            let shoulder = tip + d * u * 0.34;
+            let end = tip + d * u * 1.22;
+            p.add(egui::Shape::closed_line(
+                vec![
+                    tip,
+                    shoulder + n * hw,
+                    end + n * hw,
+                    end - n * hw,
+                    shoulder - n * hw,
+                ],
+                stroke,
+            ));
+            p.line_segment([shoulder + n * hw, shoulder - n * hw], stroke);
         }
         Icon::Clear => {
             // A bin: the lid and its handle over a tapering body.

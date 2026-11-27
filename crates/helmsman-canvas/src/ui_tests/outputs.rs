@@ -63,9 +63,13 @@ fn fifty_outputs_with_long_names_keep_the_panel_at_its_default_width() {
     h.press("io head inputs");
     h.wait(0.2);
     assert!(h.drew("driven by"), "a card says what drives it");
+    // One card to a row, at the pane's width: from the ribbon that holds
+    // the pane's hide button along its inner edge (2026-11-26) to the
+    // pane's right margin.
+    let ribbon = h.rect("right");
     assert!(
-        outs.width() > RIGHT_W * 0.8,
-        "one card to a row, at the pane's width: {outs:?}"
+        (outs.left() - ribbon.right()).abs() <= 4.0 && h.size.x - outs.right() <= 30.0,
+        "one card to a row, at the pane's width: {outs:?} beside the ribbon {ribbon:?}"
     );
 }
 

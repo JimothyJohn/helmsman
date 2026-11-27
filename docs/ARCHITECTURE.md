@@ -1082,8 +1082,8 @@ popup, a note, a modal or a field with focus has it (`Viewer::menu_open`,
 set by the host, plus egui's own state at this and the last frame, since
 panels drawn before the diagram let go of their focus first). The view no
 longer pans by dragging empty space: a middle-button drag, or any drag
-with Space held, does, and the arrow keys and W A S D as before (the wheel
-zooms). The selection is the Agent's focus: each frame the host makes
+with Space held, does, and the arrow keys as before (the wheel zooms; W A S
+D panned until 2026-11-26). The selection is the Agent's focus: each frame the host makes
 `Instruct::focus` (`chat_about::focus_of`, kept while the selection, the
 collected chips and the diagram text are what it was made for) one chip
 per selected statement, none that is collected already, as many as
@@ -2129,7 +2129,7 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `DELETE /api/projects/{p}` | engineer | 409 for the running project |
 | `POST /api/projects/{p}/rename` | engineer | `{to}` |
 | `GET /api/projects/{p}/files/{f}` | session | `{name, text, version}` |
-| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
+| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?, page?, what?}` (a draft; `page`: the Describe change's History entry, `what`: what was asked, the revision's description); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
 | `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval, diagnostics: [], warnings: [{file, line, col, message, severity: "warning"}]}`, or 422 `{diagnostics: [{file, line, col, message, severity: "error"}], warnings: [...]}`. `warnings` never stop a check, a save or a deploy |
 | `POST /api/projects/{p}/tests` | token or session | `{ok, red: [line], untested, tests: [{file, requirement, state, passed, why, scans, elapsed_ms}]}`; `state` is `passed`, `failed` or `untested` (never red) |
@@ -3261,23 +3261,12 @@ the end of this section.
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
-  What the zoom shows is the zoom ladder (Nick, 2026-11-23):
-  `fold::ladder` (pure) names the rungs, closest first (`Rung::Code`,
-  `Wiring`, `Statements`, `Sections`, `Program`), gives each a band of
-  zoom (`Rung::band`, a factor `STEP` apart), and says how strongly a
-  rung's cards (`card`) and outlines (`outline`) are drawn at a zoom, as
-  continuous functions of the zoom alone. `ladder::groups` gives the
-  blocks each card stands for, from `structure::statements`, `sections`
-  and `arms`, never sharing a block within a rung; a statement keeps its
-  source (`structure::sources`) for the Code rung. On the canvas
-  (`st_ladder.rs`, a child of `st_view`) `Viewer::ladder_cards` is what a
-  frame draws: each group's bounds over its blocks as laid out, so
-  nothing is laid out again and nothing reaches the edit count or
-  `diagram.layout`. `ladder_paint` draws them over the diagram after
-  `draw`; a card at least half formed takes the pointer (`ladder_at`): a
-  click flies in one rung (`ladder_click`, `ladder_fly`, the Q/E glide),
-  a drag pans. The camera's limits are the ladder's (`MIN_ZOOM`,
-  `MAX_ZOOM`).
+  The zoom ladder (Nick, 2026-11-23: cards per statement, section and
+  program over the blocks, a rung picker) was removed from the canvas on
+  2026-11-26: the zoom only scales. `fold::ladder` stays in
+  helmsman-diagram for its tests alone, and the camera's limits are still
+  its `MIN_ZOOM` and `MAX_ZOOM`. The lamp fixture in the diagram's corner
+  went the same day (`lamps.rs` keeps `colour`, which the I/O tab uses).
   The earlier three-level semantic zoom (`fold::zoom`, `st_zoom.rs`), which
   closed folds and laid the diagram out again at each level, is off
   (`st_zoom::SEMANTIC_ZOOM` is `false`, `ZoomFolds::follows` starts from
@@ -3285,9 +3274,7 @@ the end of this section.
   corner of the diagram (`Viewer::corner_controls`, drawn by `canvas` so
   the page and a box both have it) holds the hand toggle (`Viewer::hand`,
   view state: a primary drag on empty space pans instead of boxing), zoom
-  in and zoom out (`ZOOM_STEP` about the middle of the area) and the
-  rung's name, a menu that steps to any rung, left of the lamp fixture
-  when there is one.
+  in and zoom out (`ZOOM_STEP` about the middle of the area) and fit.
   With `SEMANTIC_ZOOM` on, the zoom picks the level (`st_zoom.rs`, a child of
   `st_view`): each frame
   `follow_zoom` takes the camera's zoom through `zoom::level`, and when the
@@ -3616,12 +3603,17 @@ Markdown. `--relay-design-agent V` names the profile (default
 ## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
 
 For someone in trouble who did not write the program (Nick, 2026-11-07,
-interview). The box's Describe tab has two modes, "Change the program" (the
-instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
-switched by a two-glyph toggle (< > and ?) at the tab's top right; the
-heading names the mode, with a dot for the agent's state beside it (green
-online, red offline, grey until heard; Nick, 2026-11-08):
-the person says what went wrong, and the answer is a plain-language
+interview). Until 2026-11-26 it was a mode of the Describe tab; it is now
+the Help tab, `Pane::Help` / `Tab::Help` (a box only; the playground does
+not list it), its button the `?` glyph and its key L
+(`helmsman-canvas/src/help.rs`). Its conversation and context are its own
+(`BoxView::help`): nothing goes into agent.md or the Describe tab's
+history. Every error shown is a link (`messages::error_link`,
+`copyable_error`: selectable text, underlined); a click without a drag puts
+`Chrome::help_ask`, which `BoxView::toolbar` takes, opens the tab and asks
+(`help_about`) with the page's Messages. Where the view lists no Help tab
+(`Chrome::help_on`) an error is plain selectable text.
+The person says what went wrong, and the answer is a plain-language
 diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
 issue or to another agent. Nothing is filed. A question about how things
 work ("How do I load a program?"; Nick, 2026-11-08, after one came back

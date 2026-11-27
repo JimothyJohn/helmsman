@@ -179,6 +179,7 @@ mod verify_tests;
 mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
+mod wire_it;
 mod wired;
 
 /// `helmsman-canvas --help-tables keyboard|starters`: the help site's

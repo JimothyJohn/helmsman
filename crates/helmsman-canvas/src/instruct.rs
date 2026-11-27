@@ -499,6 +499,10 @@ pub struct Instruct {
     /// The prompt the arrows last put in the box ([`Self::show_step`]):
     /// while the box still holds it, the next step may replace it.
     pub stepped: Option<String>,
+    /// The box and the outcome as they were before the arrows (or H) went
+    /// into History, put back when they come out again
+    /// ([`Self::leave_steps`]).
+    pub held: Option<(String, Option<Outcome>)>,
     /// The instruction last sent from the box, so it is never lost to
     /// Enter (Nick, 2026-11-24): it comes back into the empty box on its
     /// own when it ended with nothing written, and with the Up key at
@@ -605,6 +609,7 @@ impl Instruct {
             return Err(why);
         }
         let instruction = std::mem::take(&mut self.draft).trim().to_string();
+        self.held = None;
         let text = if plan {
             crate::steps::plan_request(&instruction, false)
         } else {
@@ -1393,7 +1398,7 @@ impl Instruct {
     /// (Nick, 2026-11-23: the arrows restore both the prompt and its
     /// output): the instruction of its History `page` in the box and what
     /// came of it under it; a revision that was a plain save says `what`.
-    /// A draft the engineer typed since is theirs and stays.
+    /// What the engineer had typed is held ([`Self::leave_steps`]).
     pub fn show_step(&mut self, page: Option<&str>, what: &str) {
         let field = |key: &str| {
             page.and_then(|p| p.lines().find_map(|l| l.strip_prefix(key)))
@@ -1402,10 +1407,12 @@ impl Instruct {
                 .map(str::to_string)
         };
         let prompt = field(INSTRUCTION).unwrap_or_default();
-        if self.draft.trim().is_empty() || self.stepped.as_deref() == Some(self.draft.as_str()) {
-            self.draft.clone_from(&prompt);
-            self.stepped = Some(prompt);
+        // What was in the box and under it comes back on leaving.
+        if self.held.is_none() {
+            self.held = Some((std::mem::take(&mut self.draft), self.outcome.take()));
         }
+        self.draft.clone_from(&prompt);
+        self.stepped = Some(prompt);
         let mut o = Outcome::new(
             Kind::Applied,
             field("Result: ").unwrap_or_else(|| {
@@ -1417,6 +1424,17 @@ impl Instruct {
         );
         o.why = field("Why: ");
         self.outcome = Some(o);
+    }
+
+    /// Out of History: the box holds what the engineer left in it and the
+    /// outcome is the one before the arrows. Nothing to do when the arrows
+    /// were not used.
+    pub fn leave_steps(&mut self) {
+        if let Some((draft, outcome)) = self.held.take() {
+            self.draft = draft;
+            self.outcome = outcome;
+            self.stepped = None;
+        }
     }
 
     /// A value was set by hand on the diagram and saved
@@ -1616,6 +1634,15 @@ fn said(prose: &str) -> String {
 
 const INSTRUCTION: &str = "Instruction: ";
 const FILE: &str = "File: ";
+
+/// What was asked, from a change's History entry ([`record`]): its
+/// instruction, the revision's description on the box (Nick, 2026-11-26:
+/// History says what was requested, not what mechanically changed).
+#[must_use]
+pub fn asked(record: &str) -> Option<&str> {
+    let i = record.lines().next()?.strip_prefix(INSTRUCTION)?.trim();
+    (!i.is_empty()).then_some(i)
+}
 
 /// The History entry of a change: the instruction and the file first
 /// (what [`recent`] reads back), then the reason, the result, the
@@ -2072,8 +2099,15 @@ impl Versions {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Steps {
     pub back: Option<(u32, String)>,
+    /// `Some((LIVE, _))`: the arrow goes back to the live state.
     pub forward: Option<(u32, String)>,
+    /// The revision on show, for the info button between the arrows.
+    pub shown: Option<u32>,
 }
+
+/// The revision number a Forward arrow carries when it goes back to the
+/// live state, past the newest revision with an exchange.
+pub const LIVE: u32 = u32::MAX;
 
 /// The answer under way: how long it has taken and how long it usually
 /// takes. Nick, 2026-11-13, wanted to see the change being made as it
@@ -2536,8 +2570,7 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
         PlanState::Running | PlanState::Splitting => return false,
         PlanState::Paused(problems) => {
             for line in problems {
-                let r = ui.add(egui::Label::new(RichText::new(line).color(t.ink(RED))).wrap());
-                chrome.hit("agent step problem", r.rect);
+                crate::messages::error_link(ui, chrome, "agent step problem", line, t.ink(RED));
             }
             (
                 "Try this step again",
@@ -2674,7 +2707,7 @@ fn chips_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instr
 }
 
 /// The most rows the instruction box grows to before it scrolls inside.
-pub const BOX_ROWS: usize = 4;
+pub const BOX_ROWS: usize = 10;
 /// How long the box takes to change its height, s.
 const BOX_EASE: f32 = 0.1;
 
@@ -2712,8 +2745,8 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     // The chips take their rows first (the selection can fill several).
     chips_ui(ui, chrome, s);
     let Some(below) = v.room_below else {
-        let row = ui.spacing().interact_size.y;
-        let enter = box_ui(ui, chrome, s, v, Some(3.0 * row));
+        let empty = s.run.as_ref().map_or(&s.draft, |r| &r.instruction).is_empty();
+        let enter = box_ui(ui, chrome, s, v, Some(box_height(ui, empty)));
         let mut act = buttons_ui(ui, chrome, s, v, enter);
         if let Some(estimate) = v.big
             && !s.busy()
@@ -2787,12 +2820,17 @@ fn box_ui(
     let (field, enter) = if let Some(run) = &s.run {
         // While it works the box shows what was sent, and takes no typing.
         let mut sent = run.instruction.clone();
+        // A key that asked for the field while it works asks for nothing.
+        chrome.focus_describe = false;
         ui.add_enabled_ui(false, |ui| {
             chat_box_sized(ui, &mut sent, "agent-instruction", hint, tip, height)
         })
         .inner
     } else {
         let out = chat_box_sized(ui, &mut s.draft, "agent-instruction", hint, tip, height);
+        if std::mem::take(&mut chrome.focus_describe) {
+            out.0.request_focus();
+        }
         // Up in the empty box: the last message sent, the caret at its end.
         if out.0.has_focus() && ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) && s.recall() {
             use egui::text::{CCursor, CCursorRange};
@@ -2864,20 +2902,31 @@ fn buttons_ui(
 ) -> Option<Act> {
     let mut act = None;
     let target = &v.target;
-    let why_not = v.blocked.clone().or_else(|| s.refusal());
+    // Send's four states (Nick, 2026-11-26): the agent cannot be reached
+    // (red on gray, still clickable: a click says why); a field that is
+    // empty (looks as usual: a click says to type first); another refusal
+    // (gray and off, as it was); otherwise on.
+    let empty = s.draft.trim().is_empty();
+    let unreachable = v.blocked.clone().filter(|w| !w.ends_with('\u{2026}'));
+    let why_not = v
+        .blocked
+        .clone()
+        .or_else(|| if empty { None } else { s.refusal() });
     // As many buttons as the row holds share its width, none wider than
     // an action button is: four of those do not fit the pane's default.
     let count = 1
         + usize::from(v.versions.is_some())
         + if v.steps.is_some() {
-            2
+            3
         } else {
             usize::from(s.undo().is_some())
         };
     let gap = ui.spacing().item_spacing.x;
     #[allow(clippy::cast_precision_loss)]
     let wide = ((ui.available_width() - gap * (count as f32 - 1.0)) / count as f32)
-        .clamp(crate::st_view::TAP, crate::glyphs::ACTION_W);
+        // Five of them (the arrows with their info button) are narrower
+        // than a tap target to stay in the pane at its default width.
+        .clamp(30.0, crate::glyphs::ACTION_W);
     ui.horizontal(|ui| {
         if v.versions.is_some() {
             let on = s.versions_open;
@@ -2892,7 +2941,7 @@ fn buttons_ui(
             }
         }
         if let Some(steps) = &v.steps {
-            for (key, icon, to, end) in [
+            for (k, (key, icon, to, end)) in [
                 (
                     "agent back",
                     crate::glyphs::Icon::Back,
@@ -2905,7 +2954,25 @@ fn buttons_ui(
                     &steps.forward,
                     "Forward: this is the newest revision.",
                 ),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                // The info button sits between the arrows.
+                if k == 1 {
+                    let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Info, steps.shown.is_some(), false, wide)
+                        .tip(if steps.shown.is_some() {
+                            "Details: this revision's instruction, answer and code in a window, to look at or restore."
+                        } else {
+                            "Details: step Back to a revision first, then see its instruction, answer and code here."
+                        });
+                    chrome.hit("agent info", r.rect);
+                    if r.clicked()
+                        && let Some(n) = steps.shown
+                    {
+                        act = Some(Act::Details(n));
+                    }
+                }
                 let r = crate::glyphs::action_wide(ui, icon, to.is_some(), false, wide)
                     .tip(to.as_ref().map_or(end, |(_, tip)| tip.as_str()));
                 chrome.hit(key, r.rect);
@@ -2938,15 +3005,26 @@ fn buttons_ui(
                     act = Some(Act::Stop);
                 }
             } else {
-                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Send, why_not.is_none(), true, wide)
-                    .tip(why_not.clone().unwrap_or_else(|| {
-                    format!(
-                        "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
+                let r = if let Some(why) = &unreachable {
+                    crate::glyphs::send_off(ui, wide).tip(why)
+                } else {
+                    crate::glyphs::action_wide(ui, crate::glyphs::Icon::Send, why_not.is_none(), true, wide).tip(
+                        why_not.clone().unwrap_or_else(|| {
+                            format!(
+                                "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
+                            )
+                        }),
                     )
-                }));
+                };
                 chrome.hit("agent send", r.rect);
-                if r.clicked() || (enter && why_not.is_none()) {
-                    act = Some(Act::Send);
+                if r.clicked() || (enter && why_not.as_ref().is_none_or(|_| unreachable.is_some())) {
+                    if let Some(why) = &unreachable {
+                        s.failed(why);
+                    } else if empty {
+                        s.failed("Say what it should do first.");
+                    } else {
+                        act = Some(Act::Send);
+                    }
                 }
             }
         });
@@ -3024,7 +3102,7 @@ fn area_ui(
 /// history clock belongs here): a box to search what each one says, then
 /// the versions that match, newest first; a click runs one, as the
 /// arrows do.
-fn versions_ui(
+pub fn versions_ui(
     ui: &mut egui::Ui,
     chrome: &mut crate::editor::Chrome,
     s: &mut Instruct,
@@ -3034,7 +3112,9 @@ fn versions_ui(
         .add(
             egui::TextEdit::singleline(&mut s.versions_find)
                 .hint_text("Search the versions")
-                .desired_width(f32::INFINITY),
+                // Capped, with 12 pt for the scroll bar.
+                .desired_width((ui.available_width() - 12.0).max(40.0))
+                .clip_text(true),
         )
         .tip("Shows the versions whose description holds these words.");
     chrome.hit("agent versions find", e.rect);
@@ -3154,7 +3234,7 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
                 Tone::Ask => {
                     "A question for you: type your answer in the box and send. It goes with the question."
                 }
-                Tone::Warn => "The change is in the program. The Messages list what did not pass.",
+                Tone::Warn => "The change is in the program. The Log lists what did not pass.",
                 Tone::Error => "Nothing in the program changed.",
             });
         chrome.hit("agent result", r.rect);
@@ -3185,13 +3265,13 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
     }
     if a.tone != Tone::Done && !matches!(o.kind, Kind::Said) {
         let more = match a.more {
-            0 => "Details in the Messages".to_string(),
-            n => format!("{n} more in the Messages"),
+            0 => "Details in the Log".to_string(),
+            n => format!("{n} more in the Log"),
         };
         let r = ui
             .add(egui::Label::new(RichText::new(more).color(t.muted).underline()).sense(egui::Sense::click()))
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .tip("Opens the Messages, which keep every line of it.");
+            .tip("Opens the Log, which keepss every line of it.");
         chrome.hit("agent details", r.rect);
         if r.clicked() {
             chrome.show_messages();

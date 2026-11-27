@@ -65,8 +65,9 @@ Rules the gate enforces or that cost a day to learn:
   together (a new enum variant against a new exhaustive match merges cleanly
   and does not compile), so overlapping PRs are test-merged on a throwaway
   branch first.
-- `dev` is promoted to `master` by the maintainer. Never open a PR against
-  `master` or push to it.
+- `dev` is promoted to `staging` (`make staging`), and `staging` to
+  `master` (`make ship`), by the maintainer. `staging` holds what the next release will be. Never open a
+  PR against `staging` or `master`, or push to either.
 - Keep a PR to one change. Commit messages say what changed and why, in
   plain prose; the subject names the TODO card when there is one
   (`feat(seed): ... (seed-deploys)`).

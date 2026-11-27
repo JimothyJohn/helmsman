@@ -359,10 +359,13 @@ impl FilesUi {
     pub fn show(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) -> Option<Act> {
         let t = theme(ui);
         let mut act = None;
-        let r = ui
-            .add(egui::Label::new(RichText::new(l.place.title()).strong().color(t.fg)).truncate())
-            .tip(l.place.tip());
-        chrome.hit("files place", r.rect);
+        // The box's tab has no header (Nick, 2026-11-26): the tab says it.
+        if l.place != Place::Box {
+            let r = ui
+                .add(egui::Label::new(RichText::new(l.place.title()).strong().color(t.fg)).truncate())
+                .tip(l.place.tip());
+            chrome.hit("files place", r.rect);
+        }
         // Your own come first, whether or not there are any.
         let mut shown = Group::Mine;
         let mine = l.projects.iter().filter(|p| p.group == Group::Mine).count();
@@ -385,7 +388,11 @@ impl FilesUi {
             if p.running {
                 text.push_str("  ● running");
             }
-            let color = if p.running { t.accent } else { t.fg };
+            let color = if p.running {
+                t.ink(crate::st_view::brand::GREEN)
+            } else {
+                t.fg
+            };
             let text = RichText::new(text).color(color);
             let tip = if p.example() {
                 let title = example_title(&p.name).unwrap_or(&p.name);
@@ -1075,6 +1082,9 @@ pub trait Workspace {
     /// Sends the ST editor to the declaration of the picked block's
     /// variable (Go to definition); whether there was one.
     fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool;
+    /// H: the Describe tab's history, at the newest revision with an
+    /// exchange (as Back from the live tab).
+    fn go_history(&mut self) {}
     /// Lights every read and write of the picked block's variable on the
     /// diagram (Cross references); whether there was one.
     fn cross_references(&mut self) -> bool;

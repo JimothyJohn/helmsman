@@ -351,6 +351,38 @@ impl Record {
         self.signals.iter().find(|s| &s.name == name)
     }
 
+    /// The connectors that have wires, the variants that wire alike
+    /// merged into one, as JSON for the brief: connector type, order
+    /// numbers and each wire's pin, function and colour. At most `most`
+    /// groups, each with at most `most` order numbers.
+    fn wire_groups(&self, most: usize) -> Json {
+        let mut groups: Vec<(&Connection, Vec<&str>)> = Vec::new();
+        for c in self.connections.iter().filter(|c| !c.wires.is_empty()) {
+            match groups
+                .iter_mut()
+                .find(|(g, _)| g.kind == c.kind && g.wires == c.wires)
+            {
+                Some((_, products)) => products.extend(c.products.iter().map(String::as_str)),
+                None => groups.push((c, c.products.iter().map(String::as_str).collect())),
+            }
+        }
+        Json::Array(
+            groups
+                .iter()
+                .take(most)
+                .map(|(c, products)| {
+                    json!({
+                        "type": c.kind,
+                        "products": products.iter().take(most).collect::<Vec<_>>(),
+                        "wires": c.wires.iter().map(|w| json!({
+                            "n": w.n, "function": w.function, "color": w.color,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect(),
+        )
+    }
+
     /// What a person or the agent needs to know about the thing on a
     /// point, in a few lines of JSON: what it is, whether anyone has
     /// checked it, its on/off signals with what each state is called,
@@ -387,6 +419,7 @@ impl Record {
                 );
             }
         }
+        out["connections"] = self.wire_groups(most);
         let left_out = self.variants.len().saturating_sub(most)
             + switches.len().saturating_sub(most)
             + self.settings.len().saturating_sub(most);
@@ -628,5 +661,97 @@ mod tests {
         assert!(Record::parse("").is_err());
         assert!(Record::parse("[]").is_err());
         assert!(Record::parse(&GOOD.replace(r#" "wired": {"#, r#" "unwired": {"#)).is_err());
+    }
+    fn conn(kind: &str, products: &[&str], wires: &str) -> String {
+        let p: Vec<String> = products.iter().map(|p| format!("{p:?}")).collect();
+        format!(
+            r#"{{ "type": "{kind}", "products": [{}], "wires": [{wires}] }}"#,
+            p.join(",")
+        )
+    }
+
+    const KQ_WIRES: &str = r#"{ "n": 1, "function": "L+", "color": "BN", "name": "L+" },
+      { "n": 3, "function": "L-", "color": "BU", "name": "L-" },
+      { "n": 4, "function": "C/Q", "color": "BK", "name": "C/Q" }"#;
+
+    fn record_with(connections: &[String]) -> Record {
+        let src = GOOD.replacen(
+            r#""connections": ["#,
+            &format!(r#""connections": [{},"#, connections.join(",")),
+            1,
+        );
+        Record::parse(&src).unwrap()
+    }
+
+    /// A real ifm record's wires reach the brief, the variants that wire
+    /// alike merged, and the connectors with no wires left out.
+    #[test]
+    fn the_brief_carries_each_connectors_wires_merged_by_wiring() {
+        let r = record_with(&[
+            conn("Cable", &["KQ6001"], KQ_WIRES),
+            conn("Cable", &["KQ6002"], KQ_WIRES),
+            conn("Other", &["KQ6003"], ""),
+        ]);
+        let b = r.brief(8);
+        let groups = b["connections"].as_array().unwrap();
+        let cable = groups
+            .iter()
+            .find(|g| g["type"] == "Cable" && g["products"][0] == "KQ6001")
+            .unwrap();
+        assert_eq!(cable["products"], json!(["KQ6001", "KQ6002"]));
+        assert_eq!(
+            cable["wires"][0],
+            json!({ "n": 1, "function": "L+", "color": "BN" })
+        );
+        assert_eq!(
+            cable["wires"][2],
+            json!({ "n": 4, "function": "C/Q", "color": "BK" })
+        );
+        assert!(
+            groups.iter().all(|g| !g["wires"].as_array().unwrap().is_empty()),
+            "{groups:?}"
+        );
+        // A record with no wires at all says so with an empty list.
+        assert_eq!(
+            Record::parse(GOOD).unwrap().brief(8)["connections"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn the_briefs_connections_are_cut_to_the_limit() {
+        let many: Vec<String> = (0..20)
+            .map(|k| {
+                conn(
+                    "M12-4",
+                    &[&format!("P{k}")],
+                    &format!(r#"{{ "n": {}, "color": "BN" }}"#, 1 + k % 9),
+                )
+            })
+            .collect();
+        let r = record_with(&many);
+        assert_eq!(r.brief(3)["connections"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_record_with_a_thousand_wires_or_a_control_character_in_one_is_refused() {
+        let wires: Vec<String> = (0..1000).map(|_| r#"{ "n": 1, "color": "BN" }"#.into()).collect();
+        let src = GOOD.replacen(
+            r#""connections": ["#,
+            &format!(r#""connections": [{},"#, conn("Cable", &["X"], &wires.join(","))),
+            1,
+        );
+        assert!(Record::parse(&src).is_err());
+        let ctl = GOOD.replacen(
+            r#""connections": ["#,
+            &format!(
+                r#""connections": [{},"#,
+                conn("Cable", &["X"], r#"{ "n": 1, "color": "B\u001bN" }"#)
+            ),
+            1,
+        );
+        assert!(Record::parse(&ctl).is_err());
     }
 }

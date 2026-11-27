@@ -27,6 +27,8 @@ struct Harness {
     app: App,
     time: f64,
     size: Vec2,
+    /// What the last frame drew.
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Harness {
@@ -36,6 +38,7 @@ impl Harness {
             app,
             time: 0.0,
             size,
+            shapes: Vec::new(),
         };
         h.frame(vec![]);
         h.frame(vec![]);
@@ -53,6 +56,56 @@ impl Harness {
         let Self { ctx, app, .. } = self;
         let mut out = ctx.run_ui(input, |ui| app.show(ui));
         out.textures_delta.clear();
+        self.shapes = out.shapes;
+    }
+
+    /// Whether the last frame drew text containing `needle`.
+    fn drew(&self, needle: &str) -> bool {
+        fn walk(shape: &egui::Shape, needle: &str) -> bool {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+                egui::Shape::Text(t) => t.galley.job.text.contains(needle),
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|c| walk(&c.shape, needle))
+    }
+
+    /// The pointer rested on hit `key` long enough for its tooltip.
+    fn hover(&mut self, key: &str) {
+        let at = self.rect(key).center();
+        self.frame(vec![Event::PointerMoved(at)]);
+        for _ in 0..90 {
+            self.frame(vec![]);
+        }
+    }
+
+    /// The colours of the lamps (a "●") the header draws just left of
+    /// program `k`'s name.
+    fn header_lamps(&self, k: usize) -> Vec<egui::Color32> {
+        fn walk(s: &egui::Shape, near: Rect, out: &mut Vec<egui::Color32>) {
+            match s {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, near, out)),
+                egui::Shape::Text(t) if t.galley.job.text.trim() == "\u{25CF}" && near.contains(t.pos) => {
+                    let c = t
+                        .override_text_color
+                        .or_else(|| t.galley.job.sections.first().map(|s| s.format.color))
+                        .unwrap_or(t.fallback_color);
+                    out.push(c);
+                }
+                _ => {}
+            }
+        }
+        let name = self.rect(&format!("monitor program {k}"));
+        let near = Rect::from_min_max(
+            name.min - Vec2::new(36.0, 4.0),
+            Pos2::new(name.left(), name.bottom() + 4.0),
+        );
+        let mut out = Vec::new();
+        for c in &self.shapes {
+            walk(&c.shape, near, &mut out);
+        }
+        out
     }
 
     fn click(&mut self, at: Pos2) {
@@ -245,19 +298,20 @@ fn a_tap_goes_into_an_instance_and_back_and_crumbs_go_up() {
     let crumbs: Vec<String> = h.app.monitor.crumbs().into_iter().map(|(t, _)| t).collect();
     assert_eq!(crumbs, ["All programs", "line", "s1", "infeed"]);
     h.frame(vec![]);
-    h.press("monitor back");
-    assert_eq!(h.app.monitor.at, Some(("line".into(), "S1.".into())));
+    // No Back button and no "Open diagram" (Nick, 2026-11-26): the crumbs
+    // go back up.
+    assert!(h.app.chrome.rect("monitor back").is_none(), "no Back");
+    assert!(h.app.chrome.rect("monitor diagram").is_none(), "no Open diagram");
+    assert!(!h.drew("Open diagram"));
+    h.press("monitor crumb 2");
+    assert_eq!(h.app.monitor.at, Some(("line".into(), "S1.".into())), "up one");
     h.frame(vec![]);
     h.press("monitor crumb 0");
     assert_eq!(h.app.monitor.at, None);
-    // The full diagram is one tap away, at the level shown.
+    // The header's switch is the way out to the Editor.
     h.frame(vec![]);
-    h.press("tile line/S2.");
-    h.frame(vec![]);
-    h.press("monitor diagram");
+    h.press("editor");
     assert_eq!(h.app.screen, Screen::Editor);
-    let v = h.app.sim.as_ref().unwrap().viewer.as_ref().unwrap();
-    assert_eq!(v.scopes[v.scope].prefix, "S2.");
     h.frame(vec![]);
     h.press("monitor");
     assert_eq!(h.app.screen, Screen::Monitor);
@@ -272,14 +326,7 @@ fn tiles_are_big_enough_to_tap_and_scale_from_a_phone_to_a_tv() {
         Vec2::new(3840.0, 2160.0),
     ] {
         let h = sim_line_at(size);
-        for key in [
-            "status line",
-            "outputs line/",
-            "tile line/S1.",
-            "tile line/S2.",
-            "monitor back",
-            "monitor diagram",
-        ] {
+        for key in ["outputs line/", "tile line/S1.", "tile line/S2."] {
             let r = h.rect(key);
             assert!(r.height() >= TAP && r.width() >= TAP, "{key} at {size:?}: {r:?}");
             assert!(
@@ -287,6 +334,17 @@ fn tiles_are_big_enough_to_tap_and_scale_from_a_phone_to_a_tv() {
                 "{key} off screen at {size:?}: {r:?}"
             );
         }
+        // The program and its state are in the header, on screen; no
+        // status card among the tiles.
+        let p = h.rect("monitor program 0");
+        assert!(
+            p.min.x >= 0.0 && p.max.x <= size.x,
+            "the header's program at {size:?}: {p:?}"
+        );
+        assert!(
+            h.app.chrome.rect("status line").is_none(),
+            "no status card at {size:?}"
+        );
         let s1 = h.rect("tile line/S1.");
         if size.x < NARROW {
             // One column on a phone, the full width.
@@ -467,10 +525,10 @@ fn an_engineer_turns_scan_detail_on_and_the_browser_keeps_it() {
         .unwrap()
         .scans;
     assert_eq!(sub, format!("scan 2 ms · {scans} scans"));
-    assert_eq!(
-        h.app.chrome.rect("status line").map(|r| r.height() >= TAP),
-        Some(true)
-    );
+    // The header's tooltip for the line says it (the status card is gone).
+    let k = header_index(&h, "line");
+    h.hover(&format!("monitor program {k}"));
+    assert!(h.drew("scan 2 ms · "), "the period in the header's tooltip");
     // Kept per browser, as the Editor's layout is.
     assert!(Chrome::restored(&h.app.chrome.saved()).scan);
     assert!(
@@ -558,7 +616,6 @@ fn the_monitor_never_writes() {
                     || k.starts_with("outputs ")
                     || k.starts_with("status ")
             })
-            .filter(|k| k != "monitor diagram")
             .collect();
         for k in keys {
             if h.app.chrome.rect(&k).is_some() {
@@ -603,10 +660,11 @@ fn the_monitor_never_writes() {
     for k in [
         "tile line/S1.",
         "outputs line/S1.",
-        "monitor back",
+        "monitor crumb 0",
         "tile line/S2.",
         "monitor crumb 0",
-        "status line",
+        "monitor program 0",
+        "monitor state 0",
     ] {
         h.press(k);
         h.frame(vec![]);
@@ -660,35 +718,135 @@ fn monitor_and_andon_in_the_url_open_the_monitor() {
     assert_eq!(h.app.screen, Screen::Monitor, "a wide wall TV too");
 }
 
+/// The index of `program` in the header (its "monitor program k").
+fn header_index(h: &Harness, program: &str) -> usize {
+    (0..8)
+        .find(|k| {
+            h.app.chrome.rect(&format!("monitor program {k}")).is_some() && {
+                // The name drawn in that hit.
+                let r = h.rect(&format!("monitor program {k}"));
+                text_in(h, r).iter().any(|t| t == program)
+            }
+        })
+        .unwrap_or_else(|| panic!("no {program} in the header: {:?}", h.app.chrome.hits))
+}
+
+/// The texts the last frame drew starting inside `r`.
+fn text_in(h: &Harness, r: Rect) -> Vec<String> {
+    fn walk(s: &egui::Shape, r: Rect, out: &mut Vec<String>) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
+            egui::Shape::Text(t) if r.expand(2.0).contains(t.pos) => {
+                out.push(t.galley.job.text.trim().to_string());
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, r, &mut out);
+    }
+    out
+}
+
+/// Nick, 2026-11-26: the Monitor has no Back button, no "Open diagram"
+/// and no status card, on a box as in the simulation; the device picker
+/// is the first thing under the header, above every tile.
 #[test]
-fn open_diagram_on_a_box_opens_that_module_at_that_instance() {
-    let (b, mut h, mut sent) = box_line();
+fn the_monitor_has_no_back_no_open_diagram_and_no_status_card_and_the_picker_leads() {
+    let (_b, mut h, _) = box_line();
     h.press("tile line/S1.");
     h.frame(vec![]);
-    h.press("monitor diagram");
-    assert_eq!(h.app.screen, Screen::Editor);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    loop {
-        serve(&mut h, &b, &mut sent);
-        h.frame(vec![]);
-        let bv = h.app.boxv.as_ref().unwrap();
-        if let Some(v) = &bv.view {
-            assert_eq!(bv.state.selected.as_deref(), Some("line"));
-            assert_eq!(v.scopes[v.scope].prefix, "S1.");
-            break;
+    for gone in ["monitor back", "monitor diagram", "status line", "status cell"] {
+        assert!(h.app.chrome.rect(gone).is_none(), "{gone} on a box's Monitor");
+    }
+    assert!(!h.drew("Open diagram") && !h.drew("Back"));
+    h.press("monitor crumb 0");
+    h.frame(vec![]);
+    let picker = h.rect("monitor pick hint");
+    for (k, r) in &h.app.chrome.hits {
+        if k.starts_with("tile ") || k.starts_with("outputs ") {
+            assert!(picker.top() < r.top(), "the picker {picker:?} is above {k} {r:?}");
         }
+    }
+    let mut s = sim_line();
+    s.press("tile line/S1.");
+    s.frame(vec![]);
+    for gone in ["monitor back", "monitor diagram", "status line"] {
         assert!(
-            std::time::Instant::now() < deadline,
-            "no diagram: {:?}",
-            bv.state.problem
+            s.app.chrome.rect(gone).is_none(),
+            "{gone} in the simulation's Monitor"
         );
     }
-    // Back in the Editor: its own stream again, the Monitor's closed.
-    assert!(sent.contains(&Cmd::Close(Stream::Traces)), "{sent:?}");
-    assert!(
-        sent.contains(&Cmd::Listen(Stream::Trace, crate::remote::trace_url("line"))),
-        "{sent:?}"
-    );
+}
+
+/// What a lamp's colour reads as: "green", "red", "yellow" or "grey".
+fn hue(c: egui::Color32) -> &'static str {
+    let (r, g, b) = (i32::from(c.r()), i32::from(c.g()), i32::from(c.b()));
+    if (r - g).abs() < 24 && (g - b).abs() < 24 {
+        "grey"
+    } else if r > 160 && g > 140 && b < 100 {
+        "yellow"
+    } else if g > r + 60 && g > b + 60 {
+        "green"
+    } else if r > g + 60 && r > b + 30 {
+        "red"
+    } else {
+        "other"
+    }
+}
+
+/// The header names each program with its state's lamp (Nick, 2026-11-26):
+/// green running, red faulted, yellow held, grey stopped or stale; the
+/// tooltip keeps the fault and who stopped it.
+#[test]
+fn the_headers_lamp_is_green_running_red_faulted_yellow_held_grey_stopped_or_stale() {
+    let (_b, mut h, _) = box_line();
+    let k = header_index(&h, "line");
+    let lamp = |h: &Harness| {
+        let l = h.header_lamps(k);
+        assert_eq!(l.len(), 1, "one lamp beside the line's name: {l:?}");
+        (hue(l[0]), l[0])
+    };
+    assert_eq!(lamp(&h).0, "green", "running: {:?}", lamp(&h));
+    let set = |h: &mut Harness, state: &str, fault: Option<&str>, by: Option<&str>| {
+        let m = h
+            .app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .state
+            .modules
+            .iter_mut()
+            .find(|m| m.name == "line")
+            .unwrap();
+        m.state = state.into();
+        m.fault = fault.map(Into::into);
+        m.stopped_by = by.map(Into::into);
+        h.frame(vec![]);
+        h.frame(vec![]);
+    };
+    set(&mut h, "faulted", Some("division by zero in S1"), None);
+    assert_eq!(lamp(&h).0, "red", "faulted: {:?}", lamp(&h));
+    assert!(h.drew("FAULTED"), "its word on a wide screen");
+    h.hover(&format!("monitor program {k}"));
+    assert!(h.drew("division by zero in S1"), "the fault in the tooltip");
+    set(&mut h, "held", None, None);
+    assert_eq!(lamp(&h).0, "yellow", "held: {:?}", lamp(&h));
+    set(&mut h, "stopped", None, Some("alice (engineer)"));
+    assert_eq!(lamp(&h).0, "grey", "stopped: {:?}", lamp(&h));
+    h.hover(&format!("monitor program {k}"));
+    assert!(h.drew("alice (engineer)"), "who stopped it in the tooltip");
+    // Running, but no new scan for longer than the limit: grey.
+    let (_b, mut h, _) = box_line();
+    let k = header_index(&h, "line");
+    let lamp = |h: &Harness| hue(h.header_lamps(k)[0]);
+    assert_eq!(lamp(&h), "green");
+    let end = h.time + STALE_AFTER + 1.0;
+    while h.time < end {
+        h.frame(vec![]);
+    }
+    assert_eq!(lamp(&h), "grey", "stale, whatever it was");
 }
 
 /// Card `scan-stats`: a feed of hand-made programs, to put exact numbers
@@ -845,7 +1003,8 @@ fn times_read_in_the_unit_that_fits() {
 }
 
 /// Against a real box API: an engineer with "Scan detail" on sees the
-/// box's measured numbers, each line on screen to hover.
+/// box's measured numbers, in the tooltip of the program's header (the
+/// status card that held them is gone, 2026-11-26).
 #[test]
 fn an_engineer_sees_the_boxs_scan_load() {
     let (b, mut h, mut sent) = box_line();
@@ -871,8 +1030,11 @@ fn an_engineer_sees_the_boxs_scan_load() {
     assert!(lines[0].text.starts_with("scan "), "{lines:?}");
     assert!(lines[1].text.starts_with("jitter "), "{lines:?}");
     h.frame(vec![]);
+    let k = header_index(&h, "line");
+    h.hover(&format!("monitor program {k}"));
     for l in &lines {
-        assert!(h.app.chrome.rect(&l.key).is_some(), "{} not on screen", l.key);
+        let head = l.text.split_whitespace().next().unwrap();
+        assert!(h.drew(head), "{:?} not in the header's tooltip", l.text);
     }
     let state = &h.app.boxv.as_ref().unwrap().state;
     let t = state

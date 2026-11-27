@@ -62,7 +62,7 @@ pub const FIT_MAX: f32 = 1.6;
 /// Points of wheel or two-finger scroll that zoom the diagram by e
 /// (egui's own figure for a Ctrl scroll).
 pub const SCROLL_ZOOM: f32 = 200.0;
-/// How fast a held arrow key (or W A S D) moves the view, points a second.
+/// How fast a held arrow key moves the view, points a second.
 pub const KEY_PAN: f32 = 900.0;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
@@ -278,6 +278,9 @@ pub struct Viewer {
     /// The variable (upper-cased head name in this scope) whose reads and
     /// writes are lit instead of the "because" path: Cross references.
     xref: Option<String>,
+    /// Which of [`Self::xref`]'s uses the diagram glyph framed last: each
+    /// click on it again frames the next (Nick, 2026-11-26).
+    xref_at: usize,
     /// Instances folded in the tree (their prefixes).
     folded: Vec<String>,
     /// How far the operator moved each block from where the layout put it,
@@ -341,11 +344,6 @@ pub struct Viewer {
     cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
     /// What the zoom closes ([`zoom_fold`]).
     zoom: zoom_fold::ZoomFolds,
-    /// The zoom ladder's groups for each POU ([`ladder_view`]).
-    ladder: Vec<ladder_view::Groups>,
-    /// Where the corner controls drew the rung's name.
-    #[cfg(test)]
-    pub(crate) ladder_name: Rect,
     /// The hand toggle of the corner controls: a primary drag on empty
     /// space pans instead of selecting. View state, never saved.
     hand: bool,
@@ -372,11 +370,6 @@ pub struct TreeRow {
     pub has_kids: bool,
     pub folded: bool,
 }
-
-/// What hovering empty diagram space says.
-const EMPTY_TIP: &str = "Click a block to select it, or drag to select the blocks the box touches; \
-Shift or Ctrl adds. The Describe tab then asks about them. Esc, a click here or a click off the diagram \
-lets them go. Move the view with Space and a drag, the middle button, or the arrow keys.";
 
 /// What a drag on the diagram holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -658,11 +651,6 @@ impl Viewer {
             })
             .collect();
         let views = vec![None; module.pous.len()];
-        let ladder = module
-            .pous
-            .iter()
-            .map(|p| ladder_view::Groups::of(&p.diagram, src))
-            .collect();
         let mut v = Self {
             src: src.to_string(),
             module,
@@ -682,6 +670,7 @@ impl Viewer {
             ran_at: std::collections::HashMap::new(),
             taken_at: std::collections::HashMap::new(),
             xref: None,
+            xref_at: 0,
             folded: Vec::new(),
             moved,
             edits: 0,
@@ -704,9 +693,6 @@ impl Viewer {
             cards: std::cell::RefCell::new(None),
             jumped: None,
             zoom: zoom_fold::ZoomFolds::new(),
-            ladder,
-            #[cfg(test)]
-            ladder_name: Rect::NOTHING,
             hand: false,
         };
         v.reshow();
@@ -1320,9 +1306,9 @@ impl Viewer {
         true
     }
 
-    /// The reads and writes of `head` on this diagram, with the wires
-    /// between them.
-    fn references(&self, head: &str) -> Drivers {
+    /// The blocks that read or write `head` (or are its instance), lit
+    /// alone: no wires.
+    fn named(&self, head: &str) -> Drivers {
         let d = self.diagram();
         let of = |n: &helmsman_diagram::Node| match &n.kind {
             NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
@@ -1336,12 +1322,72 @@ impl Viewer {
             NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
             _ => false,
         };
-        let nodes: Vec<bool> = d.nodes.iter().map(of).collect();
-        let wires = d
+        Drivers {
+            nodes: d.nodes.iter().map(of).collect(),
+            wires: vec![false; d.wires.len()],
+            regions: vec![false; d.regions.len()],
+        }
+    }
+
+    /// Use `k` (round the end) of `head` on the diagram as drawn, top to
+    /// bottom then left to right, with the blocks wired to it: what the
+    /// diagram glyph frames on its `k`th click.
+    fn use_at(&self, head: &str, k: usize) -> Option<helmsman_diagram::Rect> {
+        let named = self.named(head);
+        let around = self.references(head);
+        let (named, around) = match self.view() {
+            Some(v) => (v.drivers(&named), v.drivers(&around)),
+            None => (named, around),
+        };
+        let shown = self.shown();
+        let mut uses: Vec<&helmsman_diagram::Node> =
+            shown.nodes.iter().filter(|n| named.node(n.id)).collect();
+        if uses.is_empty() {
+            return None;
+        }
+        uses.sort_by(|a, b| a.rect.y.total_cmp(&b.rect.y).then(a.rect.x.total_cmp(&b.rect.x)));
+        let at = uses[k % uses.len()];
+        // The use and what it is wired to directly, so the frame says what
+        // the point does there.
+        let near = shown.wires.iter().filter_map(|w| {
+            if w.from == at.id && around.node(w.to) {
+                Some(shown.node(w.to).rect)
+            } else if w.to == at.id && around.node(w.from) {
+                Some(shown.node(w.from).rect)
+            } else {
+                None
+            }
+        });
+        Some(std::iter::once(at.rect).chain(near).fold(at.rect, |a, b| {
+            let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+            helmsman_diagram::Rect {
+                x,
+                y,
+                w: a.right().max(b.right()) - x,
+                h: a.bottom().max(b.bottom()) - y,
+            }
+        }))
+    }
+
+    /// The reads and writes of `head` on this diagram, every wire that
+    /// leaves or enters one of them, and the block at its other end: a
+    /// variable is drawn once and wired to each use, so each use shows
+    /// (Nick, 2026-11-26: an input lit one leg, not all its places).
+    fn references(&self, head: &str) -> Drivers {
+        let d = self.diagram();
+        let named = self.named(head).nodes;
+        let wires: Vec<bool> = d
             .wires
             .iter()
-            .map(|w| nodes[w.from.0 as usize] && nodes[w.to.0 as usize])
+            .map(|w| named[w.from.0 as usize] || named[w.to.0 as usize])
             .collect();
+        let mut nodes = named;
+        for (w, &on) in d.wires.iter().zip(&wires) {
+            if on {
+                nodes[w.from.0 as usize] = true;
+                nodes[w.to.0 as usize] = true;
+            }
+        }
         Drivers {
             nodes,
             wires,
@@ -1751,27 +1797,6 @@ impl Viewer {
         self.module.program().is_some_and(|p| p.vars.contains_key(&head))
     }
 
-    /// Program paths the outputs list offers: located outputs and
-    /// `VAR_OUTPUT`s of the program, in source order of first assignment.
-    #[must_use]
-    pub fn outputs(&self) -> Vec<String> {
-        let Some(p) = self.module.program() else {
-            return Vec::new();
-        };
-        let mut out: Vec<String> = Vec::new();
-        for n in &p.diagram.nodes {
-            if let NodeKind::Write { path } = &n.kind
-                && p.vars
-                    .get(path)
-                    .is_some_and(|v| v.located || v.section == helmsman_iec::ast::Section::Output)
-                && !out.contains(path)
-            {
-                out.push(path.clone());
-            }
-        }
-        out
-    }
-
     /// One card per output of the program: its `VAR_OUTPUT`s (assigned or
     /// not) and the located outputs it assigns, in declaration order, each
     /// with the signals it finally depends on.
@@ -2019,9 +2044,24 @@ impl Viewer {
         }
         let head = name.split(['.', '[']).next().unwrap_or(name);
         let head = if name.starts_with('%') { name } else { head };
+        let key = head.to_ascii_uppercase();
+        // Again on the same point: its next use (Nick, 2026-11-26).
+        self.xref_at = if self.xref.as_deref() == Some(key.as_str()) {
+            self.xref_at + 1
+        } else {
+            0
+        };
         self.because = None;
-        self.xref = Some(head.to_ascii_uppercase());
+        self.xref = Some(key);
         self.frame_lit = true;
+    }
+
+    /// The point whose reads and writes the diagram shows, and which of
+    /// its uses it framed last: what the tour reads to see that the
+    /// diagram glyph of an I/O card was used.
+    #[must_use]
+    pub fn shown_signal(&self) -> Option<(&str, usize)> {
+        self.xref.as_deref().map(|k| (k, self.xref_at))
     }
 
     /// The source line that declares the program's variable `name`.
@@ -2048,10 +2088,22 @@ impl Viewer {
         let Some(rect) = self.lit_bounds(on) else {
             return;
         };
+        self.frame_rect(&rect, area, now);
+    }
+
+    /// Eases the view to frame `rect` (diagram units) in `area`, at the
+    /// zoom it has unless that does not fit.
+    fn frame_rect(&mut self, rect: &helmsman_diagram::Rect, area: Rect, now: f64) {
+        let max = self.cams[self.scope].zoom.min(FOCUS_MAX);
+        self.glide_to(rect, area, now, max);
+    }
+
+    /// Eases the view to frame `rect`, as close as `max_zoom`.
+    fn glide_to(&mut self, rect: &helmsman_diagram::Rect, area: Rect, now: f64, max_zoom: f32) {
         let cam = self.cams[self.scope];
         let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
         let mut to = cam;
-        to.frame_within(below, &rect, cam.zoom.min(FOCUS_MAX));
+        to.frame_within(below, rect, max_zoom);
         to.clamp(area, self.shown().size);
         self.cams[self.scope].moved = true;
         self.glide = Some(Glide {
@@ -2061,6 +2113,34 @@ impl Viewer {
             t0: now,
         });
         self.jumped = None;
+    }
+
+    /// The Z key: what the fit glyph does, in the view `area`.
+    pub fn fit(&mut self, area: Rect, now: f64) {
+        self.fit_view(area, now);
+    }
+
+    /// The fit glyph: the whole diagram in view, or with blocks selected,
+    /// those blocks centred and as large as the view takes them (up to
+    /// [`FOCUS_MAX`]).
+    fn fit_view(&mut self, area: Rect, now: f64) {
+        let shown: Vec<NodeId> = self.selected.iter().filter_map(|&n| self.to_shown(n)).collect();
+        let d = self.shown();
+        let bounds = shown.iter().map(|&n| d.node(n).rect).reduce(|a, b| {
+            let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+            helmsman_diagram::Rect {
+                x,
+                y,
+                w: a.right().max(b.right()) - x,
+                h: a.bottom().max(b.bottom()) - y,
+            }
+        });
+        if let Some(r) = bounds {
+            self.glide_to(&r, area, now, FOCUS_MAX);
+        } else {
+            self.glide = None;
+            self.refit();
+        }
     }
 
     /// The box around the blocks of the diagram shown that `on` lights.
@@ -2111,14 +2191,6 @@ impl Viewer {
         }
         let cam = self.cams[self.scope];
         let shown = self.shown();
-        // A card of the zoom ladder that has formed stands for the blocks
-        // under it: no control is put over it.
-        let cards: Vec<Rect> = self
-            .ladder_cards(cam)
-            .into_iter()
-            .filter(ladder_view::Card::solid)
-            .map(|c| c.rect)
-            .collect();
         self.diagram()
             .nodes
             .iter()
@@ -2131,9 +2203,6 @@ impl Viewer {
                         |s| {
                             let mut r = cam.rect(&shown.node(s).rect);
                             r.min.y += HEADER * cam.zoom;
-                            if cards.iter().any(|c| c.contains(r.center())) {
-                                return Rect::NOTHING;
-                            }
                             r
                         },
                     );
@@ -2362,28 +2431,30 @@ impl Viewer {
         }
         let glided = (cam.offset, cam.zoom);
         // The wheel (or a two-finger scroll) zooms about the pointer, as
-        // a pinch does; a drag on empty space, the arrow keys or W A S D
-        // move the view (Nick, 2026-11-14: scroll moved it up and down).
-        // Q and E jump to the previous and the next stop.
+        // a pinch does; a drag on empty space or the arrow keys move the
+        // view (Nick, 2026-11-14: scroll moved it up and down; 2026-11-26:
+        // no W A S D, those letters are the views' keys).
+        // , and . jump to the previous and the next stop (E and Q until
+        // 2026-11-26: E is the Editor's key).
         let (hover, scroll, zoom, keys, jump, dt) = ui.ctx().input(|i| {
             use egui::Key;
-            let held = |a: Key, b: Key| f32::from(u8::from(i.key_down(a) || i.key_down(b)));
-            // The key's own modifiers: a chord with E or Q is not a jump.
+            let held = |k: Key| f32::from(u8::from(i.key_down(k)));
+            // The key's own modifiers: a chord with . or , is not a jump.
             let jump = i.events.iter().find_map(|e| match e {
                 egui::Event::Key {
-                    key: key @ (Key::E | Key::Q),
+                    key: key @ (Key::Period | Key::Comma),
                     pressed: true,
                     modifiers,
                     ..
-                } if modifiers.is_none() => Some(*key == Key::E),
+                } if modifiers.is_none() => Some(*key == Key::Period),
                 _ => None,
             });
             let keys = if i.modifiers.any() {
                 Vec2::ZERO
             } else {
                 Vec2::new(
-                    held(Key::ArrowRight, Key::D) - held(Key::ArrowLeft, Key::A),
-                    held(Key::ArrowDown, Key::S) - held(Key::ArrowUp, Key::W),
+                    held(Key::ArrowRight) - held(Key::ArrowLeft),
+                    held(Key::ArrowDown) - held(Key::ArrowUp),
                 )
             };
             (
@@ -2430,14 +2501,6 @@ impl Viewer {
         // The level follows the zoom the frame ended at; the camera is read
         // again, as a level change keeps the diagram under the pointer.
         let cam = self.follow_zoom(hover.filter(|_| response.hovered()), area);
-        // A card of the zoom ladder that has formed takes the pointer from
-        // the blocks under it: a click flies in, a drag moves the view.
-        let carded = response
-            .interact_pointer_pos()
-            .or(hover.filter(|_| response.hovered()))
-            .filter(|p| !corner.contains(*p))
-            .and_then(|p| self.ladder_at(cam, p));
-        let double = double && carded.is_none();
         // A double click on a block instance opens it; anywhere else it
         // fits the diagram to the view.
         if double
@@ -2507,7 +2570,6 @@ impl Viewer {
                 Some(_) if middle || space => Grab::Pan,
                 Some(p) if corner.contains(p) => Grab::Idle,
                 Some(_) if !primary => Grab::Idle,
-                Some(p) if self.ladder_at(cam, p).is_some() => Grab::Pan,
                 Some(p) => match self.grab_at(cam, p) {
                     Grab::Empty if self.on_pin(cam, p) => Grab::Idle,
                     Grab::Empty if self.hand => Grab::Pan,
@@ -2585,11 +2647,7 @@ impl Viewer {
             .then(|| response.interact_pointer_pos())
             .flatten()
             .and_then(|p| self.chip_at(cam, p));
-        if let Some(card) = carded.as_ref().filter(|_| response.clicked()) {
-            if !additive {
-                self.ladder_click(card, area, now);
-            }
-        } else if let Some((key, arm)) = chip {
+        if let Some((key, arm)) = chip {
             // A tap on a state opens the sequence on that state's arm.
             self.open_arm(&key, arm, area, now);
         } else if response.clicked()
@@ -2638,7 +2696,6 @@ impl Viewer {
             }
         }
         if response.secondary_clicked()
-            && carded.is_none()
             && let Some(p) = response.interact_pointer_pos()
             && let Some(n) = self.hit_at(cam, p)
         {
@@ -2667,7 +2724,14 @@ impl Viewer {
             (_, on) => on.clone(),
         };
         if self.frame_lit {
-            self.frame_output(lit.as_ref(), scan.is_some(), area, ui.input(|i| i.time));
+            let now = ui.input(|i| i.time);
+            match self.xref.clone().and_then(|h| self.use_at(&h, self.xref_at)) {
+                Some(rect) => {
+                    self.frame_lit = false;
+                    self.frame_rect(&rect, area, now);
+                }
+                None => self.frame_output(lit.as_ref(), scan.is_some(), area, now),
+            }
             ui.ctx().request_repaint();
         }
         let selected = self.selected_live(cam, area, additive);
@@ -2696,14 +2760,7 @@ impl Viewer {
         let tabs = self.opened_tabs(cam);
         let rows = self.state_rows(live.as_ref());
         let tables = self.table_rows(live.as_ref());
-        if let Some(card) = carded
-            .as_ref()
-            .filter(|c| c.rung != helmsman_diagram::fold::ladder::Rung::Code)
-        {
-            response
-                .clone()
-                .on_hover_text_at_pointer(format!("{}\nClick to look inside.", card.title));
-        } else if response.hovered()
+        if response.hovered()
             && let Some(p) = hover
         {
             if let Some(tip) = self.cell_tip(cam, p, &tables) {
@@ -2726,17 +2783,9 @@ impl Viewer {
                     .on_hover_text_at_pointer("Double-click draws what this arm does as one block.");
             }
         }
+        // Empty space says nothing (Nick, 2026-11-26: tooltips only over
+        // something that does something).
         if response.hovered()
-            && carded.is_none()
-            && let Some(p) = hover
-            && self.grab.is_none()
-            && !self.on_pin(cam, p)
-            && matches!(self.grab_at(cam, p), Grab::Empty)
-        {
-            response.clone().on_hover_text_at_pointer(EMPTY_TIP);
-        }
-        if response.hovered()
-            && carded.is_none()
             && let Some(p) = hover
             && self.instance_at(cam, p).is_some()
         {
@@ -2776,7 +2825,6 @@ impl Viewer {
                 io: &io,
             },
         );
-        self.ladder_paint(&painter, &t, cam, seen.as_ref());
         for (_, title, around, tab) in &tabs {
             let z = cam.zoom;
             painter.rect_stroke(
@@ -2804,31 +2852,17 @@ impl Viewer {
                 StrokeKind::Inside,
             );
         }
-        // The program's BOOL outputs as lamps in the corner (a traffic
-        // light for a red, a yellow and a green), on the program's own
-        // diagram only: a block instance's outputs are not the machine's.
-        if let Some(f) = self.fixture(scan) {
-            crate::lamps::paint(&painter, area, &f);
-        }
         self.corner_controls(ui, area, corner);
     }
 
-    /// The lamp fixture of the program's BOOL outputs, when there is one
-    /// to draw on the diagram shown.
-    fn fixture(&self, scan: Option<&dyn Scan>) -> Option<crate::lamps::Fixture> {
-        let scan = scan.filter(|_| self.scopes[self.scope].prefix.is_empty())?;
-        let outs = self.outputs();
-        crate::lamps::fixture(outs.iter().map(|p| (p.as_str(), scan.get(p))))
-    }
-
-    /// Where the pan, zoom in and zoom out controls sit: the bottom-right
-    /// corner of `area`, left of the lamp fixture when there is one.
-    fn corner_rect(&self, area: Rect, scan: Option<&dyn Scan>) -> Rect {
-        let w = 3.0 * TAP + 3.0 * CORNER_GAP + ladder_view::NAME_W;
-        let mut right = area.right() - CORNER_GAP;
-        if let Some(f) = self.fixture(scan) {
-            right = crate::lamps::rect(area, &f).left() - CORNER_GAP;
-        }
+    /// Where the pan, zoom in, zoom out and fit controls sit: the bottom-right
+    /// corner of `area`.
+    // 2026-11-26: nothing but the area places it since the lamp fixture went;
+    // a protected test still calls it with a scan, so the signature stays.
+    #[allow(clippy::unused_self)]
+    fn corner_rect(&self, area: Rect, _scan: Option<&dyn Scan>) -> Rect {
+        let w = 4.0 * TAP + 3.0 * CORNER_GAP;
+        let right = area.right() - CORNER_GAP;
         // A window narrower than the row keeps it inside the area.
         let left = (right - w).max(area.left());
         let top = (area.bottom() - CORNER_GAP - TAP).max(area.top());
@@ -2836,7 +2870,7 @@ impl Viewer {
     }
 
     /// The corner controls: the hand (a drag on empty space pans), zoom in
-    /// and zoom out about the middle of `area`.
+    /// and zoom out about the middle of `area`, and fit.
     fn corner_controls(&mut self, ui: &mut egui::Ui, area: Rect, at: Rect) {
         use crate::glyphs::{Icon, button_sized};
         let mut row = ui.new_child(
@@ -2876,45 +2910,25 @@ impl Viewer {
             false,
             "Zoom out from the middle of the diagram",
         );
-        // Where the view is on the zoom ladder, and a step to any rung.
-        let on = self.rung();
-        let mut step = None;
-        #[cfg_attr(not(test), allow(unused_variables))]
-        let name = row
-            .scope(|ui| {
-                ui.set_width(ladder_view::NAME_W);
-                ui.menu_button(
-                    egui::RichText::new(on.name()).size(crate::theme::MIN_TEXT),
-                    |ui| {
-                        for rung in helmsman_diagram::fold::ladder::Rung::ALL {
-                            let pick = ui
-                                .selectable_label(
-                                    rung == on,
-                                    egui::RichText::new(rung.name()).size(crate::theme::MIN_TEXT),
-                                )
-                                .tip(ladder_view::rung_tip(rung));
-                            if pick.clicked() {
-                                step = Some(rung);
-                                ui.close();
-                            }
-                        }
-                    },
-                )
-                .response
-            })
-            .inner
-            .tip("How much one block stands for. Zoom in for the code, out for the whole program, or pick a level here.");
-        #[cfg(test)]
-        {
-            self.ladder_name = name.rect;
-        }
-        if let Some(rung) = step {
-            let now = ui.input(|i| i.time);
-            self.ladder_fly(rung, None, area, now);
-            return;
-        }
+        // Nick, 2026-11-26: fit the whole diagram, or the blocks picked.
+        let fit = button_sized(
+            &mut row,
+            Icon::ZoomFit,
+            TAP,
+            true,
+            false,
+            if self.selected.is_empty() {
+                "Fit: the whole diagram in view"
+            } else {
+                "Fit: the blocks selected, centred and filling the view"
+            },
+        );
         if hand.clicked() {
             self.hand = !self.hand;
+        }
+        if fit.clicked() {
+            self.fit_view(area, ui.input(|i| i.time));
+            return;
         }
         let factor = if inn.clicked() {
             ZOOM_STEP
@@ -3087,6 +3101,7 @@ fn draw_ghosts(
     removed: &[NodeId],
     new: &Diagram,
     added: &[NodeId],
+    io: &[(NodeId, crate::assign::Designation)],
 ) {
     let z = cam.zoom;
     let red = brand::RED;
@@ -3147,24 +3162,78 @@ fn draw_ghosts(
     if z <= 0.35 {
         return;
     }
-    for (host, names) in tags {
+    for (host, text) in ghost_tag_texts(&tags, added) {
+        // A block with an I/O label carries the tag on that label's line.
+        if io.iter().any(|(id, _)| *id == host) {
+            continue;
+        }
         let r = cam.rect(&new.node(host).rect);
-        let word = if added.contains(&host) { "was" } else { "removed" };
-        let more = names.len().saturating_sub(2);
-        let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
-        let text = if more > 0 {
-            format!("{word} {shown} +{more}")
-        } else {
-            format!("{word} {shown}")
-        };
+        let size = 9.5 * z;
         painter.text(
             Pos2::new(r.max.x, r.min.y - 3.0 * z),
             Align2::RIGHT_BOTTOM,
-            text,
-            font(9.5 * z),
+            elide(painter, &text, size, r.width()),
+            font(size),
             red,
         );
     }
+}
+
+/// The tag each host of removed blocks carries: `was = 1` on a block the
+/// change added, `removed = 1` on one it did not.
+fn ghost_tag_texts(tags: &[(NodeId, Vec<String>)], added: &[NodeId]) -> Vec<(NodeId, String)> {
+    tags.iter()
+        .map(|(host, names)| {
+            let word = if added.contains(host) { "was" } else { "removed" };
+            let more = names.len().saturating_sub(2);
+            let shown = names.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
+            let text = if more > 0 {
+                format!("{word} {shown} +{more}")
+            } else {
+                format!("{word} {shown}")
+            };
+            (*host, text)
+        })
+        .collect()
+}
+
+/// The removed blocks' tags by host block, as [`draw_ghosts`] groups them.
+fn ghost_tags(old: &Diagram, removed: &[NodeId], new: &Diagram, added: &[NodeId]) -> Vec<(NodeId, String)> {
+    let mut tags: Vec<(NodeId, Vec<String>)> = Vec::new();
+    for (id, host) in removed.iter().zip(hosts(old, removed, new, added)) {
+        let (Some(h), Some(n)) = (host, old.nodes.get(id.0 as usize)) else {
+            continue;
+        };
+        let name = ghost_name(&n.label);
+        match tags.iter_mut().find(|(t, _)| *t == h) {
+            Some((_, names)) => names.push(name),
+            None => tags.push((h, vec![name])),
+        }
+    }
+    ghost_tag_texts(&tags, added)
+}
+
+/// `text` cut with an ellipsis to fit `max_w` on screen at `size`.
+fn elide(painter: &egui::Painter, text: &str, size: f32, max_w: f32) -> String {
+    let wide = |s: &str| {
+        painter
+            .layout_no_wrap(s.to_owned(), font(size), Color32::WHITE)
+            .size()
+            .x
+    };
+    if wide(text) <= max_w {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut n = chars.len();
+    while n > 0 {
+        n -= 1;
+        let cut: String = chars[..n].iter().collect::<String>() + "…";
+        if wide(&cut) <= max_w {
+            return cut;
+        }
+    }
+    String::new()
 }
 
 /// What [`draw`] marks on the diagram beside the scan.
@@ -3418,19 +3487,22 @@ fn io_mark(
     r: Rect,
     z: f32,
     d: &crate::assign::Designation,
-    text: bool,
+    // The line over the block and its colour, already worded.
+    line: Option<(String, Color32)>,
     picked: bool,
 ) {
     if d.is_simulated() && !picked {
         crate::io_cards::dashed_outline(painter, r.expand(0.5 * z), Stroke::new(1.5 * z.max(0.6), t.fg));
     }
-    if text {
+    if let Some((line, color)) = line {
+        // One line over the block's top edge, cut to the block's width.
+        let size = 9.0 * z;
         painter.text(
             r.left_top() - Vec2::new(0.0, 2.0 * z),
             Align2::LEFT_BOTTOM,
-            d.label(),
-            font(9.0 * z.max(0.8)),
-            t.muted,
+            elide(painter, &line, size, r.width()),
+            font(size),
+            color,
         );
     }
 }
@@ -3480,6 +3552,7 @@ fn draw(
         .collect();
     painter.rect_filled(area, CornerRadius::ZERO, t.bg);
     let text = z > 0.35;
+    let ghost_texts = ghosts.map_or_else(Vec::new, |(old, removed)| ghost_tags(old, removed, d, added));
     // Regions, outermost first.
     for r in &d.regions {
         let gate = live.map(|l| l.gates[r.id.0 as usize]);
@@ -3674,7 +3747,16 @@ fn draw(
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
         if let Some(d) = designation {
-            io_mark(painter, t, r, z, d, text, pick == Some(Pick::Node(n.id)));
+            let tag = ghost_texts
+                .iter()
+                .find(|(h, _)| *h == n.id)
+                .map(|(_, g)| g.as_str());
+            // A diff tag joins the designation's line rather than printing over it.
+            let line = text.then(|| match tag {
+                Some(g) => (format!("{} · {g}", d.label()), brand::RED),
+                None => (d.label(), t.muted),
+            });
+            io_mark(painter, t, r, z, d, line, pick == Some(Pick::Node(n.id)));
         }
         if deeper {
             // A double chevron at the header's right end: go in.
@@ -3894,7 +3976,7 @@ fn draw(
     }
     // Last, so what the Agent removed shows over the blocks drawn now.
     if let Some((old, removed)) = ghosts {
-        draw_ghosts(painter, cam, old, removed, d, added);
+        draw_ghosts(painter, cam, old, removed, d, added, io);
     }
 }
 
@@ -3905,9 +3987,6 @@ mod fold_tests;
 
 #[path = "st_zoom.rs"]
 mod zoom_fold;
-
-#[path = "st_ladder.rs"]
-pub mod ladder_view;
 
 #[cfg(test)]
 mod hold_tests {
@@ -4411,8 +4490,9 @@ END_PROGRAM
         h.click(h.at(&write("MOTOR")));
         h.frame(vec![]);
         let by_click = h.sv.view.highlighted().cloned().unwrap();
-        // Empty space clears it; pan far off, then tap the card.
-        h.click(Pos2::new(1190.0, 790.0));
+        // Empty space clears it (the bottom-left corner: the bottom-right
+        // holds the pan, zoom and fit glyphs); pan far off, then tap the card.
+        h.click(Pos2::new(10.0, 790.0));
         assert!(h.sv.view.highlighted().is_none());
         let zoom = h.sv.view.cams[0].zoom;
         h.sv.view.cams[0].offset += Vec2::new(-900.0, -300.0);
@@ -4522,9 +4602,10 @@ END_PROGRAM
         assert_eq!(h.sv.view.because.as_deref(), Some("OTHER"));
         assert_eq!(h.lit(), ["OTHER", "OTHER"]);
 
-        // Empty space, far from every block (the view's bottom-right
-        // corner: a fit leaves margins there): cleared, nothing dimmed.
-        let empty = Pos2::new(1190.0, 790.0);
+        // Empty space, far from every block (the view's bottom-left
+        // corner: a fit leaves margins there, and the bottom-right holds
+        // the pan, zoom and fit glyphs): cleared, nothing dimmed.
+        let empty = Pos2::new(10.0, 790.0);
         assert_eq!(
             h.sv.view.diagram().node_at(
                 h.sv.view.cams[h.sv.view.scope].to_world(empty).0,

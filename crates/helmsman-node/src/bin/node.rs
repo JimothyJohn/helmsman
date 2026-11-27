@@ -4,7 +4,7 @@
 //! report line every 10 s over serial and UDP.
 //!
 //! First boot: nothing on flash, so the node writes the factory record and
-//! answers at 192.168.127.250/24 with no program and no token. Its page
+//! answers at 192.168.127.250/16 with no program and no token. Its page
 //! (`http://192.168.127.250:8080/`) sets the name, site, address and token;
 //! a deploy is `PUT /api/modules/{name}` with the ST source and the token
 //! as a bearer. Build-time: `E1213_ADDR` (the block), `NODE_SEED_CHASE=1`
