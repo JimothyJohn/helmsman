@@ -81,7 +81,8 @@ and stops, with the command that updates the checkout, if they differ
 1. **Candidate.** `scripts/compat.sh --candidate` (contracts and CI of the
    four candidate tips, written to `target/compat/train.txt`), then the journeys on the box compat built there, with
    the relay it built at agent-relay's candidate, and the tabs on the candidate's
-   committed playground, which is what master will serve. Any failure stops
+   committed playground, which is what master will serve (the box-only tabs
+   on that box, serving the canvas built at the candidate). Any failure stops
    here with nothing promoted.
 2. **Promote.** It shows how far each candidate is ahead. `make staging`
    promotes without a question; `make ship` asks you to type `ship`
@@ -97,7 +98,8 @@ and stops, with the command that updates the checkout, if they differ
    (up to 20 min, for the Pages build) to say every row but the try box is
    live; commits merged since are not waited for. Then it runs the
    journeys on a box built at the new master, held to *the candidate's* features, and
-   with the deployed relay, and the tabs on the public site.
+   with the deployed relay, and the tabs on the public site (the box-only
+   ones on that box, serving the canvas built at master).
 4. **Report.** `target/ship/report.md` lists every journey and tab with its
    candidate and live outcome. A feature that passed on the candidate and
    is anything else live is a regression: it is named, and a **draft** pull
