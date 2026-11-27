@@ -4558,10 +4558,10 @@ fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
         "a signal the program does not have is listed too"
     );
     // `horn` is no port of the program: no menu on it.
-    h.right_click(h.rect("io row horn").center());
+    h.right_click(h.rect("io row horn").left_top() + egui::vec2(12.0, 12.0));
     assert!(h.app.chrome.rect("menu assign port").is_none());
     // An output port, to the device's coil.
-    h.right_click(h.rect("io row lamp").center());
+    h.right_click(h.rect("io row lamp").left_top() + egui::vec2(12.0, 12.0));
     h.press("menu assign port");
     h.wait(0.2);
     assert!(
@@ -4578,7 +4578,7 @@ fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
         .replace("out lamp  bool box do:0 safe=false\n", "");
     assert_eq!(buffer(&mut h), moved);
     // And an input.
-    h.right_click(h.rect("io row start").center());
+    h.right_click(h.rect("io row start").left_top() + egui::vec2(12.0, 12.0));
     h.press("menu assign port");
     h.wait(0.2);
     h.press("assign channel rio di:5");
@@ -4599,7 +4599,7 @@ fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
             && binding_of(&b, "lamp") == Some(("device".into(), "rio".into(), "coil:0".into()))
     });
     // Back to simulated I/O: the lamp goes to the box's first free output.
-    h.right_click(h.rect("io row lamp").center());
+    h.right_click(h.rect("io row lamp").left_top() + egui::vec2(12.0, 12.0));
     assert!(h.app.chrome.rect("menu back to simulated").is_some());
     h.press("menu back to simulated");
     h.wait(0.3);
@@ -4786,7 +4786,7 @@ fn a_port_goes_to_a_channel_with_no_line_on_the_box_and_the_box_binds_it() {
     h.press("tab io");
     h.wait(0.3);
     // The I/O tab's row: the device has channels though the map has no line.
-    h.right_click(h.rect("io row start").center());
+    h.right_click(h.rect("io row start").left_top() + egui::vec2(12.0, 12.0));
     h.press("menu assign port");
     h.wait(0.2);
     assert!(
