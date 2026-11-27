@@ -1268,7 +1268,7 @@ impl DevicesUi {
                 LinkState::Up { health, .. } if health.as_deref() == Some("slow") => {
                     RichText::new("●").color(AMBER)
                 }
-                LinkState::Up { .. } => RichText::new("●").color(t.accent),
+                LinkState::Up { .. } => RichText::new("●").color(t.ink(crate::st_view::brand::GREEN)),
                 LinkState::Down(_) => RichText::new("●").color(crate::theme::theme(ui).ink(RED)),
                 LinkState::Unknown => RichText::new("○").color(t.muted),
                 LinkState::Simulated => RichText::new("◌").color(t.muted),

@@ -28,7 +28,7 @@ complaint is on frame 0 because that frame is the thumbnail.
 ## The app footage
 
 `assets/app-latch.mp4` is the same recording as `../helmsman-ad`, and its
-README says how to make a new one. Root time here is recording time + 11.7
+README says how to make a new one. It is not committed (no video goes in git); Nick's copy is under `~/Movies/helmsman-marketing/`, laid out like this repo, until the file server exists. Root time here is recording time + 11.7
 s: run at 13.0, start at 15.04, stop at 18.44. A new recording means new
 times in the cursor's `press(...)` calls and the click effects.
 

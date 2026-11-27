@@ -462,8 +462,7 @@ pub fn settings_from_pairs(current: &Settings, pairs: &[(String, String)]) -> Re
                 let ip = parse_ip(get("ip").unwrap_or(""))
                     .ok_or_else(|| BadSettings("static: ip is not an IPv4 address".into()))?;
                 let prefix = get("prefix")
-                    .unwrap_or("24")
-                    .parse::<u8>()
+                    .map_or(Ok(crate::settings::FACTORY_PREFIX), str::parse::<u8>)
                     .ok()
                     .filter(|p| *p <= 32)
                     .ok_or_else(|| BadSettings("static: prefix must be 0 to 32".into()))?;

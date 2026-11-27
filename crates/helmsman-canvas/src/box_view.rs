@@ -2624,7 +2624,7 @@ impl BoxView {
         let retry = |at: f64| (at - now).max(0.0).ceil();
         match self.state.link() {
             Link::Connecting => ("● connecting…".into(), t.muted),
-            Link::Connected => ("● connected".into(), t.accent),
+            Link::Connected => ("● connected".into(), t.ink(GREEN)),
             Link::SignIn => ("● sign in to watch".into(), t.fg),
             Link::Reconnecting { at, .. } => (format!("● reconnecting (retry in {}s)", retry(at)), t.fg),
             Link::Unreachable { at, .. } => {

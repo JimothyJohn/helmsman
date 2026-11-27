@@ -79,7 +79,7 @@ fn a_device_lists_the_points_the_project_has_and_one_row_for_the_rest() {
         "the pane at its default width: it ends at {left}"
     );
     assert!(h.has("point part"), "the one point the project has");
-    assert!(!h.has("point rio_di_00"), "no row for a channel nobody added");
+    assert!(!h.has("point di_00"), "no row for a channel nobody added");
     assert!(h.has("add io rio"));
     inside_the_pane(&h, "add io rio", left);
     // `part` is not a variable of the latch: the row offers to remove it,
@@ -111,10 +111,10 @@ fn a_device_lists_the_points_the_project_has_and_one_row_for_the_rest() {
     assert!(h.has("io form") && !h.has("io add DO-00"));
     assert_eq!(
         map(&h),
-        format!("{DEVICE}in  part bool rio ch:DI-04\nout rio_do_00 bool rio ch:DO-00 safe=false\n")
+        format!("{DEVICE}in  part bool rio ch:DI-04\nout do_00 bool rio ch:DO-00 safe=false\n")
     );
     let st = program(&h);
-    assert!(st.contains("  rio_do_00 : BOOL;"), "{st}");
+    assert!(st.contains("  do_00 : BOOL;"), "{st}");
     assert!(helmsman_iec::ast::parse(&st).is_ok(), "{st}");
     // Nothing matches: said, not an empty box.
     h.press("io search");
@@ -124,25 +124,25 @@ fn a_device_lists_the_points_the_project_has_and_one_row_for_the_rest() {
     h.press("io done");
     h.wait(0.3);
     assert!(!h.has("io form"));
-    assert!(h.has("point rio_do_00"), "the added point is under the device");
-    inside_the_pane(&h, "point rio_do_00", left);
+    assert!(h.has("point do_00"), "the added point is under the device");
+    inside_the_pane(&h, "point do_00", left);
 
     // Remove it from its row: asked first, the variable stays, and the
     // channel is back in the list.
-    h.right_click(h.rect("point rio_do_00").center());
+    h.right_click(h.rect("point do_00").center());
     h.press("menu remove point");
     h.wait(0.2);
     assert!(h.has("remove io form"));
     h.press("remove io cancel");
     h.wait(0.2);
-    assert!(map(&h).contains("rio_do_00"), "Cancel keeps it");
-    h.right_click(h.rect("point rio_do_00").center());
+    assert!(map(&h).contains("out do_00 "), "Cancel keeps it");
+    h.right_click(h.rect("point do_00").center());
     h.press("menu remove point");
     h.wait(0.2);
     h.press("remove io ok");
     h.wait(0.3);
     assert_eq!(map(&h), format!("{DEVICE}in  part bool rio ch:DI-04\n"));
-    assert!(program(&h).contains("  rio_do_00 : BOOL;"), "the variable stays");
+    assert!(program(&h).contains("  do_00 : BOOL;"), "the variable stays");
     // Added again, it takes that variable back: nothing is declared twice.
     h.press("add io rio");
     h.wait(0.3);
@@ -154,13 +154,13 @@ fn a_device_lists_the_points_the_project_has_and_one_row_for_the_rest() {
     h.press("io done");
     h.wait(0.2);
     assert!(
-        map(&h).contains("out rio_do_00 bool rio ch:DO-00 safe=false\n"),
+        map(&h).contains("out do_00 bool rio ch:DO-00 safe=false\n"),
         "{} {:?}",
         map(&h),
         h.app.sim.as_ref().unwrap().proj.notice
     );
     let st = program(&h);
-    assert_eq!(st.matches("rio_do_00 : BOOL;").count(), 1, "{st}");
+    assert_eq!(st.matches("  do_00 : BOOL;").count(), 1, "{st}");
     assert!(helmsman_iec::ast::parse(&st).is_ok(), "{st}");
 }
 
@@ -271,9 +271,9 @@ fn a_device_nobody_knows_takes_a_point_by_its_address() {
     h.wait(0.3);
     assert_eq!(
         map(&h),
-        "device plc modbus-tcp 10.0.0.9:502 unit=1\nout plc_coil_3 bool plc coil:3 safe=false\n"
+        "device plc modbus-tcp 10.0.0.9:502 unit=1\nout coil_3 bool plc coil:3 safe=false\n"
     );
-    assert!(program(&h).contains("  plc_coil_3 : BOOL;"));
+    assert!(program(&h).contains("  coil_3 : BOOL;"));
 }
 
 /// Nick 2026-11-25: "another cleanup button on the Devices tab that gets
@@ -354,4 +354,83 @@ fn the_remove_question_is_opaque_over_the_list() {
     assert_eq!(seen.0, Some(255), "an opaque background behind the question");
     assert!(!seen.1, "its text is not faded over the rows");
     inside_the_pane(&h, "remove unused rio", left);
+}
+
+/// Nick, 2026-11-26: a point is named by its channel alone, and the
+/// device goes in front only when that name is taken. Two E1213s in one
+/// project, DI-00 added on each from the Devices tab: the first is
+/// `di_00`, the second `cell_b_di_00`, each declared once in the program.
+#[test]
+fn two_devices_with_one_channel_name_get_the_short_name_and_the_prefixed_one() {
+    let second = "device cell_b device:moxa-iologik-e1213 cip=991:515:0x00e12131\n";
+    let mut h = playground(&format!("{DEVICE}{second}"));
+    for dev in ["rio", "cell_b"] {
+        h.press(&format!("add io {dev}"));
+        h.wait(0.3);
+        assert!(h.has("io add DI-00"), "{dev}: DI-00 is offered");
+        h.press("io add DI-00");
+        h.wait(0.3);
+        h.press("io done");
+        h.wait(0.3);
+        assert!(!h.has("io form"));
+    }
+    assert_eq!(
+        map(&h),
+        format!("{DEVICE}in  di_00 bool rio ch:DI-00\n{second}in  cell_b_di_00 bool cell_b ch:DI-00\n")
+    );
+    let st = program(&h);
+    assert_eq!(st.matches("  di_00 : BOOL;").count(), 1, "{st}");
+    assert_eq!(st.matches("  cell_b_di_00 : BOOL;").count(), 1, "{st}");
+    assert!(helmsman_iec::ast::parse(&st).is_ok(), "{st}");
+    assert!(h.has("point di_00") && h.has("point cell_b_di_00"));
+}
+
+/// A profile's channel names are the vendor's words. Named by the
+/// channel alone (Nick, 2026-11-26), a channel called `AND`, `If`, `END_VAR` or
+/// `Program` would be a keyword in the program: the add is refused or
+/// the name made safe, and the program still parses either way. A
+/// channel name that fits a Skipper's 32 characters is kept whole
+/// ("a long device name is cut, never the channel").
+#[test]
+fn a_channel_named_like_a_keyword_leaves_the_program_whole_and_one_that_fits_is_kept() {
+    let long = "Conveyor_Infeed_Photo_Eye_Sensor";
+    assert_eq!(long.len(), crate::skipper_map::NAME_MAX);
+    let profile = E1213
+        .replace("in  DI-05        bool", "in  AND          bool")
+        .replace("in  DI-06        bool", "in  If           bool")
+        .replace("in  DI-07        bool", "in  END_VAR      bool")
+        .replace("in  DI-08        bool", "in  Program      bool")
+        .replace("in  DI-09        bool", &format!("in  {long} bool"));
+    let mut h = playground("device rio device:acme-rio cip=991:515:0x00e12130\n");
+    h.app
+        .sim
+        .as_mut()
+        .unwrap()
+        .proj
+        .add_file("acme-rio.device", profile);
+    h.press("pane devices");
+    h.wait(0.3);
+    for label in ["AND", "If", "END_VAR", "Program", long] {
+        h.press("add io rio");
+        h.wait(0.3);
+        h.press("io search");
+        h.frame(vec![Event::Text(label.into())]);
+        h.wait(0.2);
+        assert!(h.has(&format!("io add {label}")), "{label} is offered");
+        h.press(&format!("io add {label}"));
+        h.wait(0.3);
+        h.press("io done");
+        h.wait(0.3);
+        let st = program(&h);
+        assert!(
+            helmsman_iec::ast::parse(&st).is_ok(),
+            "after adding {label}:\n{}\n{st}",
+            map(&h)
+        );
+    }
+    assert!(
+        map(&h).contains(&format!("in  {} bool rio ch:{long}\n", long.to_ascii_lowercase())),
+        "{}",
+        map(&h)
+    );
 }

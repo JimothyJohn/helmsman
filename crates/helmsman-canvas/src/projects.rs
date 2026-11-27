@@ -388,7 +388,11 @@ impl FilesUi {
             if p.running {
                 text.push_str("  ● running");
             }
-            let color = if p.running { t.accent } else { t.fg };
+            let color = if p.running {
+                t.ink(crate::st_view::brand::GREEN)
+            } else {
+                t.fg
+            };
             let text = RichText::new(text).color(color);
             let tip = if p.example() {
                 let title = example_title(&p.name).unwrap_or(&p.name);

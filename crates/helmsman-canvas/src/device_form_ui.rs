@@ -7,7 +7,7 @@
 
 use eframe::egui::{self, RichText, Vec2};
 
-use crate::device_form::{self, Kind, PROFILES, check_settings, param, schema, set_param};
+use crate::device_form::{self, Kind, PROFILES, check_settings_for, param, schema, set_param};
 use crate::devices::{DeviceAct, DevicesUi, NewDevice, PROTOCOLS, QuickAdd};
 use crate::editor::Chrome;
 use crate::st_view::TAP;
@@ -79,10 +79,18 @@ impl DevicesUi {
                         Some(old) => device_form::map_without(&self.map, old),
                         None => self.map.clone(),
                     };
+                    // Spaces are stored as underscores.
+                    d.name = d.name.trim().replace(' ', "_");
                     let taken = map.devices.iter().any(|x| x.name == d.name);
-                    let w = check_settings(d.driver(), &d.params)
+                    let on_skipper = !self.skipper.is_empty();
+                    let w = check_settings_for(d.driver(), &d.params, d.editing.is_some())
                         .and_then(|()| {
-                            if taken {
+                            if on_skipper && d.name.len() > crate::skipper_map::NAME_MAX {
+                                Err(format!(
+                                    "A Skipper names a device in at most {} characters.",
+                                    crate::skipper_map::NAME_MAX
+                                ))
+                            } else if taken {
                                 Err(format!("A device called {} is in io.map already.", d.name))
                             } else {
                                 d.line()
@@ -249,7 +257,7 @@ impl DevicesUi {
                     let w = if self.map.devices.iter().any(|x| x.name == d.name) {
                         Err(format!("A device called {} is in io.map already.", d.name))
                     } else {
-                        check_settings(d.driver(), &d.params)
+                        check_settings_for(d.driver(), &d.params, false)
                             .and_then(|()| d.line())
                             .and_then(|line| {
                                 device_form::wiring(&d.name, line, &d.points, &self.program, &self.map)
@@ -497,7 +505,7 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
     if simple {
         return;
     }
-    if let Err(e) = check_settings(d.driver(), &d.params) {
+    if let Err(e) = check_settings_for(d.driver(), &d.params, d.editing.is_some()) {
         crate::messages::error_link(ui, chrome, "device error", &e, crate::theme::theme(ui).ink(RED));
     }
     // The line io.map gets, read-only.

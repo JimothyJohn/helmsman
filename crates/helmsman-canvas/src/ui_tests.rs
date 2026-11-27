@@ -8027,6 +8027,7 @@ mod code_history;
 mod code_wrap;
 mod design;
 mod device_io;
+mod device_rename;
 mod diagram_menu;
 mod files_tab;
 mod find_replace;
