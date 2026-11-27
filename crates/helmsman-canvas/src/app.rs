@@ -813,6 +813,7 @@ impl App {
                 }
             }
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
+            Action::HelpTab => self.chrome.show(crate::editor::Pane::Help),
             Action::Messages => self.chrome.toggle_messages(),
             Action::Trend => self.chrome.toggle_trend(),
             _ => {}
@@ -1011,6 +1012,7 @@ impl App {
             Action::DockRight => self.chrome.send_right(),
             Action::Trend => self.chrome.toggle_trend(),
             Action::Describe
+            | Action::HelpTab
             | Action::Io
             | Action::Messages
             | Action::Editor

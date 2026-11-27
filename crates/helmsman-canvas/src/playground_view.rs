@@ -3864,6 +3864,8 @@ impl Body for PlaygroundView {
         match tab {
             Tab::Io => self.io(ui, chrome),
             Tab::Claude => self.claude(ui, chrome),
+            // Not in `tabs`: the page has no Help (a box answers it).
+            Tab::Help => {}
         }
     }
 

@@ -348,10 +348,22 @@ impl Log {
                         let (rect, r) = ui.allocate_exact_size(Vec2::splat(ROW_ICON), Sense::hover());
                         crate::glyphs::paint(ui.painter(), rect.shrink(1.0), icon, color);
                         r.tip(tag);
-                        let row =
-                            ui.add(egui::Label::new(RichText::new(&m.text).color(t.fg)).selectable(true));
-                        if m.detail.is_some() {
-                            row.tip(m.full());
+                        if m.level == Level::Error {
+                            let tip = m.detail.as_deref().unwrap_or("");
+                            crate::messages::error_link_rich(
+                                ui,
+                                chrome,
+                                "messages error",
+                                RichText::new(&m.text).color(t.fg),
+                                m.full(),
+                                tip,
+                            );
+                        } else {
+                            let row =
+                                ui.add(egui::Label::new(RichText::new(&m.text).color(t.fg)).selectable(true));
+                            if m.detail.is_some() {
+                                row.tip(m.full());
+                            }
                         }
                     });
                 }
@@ -370,12 +382,40 @@ pub fn copyable(
     text: &str,
     color: egui::Color32,
 ) -> egui::Response {
+    copy_row(ui, chrome, key, text, color, false)
+}
+
+/// [`copyable`] for an error: its text is also an [`error_link`], so a
+/// click on it asks the Help tab about it.
+pub fn copyable_error(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    key: &str,
+    text: &str,
+    color: egui::Color32,
+) -> egui::Response {
+    copy_row(ui, chrome, key, text, color, true)
+}
+
+fn copy_row(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    key: &str,
+    text: &str,
+    color: egui::Color32,
+    link: bool,
+) -> egui::Response {
     ui.horizontal_wrapped(|ui| {
-        let r = ui.add(egui::Label::new(RichText::new(text).color(color)).selectable(true));
-        chrome.hit(key, r.rect);
+        let r = if link {
+            error_link(ui, chrome, key, text, color)
+        } else {
+            let r = ui.add(egui::Label::new(RichText::new(text).color(color)).selectable(true));
+            chrome.hit(key, r.rect);
+            r
+        };
         let b = ui
             .button("Copy")
-            .tip("Copies this message, to paste into a bug report or into the Describe tab.");
+            .tip("Copies this message, to paste into a bug report or into the Help tab.");
         chrome.hit(format!("{key} copy"), b.rect);
         if b.clicked() {
             ui.ctx().copy_text(text.to_string());
@@ -383,6 +423,86 @@ pub fn copyable(
         r
     })
     .inner
+}
+
+/// Longest error put to the Help tab, characters (its question holds
+/// [`crate::help::MAX_QUESTION`]).
+const MAX_ASKED: usize = 1500;
+
+/// The question the Help tab is asked about `error`.
+#[must_use]
+pub fn help_question(error: &str) -> String {
+    let e: String = one_line(error).chars().take(MAX_ASKED).collect();
+    format!("This error came up:\n{e}\nWhat does it mean, and what should I do about it?")
+}
+
+/// `text` as one plain line: line breaks, tabs and other whitespace one
+/// space each, control characters gone, and the invisible ones that
+/// reorder or hide text (bidi overrides and isolates, zero-width marks)
+/// gone, so an error can neither start a line of its own in the question
+/// nor read differently than it shows (the tester's find, 2026-11-26).
+fn one_line(text: &str) -> String {
+    let invisible = |c: char| matches!(c, '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}');
+    text.chars()
+        .filter(|&c| !invisible(c))
+        .map(|c| {
+            if c.is_whitespace() || c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// An error as a link (Nick, 2026-11-26: errors are small accidents, and a
+/// click on one feeds it to the Help tab, whose context is its own): the
+/// text is selectable, so a drag highlights it to copy, and a click
+/// without a drag asks the Help tab, which the view opens
+/// ([`crate::editor::Chrome::ask_help`]). The hit is `key`. Where the view
+/// has no Help tab it is plain selectable text.
+pub fn error_link(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    key: &str,
+    text: &str,
+    color: egui::Color32,
+) -> egui::Response {
+    error_link_rich(ui, chrome, key, RichText::new(text).color(color), text, "")
+}
+
+/// [`error_link`] with the text styled (`rich`, from `text`) and `tip`, what
+/// the error is, ahead of the link's own hint.
+pub fn error_link_rich(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    key: &str,
+    rich: RichText,
+    text: &str,
+    tip: &str,
+) -> egui::Response {
+    if !chrome.help_on {
+        let r = ui.add(egui::Label::new(rich).wrap().selectable(true));
+        chrome.hit(key, r.rect);
+        return if tip.is_empty() { r } else { r.tip(tip) };
+    }
+    let r = ui.add(egui::Label::new(rich.underline()).wrap().selectable(true));
+    let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).tip(format!(
+        "{}Click to ask the Help tab about this. Drag over it to select it, to copy.",
+        if tip.is_empty() {
+            String::new()
+        } else {
+            format!("{tip}\n")
+        }
+    ));
+    chrome.hit(key, r.rect);
+    if r.clicked() {
+        chrome.ask_help(text);
+    }
+    r
 }
 
 /// The level icon's side in a message row, points.

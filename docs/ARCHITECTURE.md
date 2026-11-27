@@ -3616,12 +3616,17 @@ Markdown. `--relay-design-agent V` names the profile (default
 ## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
 
 For someone in trouble who did not write the program (Nick, 2026-11-07,
-interview). The box's Describe tab has two modes, "Change the program" (the
-instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
-switched by a two-glyph toggle (< > and ?) at the tab's top right; the
-heading names the mode, with a dot for the agent's state beside it (green
-online, red offline, grey until heard; Nick, 2026-11-08):
-the person says what went wrong, and the answer is a plain-language
+interview). Until 2026-11-26 it was a mode of the Describe tab; it is now
+the Help tab, `Pane::Help` / `Tab::Help` (a box only; the playground does
+not list it), its button the `?` glyph and its key L
+(`helmsman-canvas/src/help.rs`). Its conversation and context are its own
+(`BoxView::help`): nothing goes into agent.md or the Describe tab's
+history. Every error shown is a link (`messages::error_link`,
+`copyable_error`: selectable text, underlined); a click without a drag puts
+`Chrome::help_ask`, which `BoxView::toolbar` takes, opens the tab and asks
+(`help_about`) with the page's Messages. Where the view lists no Help tab
+(`Chrome::help_on`) an error is plain selectable text.
+The person says what went wrong, and the answer is a plain-language
 diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
 issue or to another agent. Nothing is filed. A question about how things
 work ("How do I load a program?"; Nick, 2026-11-08, after one came back

@@ -1892,9 +1892,13 @@ impl DevicesUi {
             }
             Scan::Idle | Scan::Running | Scan::Done => {}
             Scan::Failed(why) => {
-                ui.add(
-                    egui::Label::new(RichText::new(why).small().color(crate::theme::theme(ui).ink(RED)))
-                        .wrap(),
+                crate::messages::error_link_rich(
+                    ui,
+                    chrome,
+                    "scan failed",
+                    RichText::new(why).small().color(crate::theme::theme(ui).ink(RED)),
+                    why,
+                    "",
                 );
             }
         }

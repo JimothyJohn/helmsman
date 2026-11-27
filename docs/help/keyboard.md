@@ -39,6 +39,7 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | I | The I/O tab |  |
 | V | The Devices tab (the I/O map's devices and points) |  |
 | F | The Files tab |  |
+| L | The Help tab |  |
 | G | The Messages, the bottom panel's tab beside the Trend |  |
 | T | The trend along the bottom |  |
 | H | The Describe tab's history: the newest instruction and its answer, then Back and Forward |  |

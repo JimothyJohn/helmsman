@@ -85,6 +85,8 @@ pub enum Action {
     Download,
     /// The Describe tab (the Agent's).
     Describe,
+    /// The Help tab.
+    HelpTab,
     /// The I/O tab.
     Io,
     /// The Messages, a tab of the bottom panel beside the Trend.
@@ -238,6 +240,7 @@ pub const TABLE: &[Hotkey] = &[
     view(Action::Io, Key::I),
     view(Action::Devices, Key::V),
     view(Action::Files, Key::F),
+    view(Action::HelpTab, Key::L),
     view(Action::Messages, Key::G),
     view(Action::Trend, Key::T),
     // Not a view: the Describe tab's history (H for history).
@@ -264,6 +267,7 @@ pub const VIEWS: &[(Action, &str)] = &[
     (Action::Io, "I/O"),
     (Action::Devices, "Devices"),
     (Action::Files, "Files"),
+    (Action::HelpTab, "Help"),
     (Action::Messages, "Messages"),
     (Action::Trend, "Trend"),
 ];
@@ -520,6 +524,7 @@ const fn does(action: Action) -> &'static str {
         Action::FindNext => "The next match",
         Action::FindPrevious => "The previous match",
         Action::Describe => "The Describe tab",
+        Action::HelpTab => "The Help tab",
         Action::Io => "The I/O tab",
         Action::Messages => "The Messages, the bottom panel's tab beside the Trend",
         Action::Editor => "The Editor screen; on the Editor it flips to the Monitor",
@@ -996,6 +1001,7 @@ mod tests {
             Pane::Io => Action::Io,
             Pane::Devices => Action::Devices,
             Pane::Files => Action::Files,
+            Pane::Help => Action::HelpTab,
         }
     }
 
@@ -1081,6 +1087,7 @@ mod tests {
             (Action::Io, Key::I),
             (Action::Devices, Key::V),
             (Action::Files, Key::F),
+            (Action::HelpTab, Key::L),
             (Action::Messages, Key::A),
             (Action::Trend, Key::T),
         ];

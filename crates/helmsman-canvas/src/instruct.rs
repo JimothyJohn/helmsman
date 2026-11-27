@@ -2570,8 +2570,7 @@ fn plan_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Plan) -> b
         PlanState::Running | PlanState::Splitting => return false,
         PlanState::Paused(problems) => {
             for line in problems {
-                let r = ui.add(egui::Label::new(RichText::new(line).color(t.ink(RED))).wrap());
-                chrome.hit("agent step problem", r.rect);
+                crate::messages::error_link(ui, chrome, "agent step problem", line, t.ink(RED));
             }
             (
                 "Try this step again",

@@ -1534,7 +1534,47 @@ impl BoxView {
         }
     }
 
-    /// Help mode's Ask: the question and the page's Messages to the box.
+    /// The Help tab: the question, Ask or Stop, the answer. Its own
+    /// conversation, apart from the Describe tab's (Nick, 2026-11-26).
+    fn help_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        // Where the diagram's selection is being used: a click here keeps it.
+        chrome.hit("help tab", ui.clip_rect());
+        let ctx = ui.ctx().clone();
+        let view = crate::help::View {
+            blocked: self.help_blocked(),
+        };
+        let act = egui::ScrollArea::vertical()
+            .id_salt("box-help")
+            .show(ui, |ui| {
+                // Room for the scroll bar (a resizable panel grows to any
+                // row that overflows it).
+                ui.set_max_width(ui.available_width() - 12.0);
+                crate::help::ui(ui, chrome, &mut self.help, &view)
+            })
+            .inner;
+        match act {
+            Some(crate::help::Act::Ask) => self.ask_help(&ctx),
+            Some(crate::help::Act::Stop) => {
+                #[cfg(target_arch = "wasm32")]
+                self.help_http.abort();
+                if let Some(h) = self.help.helping.as_mut() {
+                    h.stop();
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// A click on an error (`chrome.help_ask`): the Help tab shown and
+    /// asked about it, with the page's Messages. Signed out, the tab
+    /// shows the question and says to sign in.
+    fn help_about(&mut self, error: &str, ctx: &egui::Context, chrome: &mut Chrome) {
+        self.help.draft = crate::messages::help_question(error);
+        chrome.show(crate::editor::Pane::Help);
+        self.ask_help(ctx);
+    }
+
+    /// The Help tab's Ask: the question and the page's Messages to the box.
     pub fn ask_help(&mut self, ctx: &egui::Context) {
         if self.help_blocked().is_some() || crate::help::refusal(&self.help.draft).is_some() {
             return;
@@ -1627,18 +1667,15 @@ impl BoxView {
         match chip {
             Some(c) => {
                 self.instruct.add_chip(c);
-                self.help.mode = crate::help::Mode::Code;
                 chrome.show(crate::editor::Pane::Claude);
             }
             None => self.projects.note(missing, true),
         }
     }
 
-    /// The Agent tab: its heading (the agent's state as a dot, the mode's
-    /// name, the mode toggle), then the shared tab (changing the program)
-    /// or Help.
+    /// The Describe tab: its heading (the agent's state as a dot), then
+    /// the shared tab (changing the program).
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        use crate::help::Mode;
         use crate::instruct::Act;
         // Where the diagram's selection is being used: a click here keeps it.
         chrome.hit("agent tab", ui.clip_rect());
@@ -1665,14 +1702,11 @@ impl BoxView {
             io: None,
             versions: self.versions(),
         };
-        let help_view = crate::help::View {
-            blocked: self.help_blocked(),
-        };
         let design_off = self.design_blocked();
         let mut design_act = None;
         let deploy_state = self.agent_deploy();
         let mut deploy_go = false;
-        let (act, help_act) = egui::ScrollArea::vertical()
+        let act = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
                 // Room for the scroll bar (a resizable panel grows to any
@@ -1680,23 +1714,18 @@ impl BoxView {
                 ui.set_max_width(ui.available_width() - 12.0);
                 crate::help::heading(ui, chrome, self.agent.status.dot(), &self.agent.status.line());
                 ui.add_space(4.0);
-                match self.help.mode {
-                    Mode::Code => {
-                        let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
-                        deploy_go = deploy_row(ui, chrome, &deploy_state);
-                        let view = crate::design_ui::EntryView {
-                            now: ctx.input(|i| i.time),
-                            blocked: design_off.clone(),
-                            keep_blocked: self.writable().err(),
-                            kept: self.kept_design(),
-                        };
-                        if let Some(a) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
-                            design_act = Some(a);
-                        }
-                        (act, None)
-                    }
-                    Mode::Help => (None, crate::help::ui(ui, chrome, &mut self.help, &help_view)),
+                let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
+                deploy_go = deploy_row(ui, chrome, &deploy_state);
+                let view = crate::design_ui::EntryView {
+                    now: ctx.input(|i| i.time),
+                    blocked: design_off.clone(),
+                    keep_blocked: self.writable().err(),
+                    kept: self.kept_design(),
+                };
+                if let Some(a) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
+                    design_act = Some(a);
                 }
+                act
             })
             .inner;
         if deploy_go {
@@ -1704,17 +1733,6 @@ impl BoxView {
         }
         if let Some(a) = design_act {
             self.design_act(a, &ctx);
-        }
-        match help_act {
-            Some(crate::help::Act::Ask) => self.ask_help(&ctx),
-            Some(crate::help::Act::Stop) => {
-                #[cfg(target_arch = "wasm32")]
-                self.help_http.abort();
-                if let Some(h) = self.help.helping.as_mut() {
-                    h.stop();
-                }
-            }
-            None => {}
         }
         match act {
             Some(Act::Send) => self.send_instruction(&ctx),
@@ -3143,6 +3161,10 @@ impl Workspace for BoxView {
 
 impl Body for BoxView {
     fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if let Some(error) = chrome.help_ask.take() {
+            let ctx = ui.ctx().clone();
+            self.help_about(&error, &ctx, chrome);
+        }
         let t = theme(ui);
         let now = ui.ctx().input(|i| i.time);
         let (text, color) = self.status(now, &t);
@@ -3188,7 +3210,7 @@ impl Body for BoxView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
-            crate::messages::copyable(
+            crate::messages::copyable_error(
                 ui,
                 chrome,
                 "fault",
@@ -3217,7 +3239,7 @@ impl Body for BoxView {
             }
             Deploy::Failed(why) => {
                 let why = format!("✖ {why}");
-                crate::messages::copyable(
+                crate::messages::copyable_error(
                     ui,
                     chrome,
                     "deploy failed",
@@ -3237,7 +3259,13 @@ impl Body for BoxView {
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();
             if error {
-                crate::messages::copyable(ui, chrome, "notice", &text, crate::theme::theme(ui).ink(RED));
+                crate::messages::copyable_error(
+                    ui,
+                    chrome,
+                    "notice",
+                    &text,
+                    crate::theme::theme(ui).ink(RED),
+                );
             } else {
                 let r = ui.label(RichText::new(text).color(t.muted));
                 chrome.hit("notice", r.rect);
@@ -3710,13 +3738,20 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Claude]
+        &[Tab::Io, Tab::Claude, Tab::Help]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
-        if tab == Tab::Claude {
-            self.agent_tab(ui, chrome);
-            return;
+        match tab {
+            Tab::Claude => {
+                self.agent_tab(ui, chrome);
+                return;
+            }
+            Tab::Help => {
+                self.help_tab(ui, chrome);
+                return;
+            }
+            Tab::Io => {}
         }
         let t = theme(ui);
         self.assign_context();

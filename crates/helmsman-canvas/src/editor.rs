@@ -34,6 +34,9 @@ pub enum Tab {
     #[default]
     Io,
     Claude,
+    /// The Help tab (Nick, 2026-11-26): a question about an error or
+    /// about how to do something, kept apart from the Describe tab.
+    Help,
 }
 
 impl Tab {
@@ -42,6 +45,7 @@ impl Tab {
         match self {
             Self::Io => "I/O",
             Self::Claude => "Describe",
+            Self::Help => "Help",
         }
     }
 
@@ -51,6 +55,9 @@ impl Tab {
         match self {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
             Self::Claude => "Describe: say what the program should do, and the change is made and checked.",
+            Self::Help => {
+                "Help: ask what an error means or how to do something. It reads the Messages and the devices and changes nothing."
+            }
         }
     }
 }
@@ -76,11 +83,20 @@ pub enum Pane {
     /// The I/O map's devices and their points (`crate::devices`).
     Devices,
     Files,
+    /// Ask what an error means or how to do something (`crate::help`).
+    Help,
 }
 
 impl Pane {
     /// Every tab, in the left pane's first order.
-    pub const ALL: [Self; 5] = [Self::Claude, Self::Code, Self::Io, Self::Devices, Self::Files];
+    pub const ALL: [Self; 6] = [
+        Self::Claude,
+        Self::Code,
+        Self::Io,
+        Self::Devices,
+        Self::Files,
+        Self::Help,
+    ];
 
     /// The view's own tab this is, for the two a view draws through
     /// [`Body::tab`].
@@ -89,6 +105,7 @@ impl Pane {
         match self {
             Self::Claude => Some(Tab::Claude),
             Self::Io => Some(Tab::Io),
+            Self::Help => Some(Tab::Help),
             Self::Code | Self::Devices | Self::Files => None,
         }
     }
@@ -100,7 +117,7 @@ impl Pane {
             Self::Files => "Alt+Shift+0  Files: the projects and their files.",
             Self::Devices => "Alt+Shift+4  Devices: the I/O map and its modules.",
             Self::Code => "Alt+Shift+1  Code: the open file's Structured Text.",
-            Self::Claude | Self::Io => match self.tab() {
+            Self::Claude | Self::Io | Self::Help => match self.tab() {
                 Some(t) => t.tip(),
                 None => "",
             },
@@ -115,6 +132,7 @@ impl Pane {
             Self::Code => Icon::Code,
             Self::Claude => Icon::Agent,
             Self::Io => Icon::Io,
+            Self::Help => Icon::Help,
         }
     }
 
@@ -127,6 +145,7 @@ impl Pane {
             Self::Code => "Structured Text",
             Self::Claude => Tab::Claude.label(),
             Self::Io => Tab::Io.label(),
+            Self::Help => Tab::Help.label(),
         }
     }
 
@@ -138,6 +157,7 @@ impl Pane {
             Self::Code => "code",
             Self::Claude => "claude",
             Self::Io => "io",
+            Self::Help => "help",
         }
     }
 
@@ -273,6 +293,12 @@ pub struct Chrome {
     /// Help › Show hotkeys: every control with a shortcut wears it as a
     /// superscript, to teach it. Remembered.
     pub hotkeys: bool,
+    /// An error the person clicked, to put to the Help tab: the view
+    /// takes it ([`Self::ask_help`]); never saved.
+    pub help_ask: Option<String>,
+    /// The view has a Help tab this frame, so an error is a link to it
+    /// ([`crate::messages::error_link`]).
+    pub help_on: bool,
 }
 
 impl Default for Chrome {
@@ -310,11 +336,18 @@ impl Default for Chrome {
             files_fold_mine: false,
             files_fold_examples: false,
             hotkeys: false,
+            help_ask: None,
+            help_on: false,
         }
     }
 }
 
 impl Chrome {
+    /// Puts `error`, as shown, to the Help tab: the view opens it and asks.
+    pub fn ask_help(&mut self, error: &str) {
+        self.help_ask = Some(error.to_string());
+    }
+
     /// Whether the Files tab's section for `g` is folded away.
     #[must_use]
     pub const fn files_folded(&self, g: crate::projects::Group) -> bool {
@@ -1032,6 +1065,7 @@ fn pane_body(ui: &mut egui::Ui, p: Pane, body: &mut dyn Body, chrome: &mut Chrom
         Pane::Code => body.st(ui, chrome),
         Pane::Claude => body.tab(ui, Tab::Claude, chrome),
         Pane::Io => body.tab(ui, Tab::Io, chrome),
+        Pane::Help => body.tab(ui, Tab::Help, chrome),
     }
 }
 
@@ -1455,6 +1489,7 @@ fn trend_panel(
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut hits = Vec::new();
     let have = body.tabs();
+    chrome.help_on = have.contains(&Tab::Help);
     let has = |p: &Pane| p.tab().is_none_or(|t| have.contains(&t));
     let lefts: Vec<Pane> = chrome.lefts.iter().copied().filter(has).collect();
     let rights: Vec<Pane> = chrome.rights.iter().copied().filter(has).collect();

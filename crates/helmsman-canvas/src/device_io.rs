@@ -578,7 +578,7 @@ impl DevicesUi {
             }
             if let Some(err) = &a.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(theme(ui).ink(RED))).wrap());
+                crate::messages::error_link(ui, chrome, "device error", err, theme(ui).ink(RED));
             }
             ui.add_space(12.0);
             let ok = ui

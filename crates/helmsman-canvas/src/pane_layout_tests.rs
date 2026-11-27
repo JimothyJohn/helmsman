@@ -28,17 +28,18 @@ fn whole(l: &PaneLayout) {
 
 #[test]
 fn a_tab_placed_in_its_own_pane_moves_and_the_shown_one_stays() {
-    use Pane::{Claude, Code, Devices, Files, Io};
+    use Pane::{Claude, Code, Devices, Files, Help, Io};
     let mut c = Chrome::default();
-    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files]);
+    // Help (Nick, 2026-11-26) joins at the end.
+    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files, Help]);
     c.place(Files, false, Some(Claude));
-    assert_eq!(c.lefts, [Files, Claude, Code, Io, Devices], "to the front");
+    assert_eq!(c.lefts, [Files, Claude, Code, Io, Devices, Help], "to the front");
     c.place(Files, false, None);
-    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files], "to the end");
+    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Help, Files], "to the end");
     c.place(Code, false, Some(Files));
-    assert_eq!(c.lefts, [Claude, Io, Devices, Code, Files], "rightwards");
+    assert_eq!(c.lefts, [Claude, Io, Devices, Help, Code, Files], "rightwards");
     c.place(Files, false, Some(Io));
-    assert_eq!(c.lefts, [Claude, Files, Io, Devices, Code], "leftwards");
+    assert_eq!(c.lefts, [Claude, Files, Io, Devices, Help, Code], "leftwards");
     // Onto itself, or before the tab it is already before: nothing moves.
     let was = c.lefts.clone();
     c.place(Io, false, Some(Io));
@@ -65,7 +66,7 @@ fn a_tab_placed_in_the_other_pane_docks_at_that_place() {
 
 #[test]
 fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
-    use Pane::{Claude, Code, Files};
+    use Pane::{Claude, Code};
     let mut c = Chrome::default();
     c.hide(Claude);
     assert_eq!(c.hidden, [Claude]);
@@ -81,10 +82,11 @@ fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
     c.show(Claude);
     assert!(c.hidden.is_empty() && c.showing(Claude));
     assert_eq!(c.lefts.last(), Some(&Claude));
-    // The last tab of a pane hidden: the one before shows.
+    // The last tab of a pane hidden: the one before shows (Help, last
+    // of the defaults since 2026-11-26).
     c.pane = Claude;
     c.hide(Claude);
-    assert_eq!(c.pane, Files);
+    assert_eq!(c.pane, Pane::Help);
     // Every tab hidden: nothing to show, and a toggle still brings one back.
     for p in Pane::ALL {
         c.hide(p);
