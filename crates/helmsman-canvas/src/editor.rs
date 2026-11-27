@@ -1946,6 +1946,8 @@ pub struct Pressed {
     pub errors: bool,
     /// Back or Forward: the revision to show.
     pub revision: Option<u32>,
+    /// The info button between them: the revision to open in a window.
+    pub info: Option<u32>,
 }
 
 /// The header's right end, right to left: Deploy as a filled yellow
@@ -1964,21 +1966,39 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
             busy(ui, chrome, stage, "code deploying");
         }
         if let Some(steps) = s.steps {
-            // Right to left: Forward, then Back, so they read Back Forward.
-            for (key, icon, to, end) in [
+            // Right to left: Forward, info, then Back, so they read
+            // Back (i) Forward as in the Agent tab.
+            for (k, (key, icon, to, end)) in [
                 (
                     "code forward",
                     Icon::Forward,
                     &steps.forward,
                     "Forward: this is the newest revision.",
                 ),
+                ("code info", Icon::Info, &None, ""),
                 (
                     "code back",
                     Icon::Back,
                     &steps.back,
                     "Back: this is the first revision.",
                 ),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if k == 1 {
+                    let tip = if steps.shown.is_some() {
+                        "Details: this version's instruction, what changed and the code, in a window, to look at or restore."
+                    } else {
+                        "Details: step Back to an older version first, then see its details here."
+                    };
+                    let r = crate::glyphs::button_sized(ui, icon, crate::glyphs::ROW, steps.shown.is_some(), false, tip);
+                    chrome.hit(key, r.rect);
+                    if r.clicked() {
+                        out.info = steps.shown;
+                    }
+                    continue;
+                }
                 let tip = to.as_ref().map_or(end, |(_, t)| t.as_str());
                 let r = crate::glyphs::button_sized(ui, icon, crate::glyphs::ROW, to.is_some(), false, tip);
                 chrome.hit(key, r.rect);

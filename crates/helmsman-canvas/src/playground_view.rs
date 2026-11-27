@@ -2462,13 +2462,6 @@ impl PlaygroundView {
     /// it was.
     fn steps(&self) -> Option<crate::instruct::Steps> {
         let at = self.history_at.filter(|n| self.shows_revision(*n));
-        let change = self.agent_change.as_ref().is_some_and(|c| {
-            c.project == self.proj.open
-                && c.holds(&self.proj.open, self.proj.files.get(&c.file).map(String::as_str))
-        });
-        if at.is_none() && !change {
-            return None;
-        }
         let revs = self.proj.revisions();
         let k = match at {
             Some(n) => revs.iter().position(|r| r.n == n)?,
@@ -2488,7 +2481,8 @@ impl PlaygroundView {
         Some(crate::instruct::Steps {
             back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
             forward: tip(k + 1, "Forward"),
-            shown: None,
+            // The info button opens the version on show, when one is.
+            shown: at,
         })
     }
 
@@ -2848,19 +2842,33 @@ impl PlaygroundView {
         let Some(view) = self.revision.clone() else {
             return;
         };
-        let current: std::collections::BTreeMap<String, String> = self
-            .proj
-            .files
-            .iter()
-            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
-            .map(|(n, t)| (n.clone(), t.clone()))
-            .collect();
         let write = if self.proj.is_example() {
             Err("A built-in example is read-only: copy the project first.".into())
         } else {
             Ok(())
         };
-        match crate::history_ui::modal(ctx, chrome, &view, &current, &write) {
+        // What this version changed: against the one before it.
+        let before: std::collections::BTreeMap<String, String> = self
+            .proj
+            .revisions()
+            .iter()
+            .rev()
+            .find(|r| r.n < view.row.n)
+            .map(|r| {
+                r.files
+                    .iter()
+                    .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+                    .map(|(n, t)| (n.clone(), t.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        match crate::history_ui::modal_against(
+            ctx,
+            chrome,
+            &view,
+            crate::history_ui::Against::Before(&before),
+            &write,
+        ) {
             Some(crate::history_ui::HistoryAct::Close) => self.revision = None,
             Some(crate::history_ui::HistoryAct::Restore(n)) => {
                 self.revision = None;
@@ -3575,6 +3583,7 @@ impl Body for PlaygroundView {
         let steps = self.steps();
         let versions = self.versions();
         let mut revision = None;
+        let mut info = None;
         let mut to_error: Option<(String, u32)> = None;
         // The header is the open file's name (Nick, 2026-11-08), the
         // magnifier and word wrap; at its right end Deploy, and before it
@@ -3623,6 +3632,7 @@ impl Body for PlaygroundView {
             );
             go = pressed.deploy;
             revision = pressed.revision;
+            info = pressed.info;
             if pressed.errors
                 && let Some(d) = first
             {
@@ -3631,6 +3641,9 @@ impl Body for PlaygroundView {
         });
         if let Some(n) = revision {
             self.show_revision(n);
+        }
+        if let Some(n) = info {
+            self.act(Act::ShowRevision(n));
         }
         if chrome.history && !versions.rows.is_empty() {
             match editor::versions_panel(ui, chrome, &mut self.instruct, &versions) {
@@ -3677,6 +3690,37 @@ impl Body for PlaygroundView {
                 })
                 .inner;
             chrome.hit("st draft", r.rect);
+            return;
+        }
+        // An old version on show: marked, and read-only; the mark's button
+        // runs the newest again.
+        if let Some(n) = self.history_at.filter(|n| self.shows_revision(*n)) {
+            let row = self
+                .proj
+                .revisions()
+                .iter()
+                .find(|r| r.n == n)
+                .map(SimRevision::row);
+            let newest = self.proj.revisions().last().map(|r| r.n);
+            if crate::history_ui::stepped_mark(ui, chrome, n, row.as_ref(), &current)
+                && let Some(last) = newest
+            {
+                self.show_revision(last);
+            }
+            let text = self.proj.files.get(&current).cloned().unwrap_or_default();
+            let mut shown: &str = &text;
+            let size = Vec2::new(ui.available_width(), ui.available_height().max(120.0));
+            ui.allocate_ui(size, |ui| {
+                editor::st_editor(
+                    ui,
+                    id.with(("version", n)),
+                    &mut shown,
+                    &diags,
+                    &warns,
+                    MAX_SOURCE,
+                    chrome,
+                );
+            });
             return;
         }
         let Some(text) = self.proj.current_text_mut() else {

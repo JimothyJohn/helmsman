@@ -485,6 +485,11 @@ pub struct BoxProjects {
     pub history: Vec<crate::history_ui::RevisionRow>,
     /// The revision on view (the History modal).
     pub revision: Option<crate::history_ui::RevisionView>,
+    /// The revision the Code tab is stepped to, read whole: shown there,
+    /// not in a window.
+    pub stepped: Option<crate::history_ui::RevisionView>,
+    /// Revisions asked for the Code tab, not yet answered.
+    peeks: Vec<u32>,
     /// The Agent pages of the open project's latest revisions that carry
     /// one, by revision, as read (`PCall::Page`).
     pub pages: BTreeMap<u32, String>,
@@ -1149,6 +1154,8 @@ impl BoxProjects {
         self.pending = None;
         self.history.clear();
         self.revision = None;
+        self.stepped = None;
+        self.peeks.clear();
         self.pages.clear();
         self.queue
             .push(PReq::get(PCall::Project(name.into()), project_url(name)));
@@ -1279,6 +1286,8 @@ impl BoxProjects {
         self.conflict = None;
         self.history.clear();
         self.revision = None;
+        self.stepped = None;
+        self.peeks.clear();
         self.pages.clear();
         self.relist();
     }
@@ -1304,6 +1313,14 @@ impl BoxProjects {
             },
             format!("{}/history/{n}", project_url(name)),
         ));
+    }
+
+    /// Asks for revision `n` of project `name` for the Code tab to show
+    /// in place ([`Self::stepped`]); no window opens.
+    pub fn peek_revision(&mut self, name: &str, n: u32) {
+        self.stepped = None;
+        self.peeks.push(n);
+        self.read_revision(name, n);
     }
 
     /// The project's files back to revision `n` (an engineer; the box
@@ -2332,6 +2349,11 @@ impl BoxProjects {
                 }
             }
             PCall::Revision { project, n } => {
+                let peek = self
+                    .peeks
+                    .iter()
+                    .position(|p| *p == n)
+                    .map(|k| self.peeks.remove(k));
                 if !ok {
                     self.note(format!("cannot read revision {n}: {}", error_of(a)), true);
                     return;
@@ -2348,11 +2370,16 @@ impl BoxProjects {
                     })
                     .unwrap_or_default();
                 if let Some(row) = revision_row(&j) {
-                    self.revision = Some(crate::history_ui::RevisionView {
+                    let view = crate::history_ui::RevisionView {
                         row,
                         files,
                         page: j["page"].as_str().map(str::to_string),
-                    });
+                    };
+                    if peek.is_some() {
+                        self.stepped = Some(view);
+                    } else {
+                        self.revision = Some(view);
+                    }
                 }
             }
             PCall::Restore { project, n } => {

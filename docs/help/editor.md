@@ -264,7 +264,15 @@ limits matches to whole words. At the header's right
   end is Deploy, the green button with the arrow. While the code
   compiles the header says nothing about it; when it does not, a red ✖
   with the number of errors stands before Deploy, the first error in its
-  tooltip, and a click goes to that line. The code is
+  tooltip, and a click goes to that line. Before Deploy, once the project
+  has more than one version, are the same three buttons as in the
+  Describe tab: a left arrow, an **i** and a right arrow. The arrows step
+  back and forward through the versions and show each one's code in
+  place, read-only, under a bar that says "Version 7, 3 hours ago" and
+  has a button back to the file as you left it (the right arrow past the
+  newest does the same). Nothing is changed or deployed while an old
+  version is shown. The **i** opens that version in a window, and is
+  grey while you are looking at the file itself. The code is
   coloured by what each word is: keywords, types, numbers and times,
   comments, the program's inputs and outputs, and addresses. Errors are
   marked on the line as you type; the program running does not change
