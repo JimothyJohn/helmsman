@@ -184,8 +184,8 @@ impl Pane {
 /// since 2026-11-05 (Nick: "just a bit wider"); 320 since 2026-11-10 (at
 /// 240 the Code tab held 19 characters a row and wrapped a 14-line
 /// program to 24 rows; at 320 it holds 27); 384 since 2026-11-26 (Nick:
-/// "20% wider").
-pub const LEFT_W: f32 = 384.0;
+/// "20% wider"); 307 the same day (Nick: "20% narrower", 384 x 0.8).
+pub const LEFT_W: f32 = 307.0;
 /// The right panel's width when first opened, points: 236 since
 /// 2026-11-05 (the tab buttons and the hide chevron must fit the row, or
 /// the panel grows every frame; the Requirements tab is archived since

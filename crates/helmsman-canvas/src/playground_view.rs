@@ -2948,6 +2948,11 @@ impl PlaygroundView {
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.named_ui(&ui.ctx().clone(), chrome)
+            && self.own_project()
+        {
+            self.apply_wiring(&w);
+        }
         if let Some(crate::devices::DeviceAct::Quick(q)) = self.devices_ui.quick_ui(&ui.ctx().clone(), chrome)
             && self.own_project()
         {
@@ -3823,6 +3828,8 @@ impl Body for PlaygroundView {
                     self.devices_ui.open_add_io(&device);
                 }
             }
+            Some(crate::devices::DeviceAct::Scan) => self.devices_ui.simulated_scan(&map),
+            Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)

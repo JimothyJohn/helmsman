@@ -409,7 +409,13 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                     .label(RichText::new("How to do it").strong().color(t.fg))
                     .tip("The answer, from the help pages. Nothing on the box changed.");
                 chrome.hit("help answer title", r.rect);
-                crate::messages::copyable(ui, chrome, "help answer", &a.text, t.fg);
+                let b = ui.button("Copy").tip("Copies the answer, to paste elsewhere.");
+                chrome.hit("help answer copy", b.rect);
+                if b.clicked() {
+                    ui.ctx().copy_text(a.text.clone());
+                }
+                let r = markdown(ui, &a.text, "help-answer");
+                chrome.hit("help answer", r.rect);
                 page_links(ui, chrome, "Read more", &a.pages);
             }
             if let Some(issue) = issue {
@@ -428,8 +434,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                         .label(RichText::new("What is likely wrong").strong().color(t.fg))
                         .tip("The diagnosis, from the box's messages and devices.");
                     chrome.hit("help diagnosis title", r.rect);
-                    let r = ui
-                        .add(egui::Label::new(RichText::new(&issue.diagnosis).color(t.fg)).wrap())
+                    let r = markdown(ui, &issue.diagnosis, "help-diagnosis")
                         .tip("The diagnosis, from the box's messages and devices.");
                     chrome.hit("help diagnosis", r.rect);
                 }
@@ -450,16 +455,39 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                         ui.ctx().copy_text(issue.markdown.clone());
                     }
                 });
-                let r = ui.add(
-                    egui::Label::new(RichText::new(&issue.markdown).monospace().color(t.fg))
-                        .wrap()
-                        .selectable(true),
-                );
+                let r = markdown(ui, &issue.markdown, "help-issue");
                 chrome.hit("help issue", r.rect);
             }
         }
     }
     act
+}
+
+/// `text` as Markdown: headings, bold, lists with their indent, code and
+/// tables laid out, paragraphs spaced. Text that is not Markdown (no heading,
+/// fence or table) is laid out a line to a paragraph, so its lists and
+/// breaks still read; nothing is lost either way. Selectable.
+fn markdown(ui: &mut egui::Ui, text: &str, salt: &str) -> egui::Response {
+    let size = egui::TextStyle::Body.resolve(ui.style()).size;
+    let blocks = crate::md_view::parse(&paragraphs(text));
+    ui.scope(|ui| crate::md_view::show(ui, &blocks, size, salt))
+        .response
+}
+
+/// `text` with its lines made paragraphs when it has no Markdown structure
+/// of its own: a single line break in plain text is a break, not a space.
+fn paragraphs(text: &str) -> String {
+    let structured = text.lines().any(|l| {
+        let l = l.trim_start();
+        l.starts_with('#') || l.starts_with("```") || l.starts_with('|')
+    });
+    if structured {
+        return text.to_string();
+    }
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Links to help pages under a heading; nothing when there are none.
@@ -504,6 +532,18 @@ mod tests {
         format!(
             "event: help\ndata: {{\"context\":{{}}}}\n\nevent: text\ndata: {{\"delta\":\"Looking.\"}}\n\nevent: issue\ndata: {issue}\n\nevent: done\ndata: {done}\n\n"
         )
+    }
+
+    #[test]
+    fn plain_text_is_laid_out_a_line_to_a_paragraph_and_markdown_is_left_alone() {
+        let plain = "The link is down.\n\nCheck:\n1. The cable\n2. The power";
+        let blocks = crate::md_view::parse(&paragraphs(plain));
+        assert_eq!(
+            crate::md_view::texts(&blocks),
+            ["The link is down.", "Check:", "The cable", "The power"]
+        );
+        let md = "**Likely** the cable.\n\n## What to check\n- one\n- two";
+        assert_eq!(paragraphs(md), md);
     }
 
     #[test]

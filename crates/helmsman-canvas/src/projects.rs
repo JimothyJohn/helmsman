@@ -359,10 +359,13 @@ impl FilesUi {
     pub fn show(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) -> Option<Act> {
         let t = theme(ui);
         let mut act = None;
-        let r = ui
-            .add(egui::Label::new(RichText::new(l.place.title()).strong().color(t.fg)).truncate())
-            .tip(l.place.tip());
-        chrome.hit("files place", r.rect);
+        // The box's tab has no header (Nick, 2026-11-26): the tab says it.
+        if l.place != Place::Box {
+            let r = ui
+                .add(egui::Label::new(RichText::new(l.place.title()).strong().color(t.fg)).truncate())
+                .tip(l.place.tip());
+            chrome.hit("files place", r.rect);
+        }
         // Your own come first, whether or not there are any.
         let mut shown = Group::Mine;
         let mine = l.projects.iter().filter(|p| p.group == Group::Mine).count();

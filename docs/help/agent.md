@@ -288,7 +288,8 @@ What comes back depends on what you asked:
 
 - A report of trouble ("the conveyor stopped, the lamp is red") gets
   **What is likely wrong**, Helmsman's diagnosis from the box's messages
-  and devices, and **Issue to report it**, a Markdown issue that carries
+  and devices, set out with a bold headline and a short numbered list of
+  what to check, and **Issue to report it**, a Markdown issue that carries
   your words and the box's details. **Copy** takes the whole issue, to
   paste into a new GitHub issue or to give to an AI assistant.
 - A question about how things work ("how do I load a program?") gets

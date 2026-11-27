@@ -563,6 +563,13 @@ pub enum DeviceAct {
     Rename(RenamePlan),
     /// Take a device and its signals out of the map.
     Delete(String),
+    /// Scan for devices (the box: every protocol on every local
+    /// interface; the simulation: its simulated E1213).
+    Scan,
+    /// A click on a found device the library knows: fetch its profile (the
+    /// box's `GET /api/devices/library?vendor=&product=`; the simulation
+    /// answers with its own E1213's) into the quick form that just opened.
+    Library { vendor: u16, product: u16 },
     /// The quick form's Add: the profile file into the project, then the
     /// device into io.map.
     Quick(QuickAdd),
@@ -604,6 +611,41 @@ pub struct Quick {
     /// why not, when it could not.
     pub profile: Option<Result<(String, helmsman_project::profile_skim::Skim), String>>,
     pub error: Option<String>,
+}
+
+/// The name form of a found device the library does not know: the one
+/// question a click on it asks. Add writes a typed device at its address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    pub title: String,
+    pub address: String,
+    /// The identity the scan saw (`cip=`, `modbus=`, `mac=`): picks the
+    /// protocol.
+    pub identity: String,
+    pub name: String,
+    pub error: Option<String>,
+}
+
+impl Named {
+    /// The device as the New device form's defaults make it: EtherNet/IP
+    /// when the scan saw a CIP identity, else Modbus TCP, at the address.
+    #[must_use]
+    pub fn device(&self) -> NewDevice {
+        let mut d = NewDevice {
+            name: self.name.trim().to_string(),
+            ..NewDevice::default()
+        };
+        if self.identity.starts_with("cip=") {
+            d.set_protocol(1);
+            d.params = "rpi_ms=100 poll_ms=20".into();
+            d.endpoint.clone_from(&self.address);
+        } else if self.address.contains(':') {
+            d.endpoint.clone_from(&self.address);
+        } else {
+            d.endpoint = format!("{}:502", self.address);
+        }
+        d
+    }
 }
 
 /// What the device library knows of a device found on the network.
@@ -666,6 +708,48 @@ pub struct Found {
 }
 
 impl Found {
+    /// The simulation's E1213 (`helmsman_adapter::DeviceConfig::moxa_e1213`'s
+    /// identity, at Moxa's factory address), `mapped` against `map`, with
+    /// the library's entry on it as a browser would fetch it: the
+    /// simulation carries the E1213's profile, so Add works offline.
+    #[must_use]
+    pub fn simulated_e1213(map: &MapText) -> Self {
+        let mut f = Self {
+            address: "192.168.127.254".into(),
+            mac: None,
+            vendor_id: 991,
+            product_code: 515,
+            revision: "4.1".into(),
+            serial: "0x00e12130".into(),
+            product_name: "E1213".into(),
+            cip: "cip=991:515:0x00e12130".into(),
+            identity: "cip=991:515:0x00e12130".into(),
+            mapped: None,
+            library: Some(LibraryHit {
+                folder: "devices/moxa/iologik-e1213".into(),
+                vendor: "Moxa".into(),
+                model: "ioLogik E1213".into(),
+                driver: Some("enip-io".into()),
+                profile: Some("moxa-e1213".into()),
+                profile_file: Some("moxa-iologik-e1213.device".into()),
+            }),
+            simulated: true,
+            reported: None,
+        };
+        f.mapped = mapped_in(map, &f);
+        f
+    }
+
+    /// What a person calls it: the library's vendor and model when it
+    /// knows the device, else what the wire said.
+    #[must_use]
+    pub fn title(&self) -> String {
+        match &self.library {
+            Some(l) if !l.model.is_empty() => format!("{} {}", l.vendor, l.model).trim().to_string(),
+            _ => self.product_name.clone(),
+        }
+    }
+
     /// Reads a `POST /api/devices/discover` body; `None` if it is not one.
     /// `found` (one entry per device, every identity it answered with,
     /// since 2026-11-11) when the box has it, else the older EtherNet/IP
@@ -832,6 +916,7 @@ impl NewDevice {}
 pub enum Scan {
     #[default]
     Idle,
+    Running,
     Done,
     Failed(String),
 }
@@ -890,6 +975,8 @@ pub struct DevicesUi {
     pub adding: Option<NewDevice>,
     /// The quick form (add by click), while open.
     pub quick: Option<Quick>,
+    /// The name form of a found device the library does not know.
+    pub named: Option<Named>,
     /// "Import device…" was pressed: the view opens the file picker.
     pub import: bool,
     pub found: Vec<Found>,
@@ -973,6 +1060,44 @@ impl DevicesUi {
                 self.scan = Scan::Failed(if s == 0 { why } else { format!("{s}: {why}") });
             }
         }
+    }
+
+    /// The simulation's scan: its one simulated E1213.
+    pub fn simulated_scan(&mut self, map: &MapText) {
+        self.found = vec![Found::simulated_e1213(map)];
+        self.scan = Scan::Done;
+    }
+
+    /// Takes in the box's answer to `GET /api/devices/library?vendor=&product=`
+    /// for the quick form: the profile's text, listed, or why not.
+    pub fn library_answer(&mut self, status: u16, body: &str) {
+        let Some(q) = &mut self.quick else { return };
+        let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
+        let m = &j["matches"][0];
+        q.profile = Some(match (status, m.get("profile_text").and_then(Json::as_str)) {
+            (200..=299, Some(t)) => helmsman_project::profile_skim::skim(t)
+                .map(|s| (t.to_string(), s))
+                .map_err(|e| format!("{}: {e}", q.file)),
+            (200..=299, None) => Err(m["profile_unavailable"]
+                .as_str()
+                .map_or_else(|| "the library has no profile for it".to_string(), str::to_string)),
+            (s, _) => Err(format!(
+                "the box could not read the library ({s}): {}",
+                j["error"].as_str().unwrap_or("no answer")
+            )),
+        });
+    }
+
+    /// The simulation's answer for the quick form: its own E1213's
+    /// profile, the one the library carries.
+    pub fn simulated_library_answer(&mut self) {
+        const E1213: &str = include_str!("../../../docs/devices/moxa-iologik-e1213.device");
+        let Some(q) = &mut self.quick else { return };
+        q.profile = Some(
+            helmsman_project::profile_skim::skim(E1213)
+                .map(|s| (E1213.to_string(), s))
+                .map_err(|e| format!("{}: {e}", q.file)),
+        );
     }
 
     /// The next `wired=` value of the map nobody has asked the library
@@ -1134,7 +1259,7 @@ impl DevicesUi {
         self.proposal.show(ui, chrome);
         if nodes.is_empty() {
             ui.add(egui::Label::new(RichText::new("No devices wired yet.").color(t.muted)).wrap())
-                .tip("Press + to add one.");
+                .tip("Press Scan for Device to find one, or right-click the empty space to add one by hand.");
         }
         let mut flip = None;
         for n in nodes {
@@ -1148,7 +1273,13 @@ impl DevicesUi {
                 LinkState::Unknown => RichText::new("○").color(t.muted),
                 LinkState::Simulated => RichText::new("◌").color(t.muted),
             };
-            let head = head_text(n, folded);
+            // The row says the name; the driver, address and link are in
+            // its tooltip (and in Edit).
+            let arrow = if folded { "▸" } else { "▾" };
+            let head = format!("{arrow} {}", n.name);
+            let detail = head_text(n, folded)
+                .trim_start_matches(['▸', '▾', ' '])
+                .to_string();
             // A device the map declares: Edit and Delete beside its name
             // (the box, the screen and other modules are not devices to edit).
             let declared = self.map.devices.iter().any(|d| d.name == n.name);
@@ -1185,18 +1316,28 @@ impl DevicesUi {
                     let edit_tip = match (write, &editable) {
                         (Err(why), _) => why.clone(),
                         (Ok(()), None) => "This form edits Modbus TCP and EtherNet/IP devices: change this one in io.map.".to_string(),
-                        (Ok(()), Some(_)) => "Opens the device's settings: its name, and under Advanced how it is reached. Its inputs and outputs are added and removed here, under it.".to_string(),
+                        (Ok(()), Some(_)) => "Edit: opens the device's settings: its name, and under Advanced how it is reached. Its inputs and outputs are added and removed here, under it.".to_string(),
                     };
-                    let d = ui
-                        .add_enabled(write.is_ok(), egui::Button::new("Delete").small())
-                        .tip(write.as_ref().err().map_or(
-                            "Takes the device and its inputs and outputs out of io.map. Asks first.",
+                    let d = crate::glyphs::button_sized(
+                        ui,
+                        crate::glyphs::Icon::Clear,
+                        crate::glyphs::ROW,
+                        write.is_ok(),
+                        false,
+                        write.as_ref().err().map_or(
+                            "Delete: takes the device and its inputs and outputs out of io.map. Asks first.",
                             String::as_str,
-                        ));
+                        ),
+                    );
                     chrome.hit(format!("delete device {}", n.name), d.rect);
-                    let e = ui
-                        .add_enabled(write.is_ok() && editable.is_some(), egui::Button::new("Edit").small())
-                        .tip(edit_tip);
+                    let e = crate::glyphs::button_sized(
+                        ui,
+                        crate::glyphs::Icon::Edit,
+                        crate::glyphs::ROW,
+                        write.is_ok() && editable.is_some(),
+                        false,
+                        &edit_tip,
+                    );
                     chrome.hit(format!("edit device {}", n.name), e.rect);
                     asked = (e.clicked(), d.clicked());
                     name_row(ui)
@@ -1235,7 +1376,7 @@ impl DevicesUi {
             }
             let params: Vec<String> = n.params.iter().map(|(k, v)| format!("{k}={v}")).collect();
             let mut hover = format!(
-                "{}\n{}\n{} point(s) in the project. Click to fold or unfold them; right-click to edit or delete.",
+                "{detail}\n{}\n{}\n{} point(s) in the project. Click to fold or unfold them; right-click to edit or delete.",
                 state_text(&n.state),
                 if params.is_empty() {
                     "no settings".to_string()
@@ -1254,11 +1395,6 @@ impl DevicesUi {
                 continue;
             }
             self.config.section(ui, chrome, &n.name);
-            // What the device has beyond the points under it: one row, not
-            // a list, and above them so a long list never hides it.
-            if declared && let Some(a) = self.io_row(ui, chrome, &n.name, write) {
-                act = Some(a);
-            }
             let mut removed = None;
             for p in &n.points {
                 let value = p.value.map_or(String::new(), |v| format!(" = {}", show(Some(v))));
@@ -1407,6 +1543,11 @@ impl DevicesUi {
                     crate::wired::show_line(ui, chrome, &p.signal, w, self.wired.get(w), 44.0);
                 }
             }
+            // What the device has beyond the points: one row, under them
+            // (Nick, 2026-11-26).
+            if declared && let Some(a) = self.io_row(ui, chrome, &n.name, write) {
+                act = Some(a);
+            }
             if let Some(signal) = removed {
                 self.removing = Some(crate::device_io::Removal {
                     device: n.name.clone(),
@@ -1433,15 +1574,130 @@ impl DevicesUi {
                 .tip("This box answers other EtherNet/IP controllers at this address and port. It stays on while the box runs.");
             chrome.hit("devices adapter", r.rect);
         }
-        // One + under the devices adds another.
+        // Scan for Device, then what answered: a click names one and adds it.
         ui.add_space(4.0);
-        let or_why = |tip: &'static str| write.as_ref().err().map_or(tip, String::as_str);
+        let busy = self.scan == Scan::Running;
         let b = ui
-            .add_enabled(write.is_ok(), egui::Button::new("+").small())
-            .tip(or_why("Adds a device: its name, protocol and address."));
-        chrome.hit("devices add", b.rect);
+            .add_enabled(
+                !busy,
+                egui::Button::new(if busy { "Scanning…" } else { "Scan for Device" }),
+            )
+            .tip(if busy {
+                "Waiting for the devices to answer."
+            } else {
+                "Lists the devices that answer on this network: one ask per protocol (EtherNet/IP, Modbus TCP, PROFINET where the box has it), on every interface. A click on one adds it."
+            });
+        chrome.hit("devices scan", b.rect);
         if b.clicked() {
-            self.adding = Some(NewDevice::default());
+            act = Some(DeviceAct::Scan);
+        }
+        match &self.scan {
+            Scan::Done if self.found.is_empty() => {
+                ui.add(egui::Label::new(RichText::new("No device answered.").color(t.muted)).wrap())
+                    .tip("Nothing on the network answered. A device that does not answer is added by right-clicking the empty space below: New device…");
+            }
+            Scan::Failed(why) => {
+                ui.add(egui::Label::new(RichText::new(why).color(theme(ui).ink(RED))).wrap())
+                    .tip("The box's own words for why the scan failed.");
+            }
+            Scan::Idle | Scan::Running | Scan::Done => {}
+        }
+        let can = write.is_ok() || self.copy_first;
+        let mut picked = None;
+        for f in &self.found {
+            let dot = if f.mapped.is_some() {
+                RichText::new("●").color(t.accent)
+            } else {
+                RichText::new("○").color(t.muted)
+            };
+            let text = format!("{}{}", f.title(), if f.simulated { " (simulated)" } else { "" });
+            let r = ui
+                .horizontal(|ui| {
+                    ui.label(dot);
+                    ui.add(
+                        egui::Label::new(RichText::new(text))
+                            .truncate()
+                            .sense(Sense::click()),
+                    )
+                })
+                .inner;
+            chrome.hit(format!("network {}", f.address), r.rect);
+            let mut hover = format!("{}\nat {}", f.title(), f.address);
+            if f.identity.starts_with("cip=") {
+                let _ = write!(
+                    hover,
+                    "\nvendor {} product {}  revision {}  serial {}",
+                    f.vendor_id, f.product_code, f.revision, f.serial
+                );
+            } else {
+                let _ = write!(hover, "\n{}  revision {}", f.identity, f.revision);
+            }
+            if let Some(m) = &f.mac {
+                let _ = write!(hover, "\nMAC {m}");
+            }
+            if f.simulated {
+                hover.push_str(
+                    "\nThe simulation's stand-in: no device on the wire. A box scans the real network.",
+                );
+            }
+            match (&f.mapped, can) {
+                (Some(n), _) => {
+                    let _ = write!(hover, "\nAlready in the project as {n}.");
+                }
+                (None, false) => {
+                    let _ = write!(
+                        hover,
+                        "\n{}",
+                        write
+                            .as_ref()
+                            .err()
+                            .map_or("It cannot be added here.", String::as_str)
+                    );
+                }
+                (None, true) => hover.push_str("\nClick to name it and add it to the project."),
+            }
+            if let Some(n) = &self.library_note {
+                let _ = write!(hover, "\n{n}");
+            }
+            if r.tip(hover).clicked() && f.mapped.is_none() && can {
+                picked = Some(f.clone());
+            }
+        }
+        if let Some(f) = picked {
+            let profile_file = f.library.as_ref().and_then(|l| l.profile_file.clone());
+            let model = f.library.as_ref().map_or("", |l| l.model.as_str());
+            let name = Some(slug(if model.is_empty() { &f.product_name } else { model }))
+                .filter(|s| iomap::device_name_ok(s))
+                .unwrap_or_else(|| "device".to_string());
+            if let Some(file) = profile_file {
+                let (vendor, model) = f
+                    .library
+                    .as_ref()
+                    .map(|l| (l.vendor.clone(), l.model.clone()))
+                    .unwrap_or_default();
+                self.quick = Some(Quick {
+                    address: f.address.clone(),
+                    vendor,
+                    model,
+                    identity: f.identity.clone(),
+                    file,
+                    name,
+                    profile: None,
+                    error: None,
+                });
+                act = Some(DeviceAct::Library {
+                    vendor: f.vendor_id,
+                    product: f.product_code,
+                });
+            } else {
+                self.named = Some(Named {
+                    title: f.title(),
+                    address: f.address.clone(),
+                    identity: f.identity.clone(),
+                    name,
+                    error: None,
+                });
+            }
         }
         // The plant model's states, each with its sensor or the one it wants.
         self.plant.show(ui, chrome, write);
@@ -1454,6 +1710,7 @@ impl DevicesUi {
         if r.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ContextMenu);
         }
+        let or_why = |tip: &'static str| write.as_ref().err().map_or(tip, String::as_str);
         r.context_menu(|ui| {
             if menu_item(
                 ui,

@@ -104,6 +104,8 @@ pub enum Icon {
     Down,
     /// A painter's palette: pick a color.
     Palette,
+    /// A pencil: edit (a device's row on the Devices tab).
+    Edit,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -911,6 +913,28 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             ));
             p.rect_stroke(front, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Edit => {
+            // A pencil on the diagonal: its tip at the lower left, a
+            // shoulder where the point ends, the body to the upper right.
+            let u = b.width();
+            let d = Vec2::new(1.0, -1.0).normalized();
+            let n = Vec2::new(1.0, 1.0).normalized();
+            let tip = Pos2::new(l + u * 0.06, bt - u * 0.06);
+            let hw = u * 0.15;
+            let shoulder = tip + d * u * 0.34;
+            let end = tip + d * u * 1.22;
+            p.add(egui::Shape::closed_line(
+                vec![
+                    tip,
+                    shoulder + n * hw,
+                    end + n * hw,
+                    end - n * hw,
+                    shoulder - n * hw,
+                ],
+                stroke,
+            ));
+            p.line_segment([shoulder + n * hw, shoulder - n * hw], stroke);
         }
         Icon::Clear => {
             // A bin: the lid and its handle over a tapering body.

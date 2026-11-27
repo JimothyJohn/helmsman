@@ -501,6 +501,7 @@ impl BoxView {
                     let found = crate::devices::hosts(&self.devices_ui.found);
                     self.projects.scanned(found);
                 }
+                PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::Wiring(device) => self.devices_ui.wiring_answer(&device, a.status, &a.body),
                 PCall::FindWired => {
@@ -2086,6 +2087,9 @@ impl BoxView {
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.named_ui(&ui.ctx().clone(), chrome) {
+            self.apply_wiring(&w);
+        }
         if let Some(crate::devices::DeviceAct::Quick(q)) = self.devices_ui.quick_ui(&ui.ctx().clone(), chrome)
         {
             self.quick_add(&q);
@@ -3531,6 +3535,13 @@ impl Body for BoxView {
         );
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
+            Some(crate::devices::DeviceAct::Scan) => {
+                self.devices_ui.scan = crate::devices::Scan::Running;
+                self.projects.discover();
+            }
+            Some(crate::devices::DeviceAct::Library { vendor, product }) => {
+                self.projects.library(vendor, product);
+            }
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)

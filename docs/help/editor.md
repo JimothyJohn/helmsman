@@ -198,9 +198,15 @@ redrawn.
   Rename and Delete, and what you copy pastes into any project you open
   next. **Devices** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): the devices
   the project's `io.map` names, each with its points under it, their live
-  values, and whether the link is up. The **+** under the list adds a
-  device (name, protocol, address, settings) as a line of the map; a
-  right-click on the blank space offers the same, and Import device…
+  values, and whether the link is up. A row shows the device's name; its
+  address, protocol and link are in its tooltip and under the pencil
+  (**Edit**); the bin deletes it. **Scan for Device** under the list asks
+  the network and lists what answered, by vendor and model where the
+  device library knows it; a click on one asks only its name and adds it
+  (the library's profile when it has one, else a device at that address).
+  A device that does not answer is added by a right-click on the blank
+  space: **New device…** (name, protocol, address, settings) writes a
+  line of the map, and Import device…
   takes the vendor's EDS file, keeps it in the project and fills the form
   in from it. For a device the library does not have, the form's **From
   the vendor's file…** takes an EDS, an IODD or a manual (a PDF up to 2 MB,
@@ -212,7 +218,7 @@ redrawn.
   and checked against the driver's ranges, with the device's io.map line
   under them. Adding a device adds the device alone. Every channel it
   has is available from then on, and the project lists a channel only
-  once you add it. **+ Add I/O** under the device opens the list of
+  once you add it. **+ Add I/O** under the device's points opens the list of
   channels the project does not use yet; type part of a name (`DI-0`,
   `out`, `int`) to narrow it, and click a channel to add it. The channel
   gets a signal named after the device and the channel (`rio_di_04`)

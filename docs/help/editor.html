@@ -267,13 +267,19 @@ offers Copy, Paste, Duplicate, Rename and Delete, and what you copy
 pastes into any project you open next. <strong>Devices</strong>
 (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): the devices the
 project's <code>io.map</code> names, each with its points under it,
-their live values, and whether the link is up. The <strong>+</strong>
-under the list adds a device (name, protocol, address, settings) as a
-line of the map; a right-click on the blank space offers the same, and
-Import device… takes the vendor's EDS file, keeps it in the project and
-fills the form in from it. For a device the library does not have, the
-form's <strong>From the vendor's file…</strong> takes an EDS, an IODD or
-a manual (a PDF up to 2 MB, text up to 1 MB) and Helmsman proposes a
+their live values, and whether the link is up. A row shows the device's
+name; its address, protocol and link are in its tooltip and under the
+pencil (<strong>Edit</strong>); the bin deletes it. <strong>Scan for
+Device</strong> under the list asks the network and lists what answered,
+by vendor and model where the device library knows it; a click on one
+asks only its name and adds it (the library's profile when it has one,
+else a device at that address). A device that does not answer is added
+by a right-click on the blank space: <strong>New device…</strong> (name,
+protocol, address, settings) writes a line of the map, and Import
+device… takes the vendor's EDS file, keeps it in the project and fills
+the form in from it. For a device the library does not have, the form's
+<strong>From the vendor's file…</strong> takes an EDS, an IODD or a
+manual (a PDF up to 2 MB, text up to 1 MB) and Helmsman proposes a
 profile with the channel names from it, to check on this tab before
 anything is saved; it needs an engineer or an integrator signed in to a
 box. On a read-only example, adding copies the project first. The form
@@ -282,30 +288,30 @@ usual values and checked against the driver's ranges, with the device's
 io.map line under them. Adding a device adds the device alone. Every
 channel it has is available from then on, and the project lists a
 channel only once you add it. <strong>+ Add I/O</strong> under the
-device opens the list of channels the project does not use yet; type
-part of a name (<code>DI-0</code>, <code>out</code>, <code>int</code>)
-to narrow it, and click a channel to add it. The channel gets a signal
-named after the device and the channel (<code>rio_di_04</code>) and a
-variable of that name in the program's <code>VAR_INPUT</code> or
-<code>VAR_OUTPUT</code>. To wire a variable the program already has,
-pick it under <strong>For</strong> first; the list then shows the
-channels of its direction and type. A device whose channels are not
-known takes a point by its address in the same window. Right-click a
-point and choose <strong>Remove…</strong> to take it out of the project;
-the program's variable stays and the channel returns to the list. A
-device that holds points the program has no variable for offers
-<strong>Remove unused</strong>, which asks before it removes them.
-<strong>Wire it</strong> walks through wiring a device's inputs: it
-lists the inputs the program uses, in the device's channel order, each
-with the terminal it goes to. Where the device library has them it shows
-the device's own wiring note with its source, and for a sensor named on
-the line (<code>wired=</code>) its connector with each wire's pin,
-colour and function. Where the library has nothing it says so; check the
-device's manual then. On a running box the window also checks each
-input: switch the one it names and the step ticks with what the box saw.
-If a different input of the device changes instead, the window names it,
-since the wire is probably on the wrong terminal. In the simulation
-there is no hardware, so you tick each step yourself.
+device's points opens the list of channels the project does not use yet;
+type part of a name (<code>DI-0</code>, <code>out</code>,
+<code>int</code>) to narrow it, and click a channel to add it. The
+channel gets a signal named after the device and the channel
+(<code>rio_di_04</code>) and a variable of that name in the program's
+<code>VAR_INPUT</code> or <code>VAR_OUTPUT</code>. To wire a variable
+the program already has, pick it under <strong>For</strong> first; the
+list then shows the channels of its direction and type. A device whose
+channels are not known takes a point by its address in the same window.
+Right-click a point and choose <strong>Remove…</strong> to take it out
+of the project; the program's variable stays and the channel returns to
+the list. A device that holds points the program has no variable for
+offers <strong>Remove unused</strong>, which asks before it removes
+them. <strong>Wire it</strong> walks through wiring a device's inputs:
+it lists the inputs the program uses, in the device's channel order,
+each with the terminal it goes to. Where the device library has them it
+shows the device's own wiring note with its source, and for a sensor
+named on the line (<code>wired=</code>) its connector with each wire's
+pin, colour and function. Where the library has nothing it says so;
+check the device's manual then. On a running box the window also checks
+each input: switch the one it names and the step ticks with what the box
+saw. If a different input of the device changes instead, the window
+names it, since the wire is probably on the wrong terminal. In the
+simulation there is no hardware, so you tick each step yourself.
 <strong>Tick</strong> and <strong>Skip</strong> work on a box too, and
 the window says which steps were seen and which you ticked. It only
 reads: nothing is written to the project or the device, and the ticks
