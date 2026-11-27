@@ -59,7 +59,7 @@ The canvas must feel alive and professionally built. The theme basics stay
   hold.
 - **TRUE glows, FALSE is flat, everywhere.** One look for each on every
   surface: wires, block chips, I/O cards, lamps, Signals traces, status
-  text. TRUE is green at full brightness with a glow (two wide faint
+  text (a lamp's FALSE is red: below). TRUE is green at full brightness with a glow (two wide faint
   under-strokes, about 5x width at 8% and 2.5x at 18%, under the core) and
   slow even dots flowing source to sink along a live TRUE wire. FALSE is a
   thin flat muted grey: no glow, no motion. A chip eases or flashes briefly
@@ -72,6 +72,16 @@ The canvas must feel alive and professionally built. The theme basics stay
   signal state. Green is also "running" and a lamp on. TRUE and FALSE are
   told apart by glow, weight and motion as well as hue; a fault on a wire,
   if ever shown, is dashed as well as red.
+- **Lamps are green on, red off** (Nick, 2026-11-27): a lamp (an output's
+  card in the I/O tab, a lamp on the Monitor) is green when TRUE and red
+  when FALSE, whatever its name says (a lamp named `yellow` is green when
+  on). Lit on a soft disc when on, dimmed when off. Everything else that is
+  FALSE stays flat grey.
+- **An I/O card at rest is its point** (Nick, 2026-11-27): icon, name and
+  value on one line. Its three glyphs (code, diagram, Trend) show while the
+  pointer is over the card or it is open, so a closed card in the narrow
+  right pane keeps its room for the name and value. A simulated input's
+  icon is lit when on and dimmed when off, as an output's is.
 - **A dot grid** on the canvas, panned and zoomed with the diagram, one or
   two levels above the ground, fading out as the zoom gets small.
 - **Signals pane.** Thin lane separators and gridlines; a gradient under
