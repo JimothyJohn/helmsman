@@ -851,6 +851,7 @@ impl BoxView {
         });
         match started {
             Some(Ok(ask)) => {
+                self.history_at = None;
                 let message = format!("{}\n\n{}", crate::instruct::BOX_RULES, ask.message);
                 self.agent_send(&message, true, ctx);
             }
@@ -1654,7 +1655,7 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
             decided: self.decided.clone(),
-            steps: self.revision_steps(),
+            steps: self.exchange_steps(),
             room_below: None,
             progress: None,
             // The question card is the page's for now (TODO.md
@@ -1723,7 +1724,8 @@ impl BoxView {
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
             Some(Act::Offer(k)) => self.take_offer(k, &ctx),
-            Some(Act::Revision(n) | Act::Details(n)) => self.show_revision(n),
+            Some(Act::Revision(n)) => self.step_to(n),
+            Some(Act::Details(n)) => self.show_revision(n),
             Some(Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
     }
@@ -1753,7 +1755,83 @@ impl BoxView {
         Some(crate::instruct::Steps {
             back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
             forward: tip(k + 1, "Forward"),
+            shown: None,
         })
+    }
+
+    /// The Agent tab's arrows: through the revisions that carry an
+    /// exchange, newest last; past the newest the tab is live again.
+    /// `None` while an answer is under way and while there is no exchange.
+    fn exchange_steps(&self) -> Option<crate::instruct::Steps> {
+        let ex: Vec<&crate::history_ui::RevisionRow> =
+            self.projects.history.iter().filter(|r| r.page).collect();
+        if ex.is_empty() || self.instruct.busy() {
+            return None;
+        }
+        let k = self.history_at.and_then(|n| ex.iter().position(|r| r.n == n));
+        let tip = |r: &crate::history_ui::RevisionRow, way: &str| {
+            (
+                r.n,
+                format!(
+                    "{way}: the instruction and the answer of revision {}, {}.",
+                    r.n, r.what
+                ),
+            )
+        };
+        let back = match k {
+            Some(0) => None,
+            Some(j) => Some(tip(ex[j - 1], "Back")),
+            None => Some(tip(ex[ex.len() - 1], "Back")),
+        };
+        let forward = k.map(|j| {
+            ex.get(j + 1).map_or_else(
+                || {
+                    (
+                        crate::instruct::LIVE,
+                        "Forward: back to the box as you left it.".to_string(),
+                    )
+                },
+                |r| tip(r, "Forward"),
+            )
+        });
+        Some(crate::instruct::Steps {
+            back,
+            forward,
+            shown: k.map(|j| ex[j].n),
+        })
+    }
+
+    /// The Agent tab at revision `n`: its instruction in the box and its
+    /// answer under it, as when it was sent ([`crate::instruct::Instruct::show_step`]); the
+    /// page was read with the history. [`crate::instruct::LIVE`] is the
+    /// tab as the engineer left it. Nothing on the box changes.
+    fn step_to(&mut self, n: u32) {
+        if n == crate::instruct::LIVE {
+            self.history_at = None;
+            self.instruct.leave_steps();
+            return;
+        }
+        let Some(what) = self
+            .projects
+            .history
+            .iter()
+            .find(|r| r.n == n)
+            .map(|r| r.what.clone())
+        else {
+            return;
+        };
+        self.history_at = Some(n);
+        let page = self.projects.pages.get(&n).cloned();
+        self.instruct.show_step(page.as_deref(), &what);
+    }
+
+    /// H: into the Agent tab's history, at the newest exchange.
+    pub fn open_history(&mut self) {
+        if self.history_at.is_none()
+            && let Some((n, _)) = self.exchange_steps().and_then(|s| s.back)
+        {
+            self.step_to(n);
+        }
     }
 
     /// The project's versions for the clock's list, in the Agent tab and
@@ -2962,6 +3040,10 @@ impl Workspace for BoxView {
         }
         self.projects.release(None);
         true
+    }
+
+    fn go_history(&mut self) {
+        self.open_history();
     }
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {

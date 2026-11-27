@@ -1075,6 +1075,9 @@ pub trait Workspace {
     /// Sends the ST editor to the declaration of the picked block's
     /// variable (Go to definition); whether there was one.
     fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool;
+    /// H: the Describe tab's history, at the newest revision with an
+    /// exchange (as Back from the live tab).
+    fn go_history(&mut self) {}
     /// Lights every read and write of the picked block's variable on the
     /// diagram (Cross references); whether there was one.
     fn cross_references(&mut self) -> bool;

@@ -40,6 +40,7 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | F | The Files tab |  |
 | A | The Messages, the bottom panel's tab beside the Trend |  |
 | T | The trend along the bottom |  |
+| H | The Describe tab's history: the newest instruction and its answer, then Back and Forward |  |
 | Alt ↑ | Up one level in the diagram | |
 | . , | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (with the pointer over the diagram) | |
 

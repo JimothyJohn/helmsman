@@ -95,6 +95,8 @@ pub enum Action {
     Monitor,
     /// The box's Proposals screen.
     Proposals,
+    /// The Describe tab, in its history: the newest instruction and answer.
+    History,
 }
 
 /// One shortcut: the action, its keys and the CODESYS command the keys
@@ -236,6 +238,8 @@ pub const TABLE: &[Hotkey] = &[
     view(Action::Files, Key::F),
     view(Action::Messages, Key::A),
     view(Action::Trend, Key::T),
+    // Not a view: the Describe tab's history (H for history).
+    view(Action::History, Key::H),
 ];
 
 /// Every view a user switches to, in the order the letters were given out
@@ -517,6 +521,9 @@ const fn does(action: Action) -> &'static str {
         Action::Editor => "The Editor screen; on the Editor it flips to the Monitor",
         Action::Monitor => "The Monitor screen; on the Monitor it flips to the Editor",
         Action::Proposals => "The box's Proposals screen",
+        Action::History => {
+            "The Describe tab's history: the newest instruction and its answer, then Back and Forward"
+        }
         Action::Restart | Action::Upload | Action::Download => "",
     }
 }
