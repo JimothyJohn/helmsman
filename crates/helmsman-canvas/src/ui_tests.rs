@@ -891,10 +891,11 @@ mod glyphs_and_help {
             (left - crate::editor::LEFT_W).abs() <= 16.0,
             "the left pane at its default width: {left}"
         );
-        // Nick, 2026-11-26: the left pane opens 384 pt wide (was 320).
+        // Nick, 2026-11-26: the left pane opens 307 pt wide (384 that
+        // morning, then 20% narrower).
         assert!(
-            (left - 384.0).abs() <= 16.0,
-            "the left pane opens 384 pt wide: {left}"
+            (crate::editor::LEFT_W - 307.0).abs() < 0.5 && (left - 307.0).abs() <= 16.0,
+            "the left pane opens 307 pt wide: {left}"
         );
     }
 
@@ -921,8 +922,14 @@ mod glyphs_and_help {
         let mut h = Harness::blink();
         h.press("monitor");
         h.wait(0.3);
-        let (status, outputs) = (h.rect("status blink"), h.rect("outputs blink/"));
-        assert!((status.top() - outputs.top()).abs() < 1.0, "one row");
+        // The status card went to the header (2026-11-26): the outputs'
+        // tile alone takes the row, edge to edge.
+        assert!(!h.has("status blink"), "no status card");
+        let outputs = h.rect("outputs blink/");
+        assert!(
+            outputs.left() < h.size.x * 0.05,
+            "from the left edge: {outputs:?}"
+        );
         assert!(
             outputs.right() > h.size.x * 0.9,
             "the row reaches the right edge: {outputs:?}"
@@ -2037,26 +2044,70 @@ END_PROGRAM",
             h.app.sim.as_ref().unwrap().session.running,
             "the second change runs at once too"
         );
-        let enabled = |h: &mut Harness, key: &str| {
-            let before = main(h);
-            h.press(key);
-            h.wait(0.2);
-            main(h) != before
-        };
-        assert!(!enabled(&mut h, "agent forward"), "the newest is the last step");
-        assert!(enabled(&mut h, "agent back"));
-        assert_eq!(main(&h), new, "back one: the first change");
+        // Nick, 2026-11-26: Back and Forward step through the Describe
+        // exchanges: each puts its prompt in the field as if typed and its
+        // answer under it, and runs that version; Forward past the newest
+        // is the live state with the unsent draft back. The (i) between
+        // the arrows opens the detailed popup of the one shown.
+        let draft = |h: &Harness| h.app.sim.as_ref().unwrap().instruct.draft.clone();
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("make it blink".into())]);
+        h.wait(0.2);
+        assert_eq!(draft(&h), "make it blink", "an unsent draft");
+        {
+            let [back, info, forward] = ["agent back", "agent info", "agent forward"].map(|k| h.rect(k));
+            assert!(
+                back.right() <= info.left() + 1.0 && info.right() <= forward.left() + 1.0,
+                "the (i) between the arrows: {back:?} {info:?} {forward:?}"
+            );
+        }
+        h.press("agent back");
+        h.wait(0.3);
+        assert_eq!(
+            draft(&h),
+            "reword it",
+            "the newest exchange's prompt, as if typed"
+        );
+        assert_eq!(main(&h), newer);
+        assert!(h.drew("shorter"), "its answer under it");
+        h.press("agent back");
+        h.wait(0.3);
+        assert_eq!(draft(&h), "comment it", "the one before");
+        assert_eq!(main(&h), new, "that version runs");
+        assert!(h.drew("it says why the lamp is on"), "its answer");
         assert!(h.app.sim.as_ref().unwrap().session.running);
         assert!(
             h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
             "each step is marked with what it changed"
         );
-        assert!(enabled(&mut h, "agent back"));
-        assert_eq!(main(&h), LAMP, "back two: before the Agent");
-        // And forward again, as often as wanted.
-        assert!(enabled(&mut h, "agent forward"));
+        assert!(
+            h.app.sim.as_ref().unwrap().sim_popup.is_none(),
+            "no popup from a step"
+        );
+        // The oldest exchange is as far back as it goes.
+        h.press("agent back");
+        h.wait(0.3);
+        assert_eq!(draft(&h), "comment it");
         assert_eq!(main(&h), new);
-        assert!(enabled(&mut h, "agent forward"));
+        // The (i): the revision popup of the one shown.
+        h.press("agent info");
+        h.wait(0.3);
+        assert!(h.has("revision form"), "the detailed popup opens");
+        h.press("revision close");
+        h.wait(0.3);
+        assert!(!h.has("revision form"));
+        assert_eq!(main(&h), new, "closing it changed nothing");
+        // And forward again, to the newest, then the live state.
+        h.press("agent forward");
+        h.wait(0.3);
+        assert_eq!((draft(&h).as_str(), main(&h) == newer), ("reword it", true));
+        h.press("agent forward");
+        h.wait(0.3);
+        assert_eq!(
+            draft(&h),
+            "make it blink",
+            "past the newest: the unsent draft is back"
+        );
         assert_eq!(main(&h), newer);
         assert!(h.has("agent back"), "the arrows stay at the newest");
         // An edit ends the steps: the file is the engineer's again.
@@ -3446,11 +3497,11 @@ mod chrome {
     }
 
     /// Nick, 2026-11-26: the Devices tab has no Advanced tick box. The
-    /// blank space's menu always offers New device… and Import device…,
-    /// and a + under the devices opens the New device form. A browser that
-    /// saved Advanced on still restores it.
+    /// blank space's menu always offers New device… and Import device…;
+    /// under the devices is Scan for Device, no + (docs/help/editor.md). A
+    /// browser that saved Advanced on still restores it.
     #[test]
-    fn the_blank_space_menu_and_the_plus_offer_a_new_device_with_no_advanced() {
+    fn the_blank_space_menu_offers_a_new_device_with_no_advanced_and_no_plus() {
         use crate::editor::Chrome;
         let mut h = Harness::new(App::sim());
         h.app.sim.as_mut().unwrap().proj.create("mine", None);
@@ -3459,13 +3510,14 @@ mod chrome {
         assert!(!h.app.chrome.advanced);
         for gone in [
             "devices advanced",
-            "devices scan",
+            "devices add",
             "devices scan add",
             "devices ask",
             "devices open map",
         ] {
             assert!(!h.has(gone), "{gone} is gone");
         }
+        assert!(h.has("devices scan"), "Scan for Device under the list");
         for gone in ["Advanced", "On the network", "I/O wiring"] {
             assert!(!super::all_text(&mut h).contains(gone), "{gone:?} is gone");
         }
@@ -3478,15 +3530,11 @@ mod chrome {
         h.press("menu new device");
         h.wait(0.2);
         assert!(h.has("device form"), "New device… opens the form");
-        h.press("device cancel");
-        h.wait(0.2);
-        assert!(!h.has("device form"));
-        h.press("devices add");
-        h.wait(0.2);
-        assert!(h.has("device form"), "+ opens the form");
         let d = h.app.sim.as_ref().unwrap().devices_ui.adding.clone().unwrap();
         assert!(d.editing.is_none() && d.name.is_empty(), "a new device, blank");
         h.press("device cancel");
+        h.wait(0.2);
+        assert!(!h.has("device form"));
         h.wait(0.2);
         assert!(
             Chrome::restored("left=1 advanced=1").advanced,
@@ -3588,7 +3636,7 @@ mod chrome {
             "a tab"
         );
         assert_eq!(
-            hover(&mut h, "devices add"),
+            hover(&mut h, "devices scan"),
             egui::CursorIcon::PointingHand,
             "a button"
         );
@@ -5974,7 +6022,8 @@ mod boxed {
         h.frame(vec![]);
         h.press("tab claude");
         h.frame(vec![]);
-        assert!(h.has("agent status") && h.has("agent instruction"));
+        assert!(h.has("agent instruction"));
+        assert!(!h.has("agent status"), "no status dot row (2026-11-26)");
 
         h.app.boxv.as_mut().unwrap().instruct.draft = "why does the conveyor stop?".into();
         h.frame(vec![]);
@@ -6186,12 +6235,12 @@ mod boxed {
         kept(&h, "back to Describe");
     }
 
-    /// Nick, 2026-11-26: on a box the Agent (Describe) tab's heading is
-    /// the agent's status dot alone, at the right: no mode toggle and no
-    /// title. What follows it (the instruction, Send, Deploy) comes right
-    /// under it, on the page.
+    /// Nick, 2026-11-26: on a box the Agent (Describe) tab has no heading
+    /// at all: no mode toggle, no title, and no status dot row (whether
+    /// the answer service can be reached shows on Send). The instruction,
+    /// Send and Deploy come first, on the page.
     #[test]
-    fn on_a_box_the_agent_heading_is_the_status_dot_alone_and_the_field_follows_it() {
+    fn on_a_box_the_agent_tab_has_no_heading_and_the_field_comes_first() {
         for docked_right in [false, true] {
             let mut h = Harness::new(App::boxed());
             if docked_right {
@@ -6200,26 +6249,24 @@ mod boxed {
             h.wait(0.3);
             h.press("tab claude");
             h.wait(0.2);
-            for gone in ["agent mode help", "agent mode code"] {
-                assert!(!h.has(gone), "{gone} is gone");
+            for gone in ["agent mode help", "agent mode code", "agent status"] {
+                assert!(!h.has(gone), "docked right={docked_right}: {gone} is gone");
             }
             assert!(!h.drew("Change the program") && !h.drew("Get help"), "no title");
-            let (tab, dot) = (h.rect("agent tab"), h.rect("agent status"));
-            assert!(
-                tab.right() - dot.right() < 40.0,
-                "docked right={docked_right}: the dot {dot:?} at the right of {tab:?}"
-            );
+            let tab = h.rect("agent tab");
             for k in ["agent instruction", "agent send", "agent deploy"] {
                 let r = h.rect(k);
                 assert!(
-                    r.bottom() <= h.size.y && r.top() >= dot.top(),
-                    "docked right={docked_right}: {k} {r:?} on the page, under the dot {dot:?}"
+                    r.bottom() <= h.size.y && tab.contains_rect(r),
+                    "docked right={docked_right}: {k} {r:?} on the page, in {tab:?}"
                 );
             }
+            // First under the pane's row of tab glyphs.
+            let tabs = h.rect(if docked_right { "tabs right" } else { "tabs left" });
             let field = h.rect("agent instruction");
             assert!(
-                field.top() - dot.bottom() < 40.0,
-                "docked right={docked_right}: the field {field:?} right under the heading {dot:?}"
+                field.top() >= tabs.bottom() && field.top() - tabs.bottom() < 30.0,
+                "docked right={docked_right}: the field {field:?} first under the tabs {tabs:?}"
             );
         }
     }
@@ -7440,83 +7487,65 @@ mod tour {
     }
 }
 
-/// The outputs as lamps in the diagram's corner (`lamps`; Nick,
-/// 2026-11-12: the first screen should show itself without words).
+/// The lamp fixture in the diagram's corner was removed (Nick, 2026-11-26:
+/// "the I/O tab shows the same"): no traffic light and no pilot lamps are
+/// painted over the diagram, on the page's first screen or on Blink.
 mod lamps {
-    use eframe::egui::{Color32, Pos2, Shape};
+    use eframe::egui::{Pos2, Shape};
 
     use super::Harness;
     use crate::app::App;
-    use crate::st_view::brand::{GREEN, RED, YELLOW};
 
-    /// The circles of radius `r` the last frame drew inside the diagram,
-    /// top to bottom: centre and fill.
-    fn lamps(h: &Harness, r: f32) -> Vec<(Pos2, Color32)> {
-        fn walk(s: &Shape, r: f32, out: &mut Vec<(Pos2, Color32)>) {
+    /// The filled circles the last frame drew inside the diagram's
+    /// bottom-right quarter, with their radius.
+    fn corner_circles(h: &Harness) -> Vec<(Pos2, f32)> {
+        fn walk(s: &Shape, out: &mut Vec<(Pos2, f32)>) {
             match s {
-                Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
-                Shape::Circle(c) if (c.radius - r).abs() < 0.01 => out.push((c.center, c.fill)),
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                Shape::Circle(c) if c.fill.a() > 0 => out.push((c.center, c.radius)),
                 _ => {}
             }
         }
         let area = h.app.chrome.diagram;
         let mut out = Vec::new();
         for c in &h.shapes {
-            walk(&c.shape, r, &mut out);
+            walk(&c.shape, &mut out);
         }
-        out.retain(|(c, _)| area.contains(*c));
-        out.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
+        out.retain(|(c, _)| area.contains(*c) && c.x > area.center().x && c.y > area.center().y);
         out
     }
 
     #[test]
-    fn the_page_opens_on_the_traffic_light_lit_in_the_diagrams_corner() {
+    fn the_traffic_light_runs_with_no_lamps_in_the_diagrams_corner() {
         let mut h = Harness::new(App::sim());
         h.wait(0.5);
         let sim = h.app.sim.as_ref().unwrap();
         assert_eq!(sim.title(), "traffic");
         assert!(sim.session.running);
-        let area = h.app.chrome.diagram;
-        let l = lamps(&h, 15.0);
-        assert_eq!(l.len(), 3, "red over yellow over green: {l:?}");
-        assert!(
-            l.iter()
-                .all(|(c, _)| c.x > area.center().x && c.y > area.center().y),
-            "in the bottom-right corner of {area:?}: {l:?}"
-        );
-        assert!(
-            l.iter().all(|(c, _)| (c.x - l[0].0.x).abs() < 0.01),
-            "one column: {l:?}"
-        );
-        // Green holds the first 3 s: full colour; the other two nearly out.
-        assert_eq!(l[2].1, GREEN, "{l:?}");
-        assert_ne!(l[0].1, RED, "{l:?}");
-        assert_ne!(l[1].1, YELLOW, "{l:?}");
-        // Then one second of yellow, then red.
-        h.wait(3.0);
-        let l = lamps(&h, 15.0);
-        assert_eq!(l[1].1, YELLOW, "{l:?}");
-        assert_ne!(l[2].1, GREEN, "{l:?}");
-        h.wait(1.5);
-        let l = lamps(&h, 15.0);
-        assert_eq!(l[0].1, RED, "{l:?}");
-        assert_ne!(l[1].1, YELLOW, "{l:?}");
+        // Through a whole green, yellow and red: never a lamp of the old
+        // fixture's sizes (15 pt traffic, 11 pt pilot).
+        for _ in 0..5 {
+            let lamps: Vec<_> = corner_circles(&h)
+                .into_iter()
+                .filter(|(_, r)| (r - 15.0).abs() < 0.01 || (r - 11.0).abs() < 0.01)
+                .collect();
+            assert!(lamps.is_empty(), "a lamp in the corner: {lamps:?}");
+            h.wait(1.0);
+        }
     }
 
     #[test]
-    fn any_other_bool_output_is_a_pilot_lamp_with_its_name() {
+    fn blinks_lamp_output_is_not_painted_over_the_diagram() {
         let mut h = Harness::blink();
         h.wait(0.3);
-        let l = lamps(&h, 11.0);
-        assert_eq!(l.len(), 1, "Blink's one lamp: {l:?}");
-        assert!(h.drew("lamp"), "named under it");
-        // It blinks: on at full brand yellow within a period.
-        let mut seen_on = false;
-        for _ in 0..40 {
+        for _ in 0..20 {
             h.wait(0.05);
-            seen_on |= lamps(&h, 11.0).first().is_some_and(|(_, c)| *c == YELLOW);
+            let lamps: Vec<_> = corner_circles(&h)
+                .into_iter()
+                .filter(|(_, r)| (r - 11.0).abs() < 0.01)
+                .collect();
+            assert!(lamps.is_empty(), "a pilot lamp in the corner: {lamps:?}");
         }
-        assert!(seen_on);
     }
 }
 
@@ -8011,6 +8040,9 @@ mod layouts;
 mod multi_select;
 mod outputs;
 mod proposal;
+mod ribbon;
+mod scan_device;
+mod send_states;
 mod shell;
 mod sim_points;
 mod sim_popup;

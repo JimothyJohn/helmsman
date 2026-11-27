@@ -3,8 +3,10 @@
 //! the error with context to the help agent that will be a new question
 //! mark tab similar to the programming agent. I don't want to conflate the
 //! 2 contexts." and "I couldn't highlight the text"): every error shown is
-//! selectable text and a link; a click opens the ? tab (key L) and asks
-//! about that error; the Help conversation and the Describe one never mix.
+//! selectable text and a link; a click opens the ? tab (key ?, Shift and
+//! the question mark, since 2026-11-26; L before, which is now the Log)
+//! and asks about that error; the Help conversation and the Describe one
+//! never mix.
 
 use eframe::egui::{Event, Key, Modifiers, PointerButton, Pos2};
 use serde_json::Value as Json;
@@ -46,7 +48,7 @@ fn click_link(h: &mut Harness, key: &str) {
 
 /// `main.st` in the open project, open in the Code tab: what a Describe
 /// instruction changes.
-fn with_program(h: &mut Harness) {
+pub(super) fn with_program(h: &mut Harness) {
     let o = h.app.boxv.as_mut().unwrap().projects.open.as_mut().unwrap();
     o.bufs.insert("main.st".into(), buf(crate::verify_tests::LAMP));
     o.current = Some("main.st".into());
@@ -67,12 +69,19 @@ fn with_error(text: &str) -> Harness {
 }
 
 #[test]
-fn the_help_tab_is_a_question_mark_on_a_box_its_key_is_l_and_the_simulation_has_none() {
+fn the_help_tab_is_a_question_mark_on_a_box_its_key_is_the_question_mark_and_the_simulation_has_none() {
     let mut h = open("engineer");
     assert!(h.has("tab help"), "the ? tab on a box");
+    // L is the Log's now (Nick, 2026-11-26): it shows no Help.
+    h.app.chrome.trend = false;
+    h.wait(0.2);
     h.key(Modifiers::NONE, Key::L);
     h.wait(0.2);
-    assert!(h.app.chrome.showing(Pane::Help), "L shows Help");
+    assert!(!h.app.chrome.showing(Pane::Help), "L shows the Log, not Help");
+    assert!(h.app.chrome.trend && h.app.chrome.msgs, "L opened the Log");
+    h.key(Modifiers::SHIFT, Key::Questionmark);
+    h.wait(0.2);
+    assert!(h.app.chrome.showing(Pane::Help), "? shows Help");
     assert!(h.has("help question") && h.has("help ask"));
     let t = all_text(&mut h);
     for word in ["agent", "Agent"] {
@@ -86,6 +95,14 @@ fn the_help_tab_is_a_question_mark_on_a_box_its_key_is_l_and_the_simulation_has_
     let mut s = Harness::new(App::sim());
     s.wait(0.2);
     assert!(!s.has("tab help"), "the simulation has no Help to ask");
+    let before = s.app.chrome.saved();
+    s.key(Modifiers::SHIFT, Key::Questionmark);
+    s.wait(0.2);
+    assert_eq!(
+        s.app.chrome.saved(),
+        before,
+        "? on the simulation changes nothing"
+    );
 }
 
 #[test]
@@ -278,7 +295,7 @@ fn what_describe_was_told_never_reaches_help() {
     let ctx = h.ctx.clone();
     h.app.boxv.as_mut().unwrap().send_instruction(&ctx);
     assert_eq!(h.app.boxv.as_ref().unwrap().chat_sent.len(), 1);
-    h.key(Modifiers::NONE, Key::L);
+    h.key(Modifiers::SHIFT, Key::Questionmark);
     h.wait(0.2);
     h.app.boxv.as_mut().unwrap().help.draft = "Why is the lamp off?".into();
     h.frame(vec![]);
@@ -291,4 +308,63 @@ fn what_describe_was_told_never_reaches_help() {
         !body.contains("DESCRIBED"),
         "Describe's words reached Help: {body}"
     );
+}
+
+/// Nick, 2026-11-26: Help's answers are rendered as Markdown (a bold
+/// headline and a short numbered list of what to check, docs/help/agent.md):
+/// no asterisks, backticks or list markers are drawn as text.
+#[test]
+fn help_answers_are_rendered_as_markdown() {
+    use crate::box_agent::Incoming;
+    use serde_json::json;
+    let mut h = open("engineer");
+    let _ = sent(&mut h);
+    h.key(Modifiers::SHIFT, Key::Questionmark);
+    h.wait(0.2);
+    h.app.boxv.as_mut().unwrap().help.draft = "The conveyor stopped.".into();
+    h.frame(vec![]);
+    h.press("help ask");
+    h.wait(0.2);
+    let seq = h.app.boxv.as_ref().unwrap().help_sent[0].seq;
+    let diagnosis = "**The remote I/O module rio is not answering.**\n\n1. Check its power.\n2. Check the network cable to `rio`.\n\nThen ask again.";
+    let issue = json!({
+        "by": "agent", "title": "Conveyor stops when rio drops",
+        "diagnosis": diagnosis,
+        "markdown": "# Conveyor stops when rio drops\n",
+    });
+    let stream = format!(
+        "event: help\ndata: {{\"context\":{{}}}}\n\nevent: issue\ndata: {issue}\n\nevent: done\ndata: {{\"stop\":\"end_turn\",\"why\":null,\"steps\":2,\"output_tokens\":9}}\n\n"
+    );
+    let b = h.app.boxv.as_mut().unwrap();
+    b.help_answer(Incoming::Chunk { seq, text: stream });
+    b.help_answer(Incoming::End { seq });
+    h.wait(0.3);
+    assert!(h.has("help diagnosis"), "the diagnosis is shown");
+    let area = h.rect("help diagnosis");
+    let drawn: Vec<String> = {
+        fn walk(s: &eframe::egui::Shape, area: eframe::egui::Rect, out: &mut Vec<String>) {
+            match s {
+                eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+                eframe::egui::Shape::Text(t) if area.expand(4.0).contains(t.pos) => {
+                    out.push(t.galley.job.text.clone())
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in &h.shapes {
+            walk(&c.shape, area, &mut out);
+        }
+        out
+    };
+    let all = drawn.join("\n");
+    assert!(
+        all.contains("The remote I/O module rio is not answering."),
+        "the headline: {all:?}"
+    );
+    assert!(all.contains("Check its power."), "the list: {all:?}");
+    assert!(all.contains("Then ask again."), "{all:?}");
+    for raw in ["**", "`rio`", "1. Check", "2. Check"] {
+        assert!(!all.contains(raw), "{raw:?} drawn as text, not rendered: {all:?}");
+    }
 }

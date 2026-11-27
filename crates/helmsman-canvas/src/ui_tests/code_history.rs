@@ -241,12 +241,108 @@ fn walk_the_arrows(tab: &str, back: &str, forward: &str) {
     assert!(!moves(&mut h, forward));
 }
 
+/// The Describe tab's arrows step through its exchanges (Nick,
+/// 2026-11-26): Back from the live state shows the newest exchange (its
+/// prompt in the field, the file as it left it), Back again the one before,
+/// as far as the first; Forward past the newest is the live state again.
+/// A save by hand is no exchange: the arrows do not reach it.
 #[test]
-fn agent_back_is_left_of_forward_and_steps_to_the_older_version() {
-    walk_the_arrows("claude", "agent back", "agent forward");
+fn agent_back_is_left_of_forward_and_steps_through_the_exchanges() {
+    let (mut h, first, second) = two_changes("claude");
+    let (back, forward) = ("agent back", "agent forward");
+    let draft = |h: &Harness| h.app.sim.as_ref().unwrap().instruct.draft.clone();
+    assert!(h.has(back) && h.has(forward), "the arrows are there");
+    assert!(
+        h.rect(back).right() <= h.rect(forward).left() + 1.0,
+        "left is older: {:?} {:?}",
+        h.rect(back),
+        h.rect(forward)
+    );
+    assert!(!moves(&mut h, forward), "forward at the live state does nothing");
+    assert_eq!((draft(&h).as_str(), main_st(&h) == second), ("", true));
+    assert!(
+        !moves(&mut h, back),
+        "back first shows the newest exchange: its file is the live one"
+    );
+    assert_eq!(draft(&h), "reword it", "its prompt, as if typed");
+    assert!(moves(&mut h, back));
+    assert_eq!(main_st(&h), first, "back shows the exchange before");
+    assert_eq!(draft(&h), "comment it");
+    assert!(!moves(&mut h, back), "the first exchange is as far as it goes");
+    assert_ne!(main_st(&h), LAMP, "the save by hand is no exchange");
+    assert!(moves(&mut h, forward));
+    assert_eq!((draft(&h).as_str(), main_st(&h) == second), ("reword it", true));
+    assert!(!moves(&mut h, forward), "past the newest: the live state");
+    assert_eq!(draft(&h), "", "with the draft as it was");
+    assert_eq!(main_st(&h), second);
+}
+
+/// An edit of one's own is never lost to the arrows (docs/help/agent.md:
+/// "an edit of your own puts the arrows away"): after an unsaved edit by
+/// hand, either the arrows are gone or stepping back and forward again
+/// brings the edit back.
+#[test]
+fn an_unsaved_edit_by_hand_is_not_lost_to_the_describe_arrows() {
+    let (mut h, _first, second) = two_changes("claude");
+    let edited = format!("{second}(* mine *)\n");
+    h.app
+        .sim
+        .as_mut()
+        .unwrap()
+        .proj
+        .files
+        .insert("main.st".into(), edited.clone());
+    h.wait(0.3);
+    assert!(h.app.sim.as_ref().unwrap().proj.dirty(), "an unsaved edit");
+    if h.has("agent back") {
+        h.press("agent back");
+        h.wait(0.3);
+        h.press("agent back");
+        h.wait(0.3);
+        for _ in 0..3 {
+            if h.has("agent forward") {
+                h.press("agent forward");
+                h.wait(0.3);
+            }
+        }
+        assert_eq!(
+            main_st(&h),
+            edited,
+            "back and forward again lost the unsaved edit"
+        );
+    }
 }
 
 #[test]
 fn code_back_is_left_of_forward_and_steps_to_the_older_version() {
     walk_the_arrows("code", "code back", "code forward");
+}
+
+/// H opens the Agent tab on the newest exchange (Nick, 2026-11-26): its
+/// prompt in the field and its answer under it; Back goes on from there.
+#[test]
+fn h_opens_the_describe_tab_on_the_newest_exchange() {
+    use eframe::egui::{Key, Modifiers};
+    let (mut h, first, second) = two_changes("claude");
+    // The Agent tab back in the left pane, behind the Files.
+    h.app.chrome.dock(crate::editor::Pane::Claude, false);
+    h.app.chrome.show(crate::editor::Pane::Files);
+    h.wait(0.3);
+    assert!(!h.app.chrome.showing(crate::editor::Pane::Claude));
+    h.key(Modifiers::NONE, Key::H);
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.showing(crate::editor::Pane::Claude),
+        "H shows the Agent tab"
+    );
+    assert_eq!(
+        h.app.sim.as_ref().unwrap().instruct.draft,
+        "reword it",
+        "the newest exchange"
+    );
+    assert_eq!(main_st(&h), second, "the newest is the live file");
+    h.press("agent back");
+    h.wait(0.3);
+    assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "comment it");
+    assert_eq!(main_st(&h), first);
 }

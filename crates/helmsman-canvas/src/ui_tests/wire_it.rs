@@ -147,8 +147,15 @@ fn set(h: &mut Harness, name: &str, v: Value) {
     h.frame(vec![]);
 }
 
+/// Opens the walkthrough on `device`. Its button is off until the
+/// walkthrough works (Nick, 2026-11-26), so the window is opened as the
+/// button did; the window itself is what these tests hold.
 fn open(h: &mut Harness, device: &str) {
-    h.press(&format!("wire it {device}"));
+    if h.app.boxv.is_some() {
+        box_ui(h).open_wire_it(device);
+    } else {
+        sim_ui(h).open_wire_it(device);
+    }
     h.wait(0.3);
     assert!(h.has("wire form"), "the window opens");
 }
@@ -182,26 +189,51 @@ fn drew_control(h: &Harness) -> bool {
 // ---- the button -------------------------------------------------------
 
 #[test]
-fn each_declared_device_has_one_wire_it_button_inside_the_pane() {
+/// Nick, 2026-11-26: the Devices tab's Wire it button is off until the
+/// walkthrough works, on the simulation and on a box page alike.
+fn no_device_has_a_wire_it_button_while_the_walkthrough_is_off() {
     let mut h = playground(MAP);
-    let left = h.rect("left").right();
+    assert!(
+        h.has("device rio") && h.has("device rio2"),
+        "the devices are listed"
+    );
     for d in ["rio", "rio2"] {
-        assert!(h.has(&format!("wire it {d}")), "a button for {d}");
-        let r = h.rect(&format!("wire it {d}"));
-        assert!(
-            r.left() >= 0.0 && r.right() <= left + 1.0,
-            "{d}: {r:?} beyond the pane at {left}"
-        );
+        assert!(!h.has(&format!("wire it {d}")), "no Wire it for {d}");
     }
-    assert!(!h.has("wire it rio3"));
-    assert!(!h.has("wire form"), "closed until asked");
-    // Open and closed again it leaves the map alone.
+    assert!(!h.drew("Wire it"), "no Wire it anywhere on the tab");
+    assert!(!h.has("wire form"), "nothing opens it");
+    // The window, opened as the button did, still closes and leaves the
+    // map alone.
+    let map = h
+        .app
+        .sim
+        .as_ref()
+        .unwrap()
+        .proj
+        .files
+        .get(helmsman_project::IO_MAP)
+        .cloned();
     open(&mut h, "rio");
     h.press("wire done");
     h.wait(0.2);
     assert!(!h.has("wire form"));
+    assert_eq!(
+        h.app
+            .sim
+            .as_ref()
+            .unwrap()
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned(),
+        map
+    );
     let b = boxpage();
-    assert!(b.has("wire it rio") && b.has("wire it rio2"), "on a box page too");
+    assert!(b.has("device rio"), "the box page lists the device");
+    assert!(
+        !b.has("wire it rio") && !b.has("wire it rio2"),
+        "none on a box page"
+    );
 }
 
 // ---- which steps, in what order ---------------------------------------

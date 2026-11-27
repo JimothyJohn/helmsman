@@ -1797,30 +1797,6 @@ impl Viewer {
         self.module.program().is_some_and(|p| p.vars.contains_key(&head))
     }
 
-    /// Program paths the outputs list offers: located outputs and
-    /// `VAR_OUTPUT`s of the program, in source order of first assignment.
-    // 2026-11-26: only tests use it since the lamp fixture went; the tester
-    // drops it with them.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[must_use]
-    pub fn outputs(&self) -> Vec<String> {
-        let Some(p) = self.module.program() else {
-            return Vec::new();
-        };
-        let mut out: Vec<String> = Vec::new();
-        for n in &p.diagram.nodes {
-            if let NodeKind::Write { path } = &n.kind
-                && p.vars
-                    .get(path)
-                    .is_some_and(|v| v.located || v.section == helmsman_iec::ast::Section::Output)
-                && !out.contains(path)
-            {
-                out.push(path.clone());
-            }
-        }
-        out
-    }
-
     /// One card per output of the program: its `VAR_OUTPUT`s (assigned or
     /// not) and the located outputs it assigns, in declaration order, each
     /// with the signals it finally depends on.
@@ -2869,15 +2845,6 @@ impl Viewer {
             );
         }
         self.corner_controls(ui, area, corner);
-    }
-
-    // 2026-11-26: the lamp fixture is no longer drawn; only tests use it,
-    // the tester drops it with them.
-    #[cfg(test)]
-    fn fixture(&self, scan: Option<&dyn Scan>) -> Option<crate::lamps::Fixture> {
-        let scan = scan.filter(|_| self.scopes[self.scope].prefix.is_empty())?;
-        let outs = self.outputs();
-        crate::lamps::fixture(outs.iter().map(|p| (p.as_str(), scan.get(p))))
     }
 
     /// Where the pan, zoom in, zoom out and fit controls sit: the bottom-right
@@ -4515,8 +4482,9 @@ END_PROGRAM
         h.click(h.at(&write("MOTOR")));
         h.frame(vec![]);
         let by_click = h.sv.view.highlighted().cloned().unwrap();
-        // Empty space clears it; pan far off, then tap the card.
-        h.click(Pos2::new(1190.0, 790.0));
+        // Empty space clears it (the bottom-left corner: the bottom-right
+        // holds the pan, zoom and fit glyphs); pan far off, then tap the card.
+        h.click(Pos2::new(10.0, 790.0));
         assert!(h.sv.view.highlighted().is_none());
         let zoom = h.sv.view.cams[0].zoom;
         h.sv.view.cams[0].offset += Vec2::new(-900.0, -300.0);
@@ -4626,9 +4594,10 @@ END_PROGRAM
         assert_eq!(h.sv.view.because.as_deref(), Some("OTHER"));
         assert_eq!(h.lit(), ["OTHER", "OTHER"]);
 
-        // Empty space, far from every block (the view's bottom-right
-        // corner: a fit leaves margins there): cleared, nothing dimmed.
-        let empty = Pos2::new(1190.0, 790.0);
+        // Empty space, far from every block (the view's bottom-left
+        // corner: a fit leaves margins there, and the bottom-right holds
+        // the pan, zoom and fit glyphs): cleared, nothing dimmed.
+        let empty = Pos2::new(10.0, 790.0);
         assert_eq!(
             h.sv.view.diagram().node_at(
                 h.sv.view.cams[h.sv.view.scope].to_world(empty).0,

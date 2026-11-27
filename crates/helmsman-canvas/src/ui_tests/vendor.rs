@@ -27,11 +27,23 @@ fn with_form(role: &str) -> Harness {
     h
 }
 
-/// The New device form, opened as a person does: the + under the devices
-/// (or, where the + is off for this role, the form as it was left open).
+/// The New device form, opened as a person does: New device… on the
+/// Devices tab's blank space (or, where that is off for this role, the
+/// form as it was left open).
 fn open_form(h: &mut Harness) {
-    if h.has("devices add") {
-        h.press("devices add");
+    if h.has("devices blank") {
+        h.right_click(h.rect("devices blank").center());
+        if h.has("menu new device") {
+            h.press("menu new device");
+        } else {
+            h.frame(vec![Event::Key {
+                key: eframe::egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: eframe::egui::Modifiers::NONE,
+            }]);
+        }
         h.wait(0.2);
     }
     if !h.has("device form") {
@@ -120,7 +132,7 @@ fn asked_with(h: &mut Harness, id: u64) -> String {
 const EDS: &[u8] = b"$ EZ-EDS\n[File]\n  DescText = \"Acme Rio\";\n";
 
 #[test]
-fn the_new_device_form_has_the_button_and_the_devices_tab_has_no_scan() {
+fn the_new_device_form_has_the_button_and_the_devices_tab_has_only_scan_for_device() {
     let mut h = with_form("engineer");
     let t = all_text(&mut h);
     assert!(t.contains("From the vendor's file…"), "{t}");
@@ -130,9 +142,10 @@ fn the_new_device_form_has_the_button_and_the_devices_tab_has_no_scan() {
     assert!(ui(&h).offer().is_ok());
     let (form, button) = (h.rect("device form"), h.rect("vendor file"));
     assert!(form.contains_rect(button), "{button:?} in the form {form:?}");
-    // Nick, 2026-11-26: no On the network, Scan, Ask or Advanced.
+    // Nick, 2026-11-26: no On the network, Scan and add, Ask or Advanced;
+    // Scan for Device under the list.
+    assert!(t.contains("Scan for Device"), "{t}");
     for gone in [
-        "devices scan",
         "devices scan add",
         "devices ask",
         "devices ask address",
@@ -365,13 +378,17 @@ fn the_simulation_has_no_agent_to_hand_a_file_to() {
     h.app.sim.as_mut().unwrap().proj.create("mine", None);
     h.press("pane devices");
     h.wait(0.3);
-    h.press("devices add");
+    h.right_click(h.rect("devices blank").center());
+    h.press("menu new device");
     h.wait(0.2);
     assert!(h.has("device form") && h.has("vendor file"));
     assert!(all_text(&mut h).contains("Reading a vendor's file needs a box. This page has none to ask."));
     press_button(&mut h);
     assert!(!h.app.sim.as_ref().unwrap().devices_ui.vendor.is_picking());
-    assert!(!h.has("devices scan"), "the simulation has no Scan either");
+    assert!(
+        h.has("devices scan"),
+        "the simulation has Scan for Device, with its simulated E1213"
+    );
 }
 
 #[test]

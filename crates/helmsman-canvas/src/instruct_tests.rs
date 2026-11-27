@@ -1306,7 +1306,7 @@ fn the_canvas_prompts_ask_for_the_nearest_thing_and_never_for_a_bare_refusal() {
 // ---- the arrows through the revisions (Nick, 2026-11-23) ----
 
 /// Stepping back and forward restores the prompt and the output of the
-/// step shown, and writes nothing to the Messages: an old version's
+/// step shown, and writes nothing to the Log: an old version's
 /// compile errors are not news, and the error count stays.
 #[test]
 fn the_arrows_restore_the_prompt_and_output_of_each_step_and_log_nothing() {
@@ -1351,10 +1351,12 @@ fn the_arrows_restore_the_prompt_and_output_of_each_step_and_log_nothing() {
         v.log.iter().map(|m| m.text.clone()).collect::<Vec<_>>()
     );
 
-    // What the engineer typed since is theirs: a step leaves it.
+    // Nick, 2026-11-26: a step puts that version's own prompt in the
+    // field as if typed, over what was typed since (which comes back with
+    // the live state, `ui_tests::code_history`): a plain save has none.
     v.instruct.draft = "now invert it".into();
     v.show_revision(broken);
-    assert_eq!(v.instruct.draft, "now invert it");
+    assert_eq!(v.instruct.draft, "", "the broken save's own prompt: none");
 }
 
 // ---- the history log and its summaries (history-in-context) ----
