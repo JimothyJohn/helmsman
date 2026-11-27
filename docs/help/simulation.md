@@ -27,7 +27,7 @@ Step runs to the next change. It scans until a value changes or the
 program takes another path through its statements, and shows that scan.
 A timer's elapsed time counting up does not count as a change, so a step
 lands on the scan where the timer's output turns on. If nothing changes in 60 seconds of program time, the step stops
-there and the Messages say so.
+there and the Log says so.
 
 <img src="img/monitor-stopped.png" alt="The Monitor's header with the program paused: run, stop, step and restart beside the crumbs." width="700">
 
@@ -40,7 +40,7 @@ Pick a block in the diagram and press <kbd>Shift</kbd> <kbd>F9</kbd> (or
 **Edit › Breakpoint**): a red dot marks it. The next scan that reaches
 the block stops just before it runs, the simulation stops with it, and
 the diagram and every value show the scan as it stood at that moment.
-The block is framed in orange and the Messages name its line. <kbd>F8</kbd> runs the rest of that scan.
+The block is framed in orange and the Log names its line. <kbd>F8</kbd> runs the rest of that scan.
 <kbd>Ctrl</kbd> <kbd>Enter</kbd> goes on to the next stop: the same
 block's next pass in a loop, another breakpoint, or the next scan. An
 input you change while stopped shows at once in what the diagram shows.
@@ -212,4 +212,4 @@ that colour, the same as its lamp.
 A program that divides by zero, runs past its watchdog, or writes an
 output out of range **faults**: it stops at the statement that did it,
 outputs go to their safe values, the state reads `faulted` in red and
-the Messages record what happened. Run or Step restarts it.
+the Log records what happened. Run or Step restarts it.

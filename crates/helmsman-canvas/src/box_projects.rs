@@ -143,10 +143,6 @@ pub enum PCall {
     /// `POST /api/devices/discover`: the Devices tab's Scan (answered by
     /// the view, not here).
     Discover,
-    /// `POST /api/devices/discover?address=A`: the Devices tab's Ask, one
-    /// address (the text is the validated IPv4 address, for the answer's
-    /// note).
-    Ask(String),
     /// `GET /api/devices/library?vendor=&product=`: a found device's
     /// profile for the quick form (answered by the view, not here).
     Library,
@@ -485,6 +481,11 @@ pub struct BoxProjects {
     pub history: Vec<crate::history_ui::RevisionRow>,
     /// The revision on view (the History modal).
     pub revision: Option<crate::history_ui::RevisionView>,
+    /// The revision the Code tab is stepped to, read whole: shown there,
+    /// not in a window.
+    pub stepped: Option<crate::history_ui::RevisionView>,
+    /// Revisions asked for the Code tab, not yet answered.
+    peeks: Vec<u32>,
     /// The Agent pages of the open project's latest revisions that carry
     /// one, by revision, as read (`PCall::Page`).
     pub pages: BTreeMap<u32, String>,
@@ -973,19 +974,8 @@ impl BoxProjects {
         ));
     }
 
-    /// Asks the box about the one device at `address` (the Devices tab's
-    /// Ask), for a device that does not answer the scan's broadcast.
-    pub fn ask(&mut self, address: std::net::Ipv4Addr) {
-        self.queue.push(PReq::json(
-            PCall::Ask(address.to_string()),
-            "POST",
-            format!("/api/devices/discover?address={address}"),
-            &json!({}),
-        ));
-    }
-
     /// Asks the box for the library's entry on a found device, its
-    /// profile text with it (the Devices tab's Add).
+    /// profile text with it (the Devices tab's click on a found device).
     pub fn library(&mut self, vendor: u16, product: u16) {
         self.queue.push(PReq::get(
             PCall::Library,
@@ -1149,6 +1139,8 @@ impl BoxProjects {
         self.pending = None;
         self.history.clear();
         self.revision = None;
+        self.stepped = None;
+        self.peeks.clear();
         self.pages.clear();
         self.queue
             .push(PReq::get(PCall::Project(name.into()), project_url(name)));
@@ -1279,6 +1271,8 @@ impl BoxProjects {
         self.conflict = None;
         self.history.clear();
         self.revision = None;
+        self.stepped = None;
+        self.peeks.clear();
         self.pages.clear();
         self.relist();
     }
@@ -1304,6 +1298,14 @@ impl BoxProjects {
             },
             format!("{}/history/{n}", project_url(name)),
         ));
+    }
+
+    /// Asks for revision `n` of project `name` for the Code tab to show
+    /// in place ([`Self::stepped`]); no window opens.
+    pub fn peek_revision(&mut self, name: &str, n: u32) {
+        self.stepped = None;
+        self.peeks.push(n);
+        self.read_revision(name, n);
     }
 
     /// The project's files back to revision `n` (an engineer; the box
@@ -2332,6 +2334,11 @@ impl BoxProjects {
                 }
             }
             PCall::Revision { project, n } => {
+                let peek = self
+                    .peeks
+                    .iter()
+                    .position(|p| *p == n)
+                    .map(|k| self.peeks.remove(k));
                 if !ok {
                     self.note(format!("cannot read revision {n}: {}", error_of(a)), true);
                     return;
@@ -2348,11 +2355,16 @@ impl BoxProjects {
                     })
                     .unwrap_or_default();
                 if let Some(row) = revision_row(&j) {
-                    self.revision = Some(crate::history_ui::RevisionView {
+                    let view = crate::history_ui::RevisionView {
                         row,
                         files,
                         page: j["page"].as_str().map(str::to_string),
-                    });
+                    };
+                    if peek.is_some() {
+                        self.stepped = Some(view);
+                    } else {
+                        self.revision = Some(view);
+                    }
                 }
             }
             PCall::Restore { project, n } => {
@@ -2669,7 +2681,6 @@ impl BoxProjects {
             | PCall::SavePins
             | PCall::Trend
             | PCall::Discover
-            | PCall::Ask(_)
             | PCall::Library
             | PCall::Wired(_)
             | PCall::FindWired

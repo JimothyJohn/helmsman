@@ -1,6 +1,8 @@
-//! Help mode on a box's Agent tab, beside changing the program (Nick,
-//! 2026-11-07, interview): for someone in trouble who did not write the
-//! program. They say what went wrong; the page sends it to the box with
+//! The Help tab of a box (Nick, 2026-11-07, interview: a mode of the Describe
+//! tab; 2026-11-26: a tab of its own, the `?`, so that errors, small accidents,
+//! never mix into the program's conversation, and every error shown is a link
+//! that asks it, [`crate::messages::error_link`]): for someone in trouble who
+//! did not write the program. They say what went wrong; the page sends it to the box with
 //! its recent Messages (`messages::Log::text`), and the box attaches the
 //! rest itself (its build, the project it runs, its devices and their
 //! errors), leaving out every password, PIN and token
@@ -25,7 +27,7 @@
 // Natively nothing carries the answers back but the tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use eframe::egui::{self, RichText, Vec2};
+use eframe::egui::{self, RichText};
 use serde_json::{Value as Json, json};
 
 use crate::box_agent::{Incoming, Request};
@@ -41,17 +43,6 @@ pub const MAX_MESSAGES: usize = 16 * 1024;
 const MAX_SAID: usize = 4096;
 /// Longest issue kept, bytes (the box's is far shorter).
 const MAX_ISSUE: usize = 128 * 1024;
-
-/// What the Agent tab does: change the program, or help.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Mode {
-    #[default]
-    Code,
-    // No way into it since the Agent tab lost its toggle (2026-11-26);
-    // feat/help-tab gives it a tab of its own and drops this allow.
-    #[allow(dead_code)]
-    Help,
-}
 
 /// The issue the box sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,10 +125,9 @@ fn links(d: &Json) -> Vec<PageLink> {
     out
 }
 
-/// The tab's Help side: the mode, the question, the request.
+/// The Help tab: the question, the request.
 #[derive(Debug, Default)]
 pub struct HelpUi {
-    pub mode: Mode,
     pub draft: String,
     pub helping: Option<Helping>,
 }
@@ -331,26 +321,6 @@ pub enum Act {
     Stop,
 }
 
-/// The Agent tab's heading: the dot for the agent's state at the right
-/// (`dot`, its words on hover). Nick, 2026-11-26: no mode toggle and no
-/// title; the dot alone says the agent is online.
-pub fn heading(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, dot: egui::Color32, dot_tip: &str) {
-    use crate::glyphs;
-    // One row of the dot's height: a bare right-to-left layout takes all
-    // the height below it and pushed the tab's controls off the page.
-    let side = glyphs::ROW * 0.6;
-    ui.allocate_ui_with_layout(
-        Vec2::new(ui.available_width(), side),
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            let (rect, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
-            let r = r.tip(dot_tip.to_string());
-            chrome.hit("agent status", r.rect);
-        },
-    );
-}
-
 /// The question, Ask or Stop, and the answer: the diagnosis and the issue
 /// with its Copy button.
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi, v: &View) -> Option<Act> {
@@ -419,7 +389,13 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                     .label(RichText::new("How to do it").strong().color(t.fg))
                     .tip("The answer, from the help pages. Nothing on the box changed.");
                 chrome.hit("help answer title", r.rect);
-                crate::messages::copyable(ui, chrome, "help answer", &a.text, t.fg);
+                let b = ui.button("Copy").tip("Copies the answer, to paste elsewhere.");
+                chrome.hit("help answer copy", b.rect);
+                if b.clicked() {
+                    ui.ctx().copy_text(a.text.clone());
+                }
+                let r = markdown(ui, &a.text, "help-answer");
+                chrome.hit("help answer", r.rect);
                 page_links(ui, chrome, "Read more", &a.pages);
             }
             if let Some(issue) = issue {
@@ -438,8 +414,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                         .label(RichText::new("What is likely wrong").strong().color(t.fg))
                         .tip("The diagnosis, from the box's messages and devices.");
                     chrome.hit("help diagnosis title", r.rect);
-                    let r = ui
-                        .add(egui::Label::new(RichText::new(&issue.diagnosis).color(t.fg)).wrap())
+                    let r = markdown(ui, &issue.diagnosis, "help-diagnosis")
                         .tip("The diagnosis, from the box's messages and devices.");
                     chrome.hit("help diagnosis", r.rect);
                 }
@@ -460,16 +435,39 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                         ui.ctx().copy_text(issue.markdown.clone());
                     }
                 });
-                let r = ui.add(
-                    egui::Label::new(RichText::new(&issue.markdown).monospace().color(t.fg))
-                        .wrap()
-                        .selectable(true),
-                );
+                let r = markdown(ui, &issue.markdown, "help-issue");
                 chrome.hit("help issue", r.rect);
             }
         }
     }
     act
+}
+
+/// `text` as Markdown: headings, bold, lists with their indent, code and
+/// tables laid out, paragraphs spaced. Text that is not Markdown (no heading,
+/// fence or table) is laid out a line to a paragraph, so its lists and
+/// breaks still read; nothing is lost either way. Selectable.
+fn markdown(ui: &mut egui::Ui, text: &str, salt: &str) -> egui::Response {
+    let size = egui::TextStyle::Body.resolve(ui.style()).size;
+    let blocks = crate::md_view::parse(&paragraphs(text));
+    ui.scope(|ui| crate::md_view::show(ui, &blocks, size, salt))
+        .response
+}
+
+/// `text` with its lines made paragraphs when it has no Markdown structure
+/// of its own: a single line break in plain text is a break, not a space.
+fn paragraphs(text: &str) -> String {
+    let structured = text.lines().any(|l| {
+        let l = l.trim_start();
+        l.starts_with('#') || l.starts_with("```") || l.starts_with('|')
+    });
+    if structured {
+        return text.to_string();
+    }
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 /// Links to help pages under a heading; nothing when there are none.
@@ -514,6 +512,18 @@ mod tests {
         format!(
             "event: help\ndata: {{\"context\":{{}}}}\n\nevent: text\ndata: {{\"delta\":\"Looking.\"}}\n\nevent: issue\ndata: {issue}\n\nevent: done\ndata: {done}\n\n"
         )
+    }
+
+    #[test]
+    fn plain_text_is_laid_out_a_line_to_a_paragraph_and_markdown_is_left_alone() {
+        let plain = "The link is down.\n\nCheck:\n1. The cable\n2. The power";
+        let blocks = crate::md_view::parse(&paragraphs(plain));
+        assert_eq!(
+            crate::md_view::texts(&blocks),
+            ["The link is down.", "Check:", "The cable", "The power"]
+        );
+        let md = "**Likely** the cable.\n\n## What to check\n- one\n- two";
+        assert_eq!(paragraphs(md), md);
     }
 
     #[test]

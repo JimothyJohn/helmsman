@@ -35,8 +35,8 @@ one short line, for example:
 > Done: the lamp now latches until stop is pressed.
 
 When nothing could be changed, the answer says why in red, with the
-first lines of what failed; **Details in the Messages** opens the
-Messages, which keep all of it: hold the pointer over a line there for
+first lines of what failed; **Details in the Log** opens the
+Log, which keeps all of it: hold the pointer over a line there for
 the whole text.
 
 ## Help with the words
@@ -129,14 +129,28 @@ change (a new revision; the change stays in History). It is offered while
 the file is still as Helmsman left it; after an edit of your own, go
 back through History instead.
 
-In the simulation the arrows beside Send take Undo's place: the left
-arrow steps back one revision, the right arrow forward one, as far as
-the first revision and the newest. Each revision shown runs at once,
+The arrows beside Send, with an **(i)** between them, step through the
+changes you described: the left arrow to the one before, the right arrow
+to the next, and past the newest back to what you were writing. The
+**(i)** opens the version's details. In the simulation each version shown runs at once,
 marked green and red with what it changed, and its tooltip names the
 instruction behind it. Saving keeps the version shown; an edit of your
 own puts the arrows away. Each step also puts that version's instruction
 back in the box and what came of it in the answer area, and writes
-nothing to the Messages.
+nothing to the Log.
+
+The **i** between the arrows opens the version on show in a window,
+the same one the Code tab's **i** opens. It starts with what you asked,
+in large type, and a line saying what came of it: whether the checks
+passed. Under that are who saved it and when ("3 hours ago" and the
+date) and its version number. **What changed** lists each file with the
+lines added in green and removed in red, and the changed lines
+themselves; a long one starts folded. **Why**, **Requirements it
+passed**, **Attempts that did not pass** and **The explanation it gave**
+are folded until you open them. A version that was a plain save, an
+upload or a restore shows the same window with what it has. **Restore
+this version** puts the project's files back as they were then, saved as
+a new version; Escape or **Close** leaves the window.
 
 The clock beside the arrows turns the answer area into the list of the
 project's versions, newest first, with a box to search what each one
@@ -257,8 +271,10 @@ engineer, open a program file, type the instruction and press **Send** or <kbd>E
 (<kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line).
 The checked change is saved on the box as a revision with its History
 entry, by you, and **Undo** asks the box to restore the revision before
-it. The dot beside the tab's heading says whether the answer service is online
-(green), offline (red) or not heard from yet (grey).
+it. When the answer service cannot be reached, the **Send** arrow turns red
+on gray like a deactivated button; a click says why and sends nothing.
+**Send** with an empty box also sends nothing and asks you to say what it
+should do.
 
 If Helmsman stores a **proposal** for review instead of sending the file
 back, the file is not touched and the tab offers **Review** to open it on
@@ -267,17 +283,19 @@ policy.
 
 ## Get help
 
-On a box the Describe tab has a second mode, for someone who did not write
-the program and has a machine that does not do what it should. The
-toggle at the top right of the tab switches it: **< >** is **Change the
-program**, **?** is **Get help**.
+On a box the **?** tab (<kbd>?</kbd>) is for someone who did not write
+the program and has a machine that does not do what it should. It keeps
+its own conversation, apart from the Describe tab's. Every error the page
+shows (in the Log, a refused deploy, a device form that will not
+save) is underlined: click it and the **?** tab opens and asks about that
+error, with the Log. Drag over the text to select it instead.
 
-<img src="img/get-help.png" alt="Get help in the Describe tab: the question, Ask for help, and the issue with its Copy button." width="326">
+<img src="img/get-help.png" alt="Get help in the ? tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 Sign in (any role), say what you saw or what you want to do in your own
 words, and press **Ask for help**, the yellow paper plane (<kbd>Enter</kbd> works too;
 <kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a
-new line). The page sends your words with its recent Messages, and the box
+new line). The page sends your words with its recent Log, and the box
 adds what it knows: its version, the program it runs, its devices and
 their errors. Passwords, PINs and tokens are left out. Nothing on the box
 changes and nothing is filed anywhere.
@@ -286,7 +304,8 @@ What comes back depends on what you asked:
 
 - A report of trouble ("the conveyor stopped, the lamp is red") gets
   **What is likely wrong**, Helmsman's diagnosis from the box's messages
-  and devices, and **Issue to report it**, a Markdown issue that carries
+  and devices, set out with a bold headline and a short numbered list of
+  what to check, and **Issue to report it**, a Markdown issue that carries
   your words and the box's details. **Copy** takes the whole issue, to
   paste into a new GitHub issue or to give to an AI assistant.
 - A question about how things work ("how do I load a program?") gets

@@ -460,7 +460,14 @@ fn the_canvas_watches_a_live_box_through_its_api() {
     let l = s.lowered.as_ref().unwrap();
     let scan = s.scan.as_ref().unwrap();
     let view = Viewer::new(&l.src, l.module.clone());
-    assert_eq!(view.outputs(), ["CONVEYOR", "RED", "GREEN"]);
+    let mut outs: Vec<String> = view
+        .output_cards()
+        .into_iter()
+        .filter(|c| c.driven)
+        .map(|c| c.name)
+        .collect();
+    outs.sort();
+    assert_eq!(outs, ["CONVEYOR", "GREEN", "RED"]);
     let live = view.live(Some(scan as &dyn Scan)).unwrap();
     let d = view.diagram();
     let conveyor = d

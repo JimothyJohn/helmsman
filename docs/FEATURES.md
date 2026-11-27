@@ -35,7 +35,7 @@ writes it (query included); `tab:KEY`, the key the tab saves in a layout;
 | Audit trail | `audit` | `GET /api/audit?after=N&limit=M`, `tab:messages` |
 | Agent chat | `chat` | `POST /api/chat`, `GET /api/chat/status`, `POST /api/dropins?name=N&kind=K`, `GET /api/dropins`, `GET /api/dropins/{id}?chunk=K`, `GET /api/dropins/{id}/plc?view=V&name=N&offset=O`, `profile:chat`, `tab:claude` |
 | Design step | `design` | `POST /api/design`, `profile:design` |
-| Help and issues | `help` | `POST /api/help`, `profile:help` |
+| Help and issues | `help` | `POST /api/help`, `profile:help`, `tab:help` |
 | Devices and the I/O map | `devices` | `GET /api/devices`, `GET /api/adapter`, `GET /api/io_map`, `GET /api/dhcp`, `POST /api/devices/{name}/browse`, `tab:devices` |
 | Device settings | `device-config` | `GET /api/devices/{id}/config`, `PUT /api/devices/{id}/config/password`, `DELETE /api/devices/{id}/config/password`, `POST /api/devices/{id}/config/set`, `POST /api/devices/{id}/config/restart`, `POST /api/devices/{id}/config/import`, `POST /api/devices/{id}/config/password`, `POST /api/devices/{id}/config/snapshot` |
 | Device profiles | `device-profile` | `GET /api/device-profile/proposal`, `POST /api/device-profile/proposal`, `POST /api/device-profile/proposal/accept`, `DELETE /api/device-profile/proposal`, `POST /api/device-profile/publish`, `profile:publish` |

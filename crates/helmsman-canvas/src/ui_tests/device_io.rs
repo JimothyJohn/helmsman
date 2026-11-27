@@ -180,8 +180,19 @@ fn a_device_holding_every_channel_offers_to_remove_the_ones_the_program_does_not
         let _ = writeln!(text, "{:<3} {name} {} rio ch:{}", c.dir, c.ty, c.name);
     }
     let mut h = playground(&text);
+    // + Add I/O and Remove unused sit under the device's points (Nick,
+    // 2026-11-26): under forty of them, a window tall enough to show them.
+    h.size.y = 2000.0;
+    h.wait(0.3);
     let left = edge(&h);
     assert!(h.has("remove unused rio"));
+    for k in ["add io rio", "remove unused rio"] {
+        assert!(h.rect(k).bottom() <= h.size.y, "{k} on screen: {:?}", h.rect(k));
+        assert!(
+            h.rect(k).top() > h.rect("point rio_di_01").top(),
+            "{k} under the points"
+        );
+    }
     inside_the_pane(&h, "remove unused rio", left);
     // Every channel is in the project: nothing is left to add.
     h.press("add io rio");

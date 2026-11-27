@@ -891,10 +891,11 @@ mod glyphs_and_help {
             (left - crate::editor::LEFT_W).abs() <= 16.0,
             "the left pane at its default width: {left}"
         );
-        // Nick, 2026-11-26: the left pane opens 384 pt wide (was 320).
+        // Nick, 2026-11-26: the left pane opens 307 pt wide (384 that
+        // morning, then 20% narrower).
         assert!(
-            (left - 384.0).abs() <= 16.0,
-            "the left pane opens 384 pt wide: {left}"
+            (crate::editor::LEFT_W - 307.0).abs() < 0.5 && (left - 307.0).abs() <= 16.0,
+            "the left pane opens 307 pt wide: {left}"
         );
     }
 
@@ -921,8 +922,14 @@ mod glyphs_and_help {
         let mut h = Harness::blink();
         h.press("monitor");
         h.wait(0.3);
-        let (status, outputs) = (h.rect("status blink"), h.rect("outputs blink/"));
-        assert!((status.top() - outputs.top()).abs() < 1.0, "one row");
+        // The status card went to the header (2026-11-26): the outputs'
+        // tile alone takes the row, edge to edge.
+        assert!(!h.has("status blink"), "no status card");
+        let outputs = h.rect("outputs blink/");
+        assert!(
+            outputs.left() < h.size.x * 0.05,
+            "from the left edge: {outputs:?}"
+        );
         assert!(
             outputs.right() > h.size.x * 0.9,
             "the row reaches the right edge: {outputs:?}"
@@ -2037,26 +2044,70 @@ END_PROGRAM",
             h.app.sim.as_ref().unwrap().session.running,
             "the second change runs at once too"
         );
-        let enabled = |h: &mut Harness, key: &str| {
-            let before = main(h);
-            h.press(key);
-            h.wait(0.2);
-            main(h) != before
-        };
-        assert!(!enabled(&mut h, "agent forward"), "the newest is the last step");
-        assert!(enabled(&mut h, "agent back"));
-        assert_eq!(main(&h), new, "back one: the first change");
+        // Nick, 2026-11-26: Back and Forward step through the Describe
+        // exchanges: each puts its prompt in the field as if typed and its
+        // answer under it, and runs that version; Forward past the newest
+        // is the live state with the unsent draft back. The (i) between
+        // the arrows opens the detailed popup of the one shown.
+        let draft = |h: &Harness| h.app.sim.as_ref().unwrap().instruct.draft.clone();
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("make it blink".into())]);
+        h.wait(0.2);
+        assert_eq!(draft(&h), "make it blink", "an unsent draft");
+        {
+            let [back, info, forward] = ["agent back", "agent info", "agent forward"].map(|k| h.rect(k));
+            assert!(
+                back.right() <= info.left() + 1.0 && info.right() <= forward.left() + 1.0,
+                "the (i) between the arrows: {back:?} {info:?} {forward:?}"
+            );
+        }
+        h.press("agent back");
+        h.wait(0.3);
+        assert_eq!(
+            draft(&h),
+            "reword it",
+            "the newest exchange's prompt, as if typed"
+        );
+        assert_eq!(main(&h), newer);
+        assert!(h.drew("shorter"), "its answer under it");
+        h.press("agent back");
+        h.wait(0.3);
+        assert_eq!(draft(&h), "comment it", "the one before");
+        assert_eq!(main(&h), new, "that version runs");
+        assert!(h.drew("it says why the lamp is on"), "its answer");
         assert!(h.app.sim.as_ref().unwrap().session.running);
         assert!(
             h.app.chrome.st_marks.as_ref().is_some_and(|m| m.applies(&new)),
             "each step is marked with what it changed"
         );
-        assert!(enabled(&mut h, "agent back"));
-        assert_eq!(main(&h), LAMP, "back two: before the Agent");
-        // And forward again, as often as wanted.
-        assert!(enabled(&mut h, "agent forward"));
+        assert!(
+            h.app.sim.as_ref().unwrap().sim_popup.is_none(),
+            "no popup from a step"
+        );
+        // The oldest exchange is as far back as it goes.
+        h.press("agent back");
+        h.wait(0.3);
+        assert_eq!(draft(&h), "comment it");
         assert_eq!(main(&h), new);
-        assert!(enabled(&mut h, "agent forward"));
+        // The (i): the revision popup of the one shown.
+        h.press("agent info");
+        h.wait(0.3);
+        assert!(h.has("revision form"), "the detailed popup opens");
+        h.press("revision close");
+        h.wait(0.3);
+        assert!(!h.has("revision form"));
+        assert_eq!(main(&h), new, "closing it changed nothing");
+        // And forward again, to the newest, then the live state.
+        h.press("agent forward");
+        h.wait(0.3);
+        assert_eq!((draft(&h).as_str(), main(&h) == newer), ("reword it", true));
+        h.press("agent forward");
+        h.wait(0.3);
+        assert_eq!(
+            draft(&h),
+            "make it blink",
+            "past the newest: the unsent draft is back"
+        );
         assert_eq!(main(&h), newer);
         assert!(h.has("agent back"), "the arrows stay at the newest");
         // An edit ends the steps: the file is the engineer's again.
@@ -3004,8 +3055,14 @@ mod chrome {
         assert!(h.app.chrome.code_open(), "the Code tab shown");
         let code = h.rect("pane code");
         let files = h.rect("pane files");
-        // Every tab in the one pane (Nick, 2026-11-13), the Agent first.
-        let xs: Vec<f32> = Pane::ALL.iter().map(|p| h.rect(&p.hit()).left()).collect();
+        // Every tab in the one pane (Nick, 2026-11-13), the Agent first;
+        // Help is a box's tab, not the simulation's (2026-11-26).
+        assert!(!h.has(&Pane::Help.hit()), "no Help tab in the simulation");
+        let xs: Vec<f32> = Pane::ALL
+            .iter()
+            .filter(|p| **p != Pane::Help)
+            .map(|p| h.rect(&p.hit()).left())
+            .collect();
         assert!(
             xs.windows(2).all(|w| w[0] < w[1]),
             "Agent | Code | I/O | Devices | Files | History, left to right: {xs:?}"
@@ -3439,352 +3496,77 @@ mod chrome {
         );
     }
 
-    /// Add by click (PROTOCOLS.md step 3, 2026-11-12): Scan lists what
-    /// answers on the network by vendor and model (the simulation: its
-    /// E1213, which the library knows); Add opens a form that asks one
-    /// thing, the device's name, and lists the channels it will get; Add
-    /// copies the profile into the project and writes the device line by
-    /// identity and one `ch:` signal a channel. No protocol, address or
-    /// point is asked. Once the map names it the row says so.
+    /// Nick, 2026-11-26: the Devices tab has no Advanced tick box. The
+    /// blank space's menu always offers New device… and Import device…;
+    /// under the devices is Scan for Device, no + (docs/help/editor.md). A
+    /// browser that saved Advanced on still restores it.
     #[test]
-    fn scan_lists_the_network_and_a_known_device_is_added_by_a_click() {
-        use crate::devices::Scan;
+    fn the_blank_space_menu_offers_a_new_device_with_no_advanced_and_no_plus() {
+        use crate::editor::Chrome;
         let mut h = Harness::new(App::sim());
         h.app.sim.as_mut().unwrap().proj.create("mine", None);
         h.press("pane devices");
         h.wait(0.3);
-        assert!(h.has("devices scan"), "the Scan button");
-        assert!(!h.app.chrome.advanced, "Advanced is off until asked for");
-        assert!(!h.has("network 192.168.127.254"));
-        h.press("devices scan");
-        h.wait(0.3);
-        assert_eq!(h.app.sim.as_ref().unwrap().devices_ui.scan, Scan::Done);
-        assert!(h.has("network 192.168.127.254"), "the simulated E1213 answered");
-        let f = h.app.sim.as_ref().unwrap().devices_ui.found[0].clone();
-        assert_eq!((f.vendor_id, f.product_code), (991, 515));
-        assert_eq!(f.mapped, None, "a fresh project maps nothing");
-        assert_eq!(
-            f.library.as_ref().and_then(|l| l.profile_file.as_deref()),
-            Some("moxa-iologik-e1213.device")
-        );
-        assert!(h.has("add network 192.168.127.254"), "Add, in sight");
-        assert!(
-            !h.has("use network 192.168.127.254"),
-            "the typed form is Advanced's"
-        );
-        // The agent's context lists it too.
-        let text = h.app.sim.as_ref().unwrap().devices_text();
-        assert!(
-            text.contains("On the network (ListIdentity):\n  E1213 192.168.127.254 vendor 991 product 515"),
-            "{text}"
-        );
-        assert!(text.contains("not in the map"), "{text}");
-        // Add: one field, the name, filled in from the model; the channels
-        // listed once the (simulated) library answered.
-        h.press("add network 192.168.127.254");
-        h.wait(0.3);
-        assert!(h.has("quick form"), "the quick form, not the typed one");
-        assert!(!h.has("device form"));
-        let q = h
-            .app
-            .sim
-            .as_ref()
-            .unwrap()
-            .devices_ui
-            .quick
-            .clone()
-            .expect("the quick form");
-        assert_eq!(q.name, "iologik_e1213", "named by the library's model");
-        assert_eq!(q.identity, "cip=991:515:0x00e12130");
-        let (_, skim) = q.profile.as_ref().expect("answered").as_ref().expect("read");
-        assert_eq!(skim.channels.len(), 40);
-        h.press("quick ok");
-        h.wait(0.3);
-        assert!(!h.has("quick form"), "added: the form is gone");
-        let sim = h.app.sim.as_ref().unwrap();
-        assert!(
-            sim.proj.files.contains_key("moxa-iologik-e1213.device"),
-            "the profile joined the project: {:?}",
-            sim.proj.files.keys().collect::<Vec<_>>()
-        );
-        let map = sim.proj.files["io.map"].clone();
-        assert!(
-            map.contains("device iologik_e1213 device:moxa-iologik-e1213 cip=991:515:0x00e12130\n"),
-            "{map}"
-        );
-        assert_eq!(
-            map.matches(" iologik_e1213 ch:").count(),
-            0,
-            "the device alone: no channel is in the project until it is added: {map}"
-        );
-        assert!(
-            !map.contains("enip-io") && !map.contains("modbus-tcp"),
-            "no protocol: {map}"
-        );
-        assert_eq!(
-            sim.devices_ui.found[0].mapped.as_deref(),
-            Some("iologik_e1213"),
-            "wired at once"
-        );
-        assert!(!h.has("add network 192.168.127.254"), "a wired device has no Add");
-        // The listing shows it with no point, and its forty one row away.
-        assert!(h.has("device iologik_e1213"));
-        assert!(!h.has("point iologik_e1213_di_04"));
-        assert!(h.has("add io iologik_e1213"), "+ Add I/O under the device");
-        // The agent reads what the device has beyond the project's points.
-        let text = h.app.sim.as_ref().unwrap().devices_text();
-        assert!(
-            text.contains("  iologik_e1213 (40): in bool ch:DI-00; "),
-            "{text}"
-        );
-        h.press("devices scan");
-        h.wait(0.3);
-        assert_eq!(
-            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
-            Some("iologik_e1213")
-        );
-    }
-
-    /// Advanced (PROTOCOLS.md step 3): the typed New device form, Import
-    /// device… and Use this device sit behind a tick box beside Scan, off
-    /// by default and remembered per browser; on, "Use this device…" on
-    /// a found device opens the form filled in by identity as before.
-    #[test]
-    fn advanced_hides_the_typed_form_and_is_remembered_and_use_this_device_still_works() {
-        use crate::editor::Chrome;
-        let mut h = Harness::new(App::sim());
-        {
-            // A program with an output to wire (a new project starts empty).
-            let p = &mut h.app.sim.as_mut().unwrap().proj;
-            p.create("mine", None);
-            p.files.insert("main.st".into(), crate::verify_tests::LAMP.into());
-            p.save();
+        assert!(!h.app.chrome.advanced);
+        for gone in [
+            "devices advanced",
+            "devices add",
+            "devices scan add",
+            "devices ask",
+            "devices open map",
+        ] {
+            assert!(!h.has(gone), "{gone} is gone");
         }
-        h.press("pane devices");
-        h.wait(0.3);
-        // Off: the blank space's menu offers nothing to type.
+        assert!(h.has("devices scan"), "Scan for Device under the list");
+        for gone in ["Advanced", "On the network", "I/O wiring"] {
+            assert!(!super::all_text(&mut h).contains(gone), "{gone:?} is gone");
+        }
         h.right_click(h.rect("devices blank").center());
         h.wait(0.2);
-        assert!(!h.has("menu new device"), "New device… is Advanced's");
-        assert!(!h.has("menu import device"));
-        h.frame(vec![Event::Key {
-            key: Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: Modifiers::NONE,
-        }]);
-        h.press("devices advanced");
-        h.wait(0.2);
-        assert!(h.app.chrome.advanced);
-        assert!(Chrome::restored(&h.app.chrome.saved()).advanced, "remembered");
-        assert!(!Chrome::restored("left=1").advanced, "off unless saved on");
-        h.right_click(h.rect("devices blank").center());
-        h.wait(0.2);
-        assert!(h.has("menu new device") && h.has("menu import device"));
-        h.frame(vec![Event::Key {
-            key: Key::Escape,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: Modifiers::NONE,
-        }]);
-        h.press("devices scan");
-        h.wait(0.3);
         assert!(
-            h.has("use network 192.168.127.254"),
-            "Use this device, beside Add"
+            h.has("menu new device") && h.has("menu import device"),
+            "with Advanced off"
         );
-        assert!(h.has("add network 192.168.127.254"));
-        // Use this device…: the typed form, filled in by identity.
-        h.right_click(h.rect("network 192.168.127.254").center());
-        assert!(h.has("menu add network"));
-        h.press("menu add network");
+        h.press("menu new device");
         h.wait(0.2);
-        assert!(h.has("device form"));
-        let d = h
-            .app
-            .sim
-            .as_ref()
-            .unwrap()
-            .devices_ui
-            .adding
-            .clone()
-            .expect("the form");
-        assert_eq!(d.name, "iologik_e1213", "named by the library's model");
-        assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
-        assert_eq!(d.protocol, 1, "EtherNet/IP");
-        // The form holds the device's settings and none of its channels.
-        assert!(d.points.is_empty(), "{:?}", d.points);
-        assert!(!h.has("point 0 on"));
-        h.press("device ok");
-        h.wait(0.3);
+        assert!(h.has("device form"), "New device… opens the form");
+        let d = h.app.sim.as_ref().unwrap().devices_ui.adding.clone().unwrap();
+        assert!(d.editing.is_none() && d.name.is_empty(), "a new device, blank");
+        h.press("device cancel");
+        h.wait(0.2);
         assert!(!h.has("device form"));
-        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
-        assert_eq!(
-            map.matches(" iologik_e1213 ").count(),
-            1,
-            "the device line alone: {map}"
-        );
-        // The program's lamp takes the first output in + Add I/O.
-        h.press("add io iologik_e1213");
-        h.wait(0.3);
-        assert!(
-            h.has("io form") && h.has("io for"),
-            "the program has variables to wire"
-        );
-        assert!(h.has("io add DI0") && h.has("io add DO0"));
-        h.app
-            .sim
-            .as_mut()
-            .unwrap()
-            .devices_ui
-            .adding_io
-            .as_mut()
-            .unwrap()
-            .for_var = Some("lamp".into());
         h.wait(0.2);
-        assert!(!h.has("io add DI0"), "an output variable is offered outputs only");
-        h.press("io add DO0");
-        h.wait(0.3);
-        h.press("io done");
-        h.wait(0.2);
-        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
         assert!(
-            map.contains("out lamp bool iologik_e1213 do:0 safe=false"),
-            "{map}"
+            Chrome::restored("left=1 advanced=1").advanced,
+            "a saved Advanced still applies"
         );
-        assert!(!map.contains(" box do:0"), "moved, not doubled: {map}");
-        assert!(
-            map.contains(
-                "device iologik_e1213 enip-io cip=991:515:0x00e12130 profile=moxa-e1213 rpi_ms=100 poll_ms=20\n"
-            ),
-            "{map}"
-        );
-        // Wired at once, with no second scan (it offered Use this device
-        // again until a rescan, 2026-11-05).
-        assert_eq!(
-            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
-            Some("iologik_e1213")
-        );
-        assert!(!h.has("use network 192.168.127.254"));
-        h.press("devices scan");
-        h.wait(0.3);
-        assert_eq!(
-            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
-            Some("iologik_e1213")
-        );
-        h.right_click(h.rect("network 192.168.127.254").center());
-        h.press("menu add network");
-        h.wait(0.2);
-        assert!(!h.has("device form"), "already in the map: nothing to add");
-        assert!(
-            !h.has("use network 192.168.127.254"),
-            "a wired device has no Use button"
-        );
+        assert!(!Chrome::restored("left=1").advanced, "off unless saved on");
     }
 
-    /// Nick, 2026-11-05: "It says it's not in the map but I don't even
-    /// know where the map is". On a read-only example, "Use this device"
-    /// copies the project, gives it the io.map its program implies, opens
-    /// the form with the E1213's channels, the program's I/O bound to
-    /// them; a channel ticked and named becomes a new variable; the I/O
-    /// wiring link opens io.map; a wired signal renames in io.map and the
-    /// ST together.
+    /// A wired point renames in io.map and the ST together (it was the
+    /// tail of "Use this device", gone with the network scan on
+    /// 2026-11-26).
     #[test]
-    fn use_this_device_copies_an_example_and_wires_its_io() {
+    fn a_wired_point_renames_in_the_map_and_the_program_together() {
         let mut h = Harness::new(App::sim());
-        h.app.chrome.advanced = true;
         {
             let sim = h.app.sim.as_mut().unwrap();
-            // The start/stop latch: two BOOL inputs, a BOOL output.
-            let ex = crate::playground::EXAMPLES
+            let src = crate::playground::EXAMPLES
                 .iter()
                 .map(|e| e.src)
                 .find(|src| src.contains("PROGRAM latch"))
-                .map(|src| crate::sim_projects::example_project(src).0)
                 .expect("the latch example");
-            sim.open_project(&ex);
-            assert!(sim.proj.is_example());
-        }
-        h.press("pane devices");
-        h.press("devices scan");
-        h.wait(0.3);
-        assert!(
-            h.has("use network 192.168.127.254"),
-            "a visible button, not only a right-click"
-        );
-        let found = &h.app.sim.as_ref().unwrap().devices_ui.found[0];
-        assert!(found.simulated, "the playground's E1213 says it is simulated");
-        h.press("use network 192.168.127.254");
-        h.wait(0.3);
-        {
-            let sim = h.app.sim.as_ref().unwrap();
-            assert!(
-                !sim.proj.is_example(),
-                "copied into a project of the visitor's own"
+            sim.proj.create("mine", None);
+            sim.proj.files.insert("main.st".into(), src.into());
+            sim.proj.files.insert(
+                "io.map".into(),
+                "device iologik_e1213 enip-io cip=991:515:0x00e12130 profile=moxa-e1213\nin  start bool iologik_e1213 di:0\n".into(),
             );
-            assert!(sim.proj.open.starts_with("my-"), "{}", sim.proj.open);
-            let map = &sim.proj.files["io.map"];
-            assert!(map.contains(" bool box di:0"), "{map}");
+            sim.proj.save();
+            sim.open_project("mine");
         }
-        assert!(h.has("device form"));
-        h.press("device ok");
-        h.wait(0.3);
-        assert!(
-            !h.has("device form"),
-            "{:?}",
-            h.app.sim.as_ref().unwrap().devices_ui.adding
-        );
-        // Start on DI-00 from the program, then DI-05 as a new variable.
-        h.press("add io iologik_e1213");
-        h.wait(0.3);
-        h.app
-            .sim
-            .as_mut()
-            .unwrap()
-            .devices_ui
-            .adding_io
-            .as_mut()
-            .unwrap()
-            .for_var = Some("start".into());
-        h.wait(0.2);
-        h.press("io add DI0");
-        h.wait(0.3);
-        assert_eq!(
-            h.app
-                .sim
-                .as_ref()
-                .unwrap()
-                .devices_ui
-                .adding_io
-                .as_ref()
-                .unwrap()
-                .for_var,
-            None,
-            "the next channel is a new variable again"
-        );
-        h.press("io add DI5");
-        h.wait(0.3);
-        h.press("io done");
-        h.wait(0.2);
-        {
-            let sim = h.app.sim.as_ref().unwrap();
-            let map = &sim.proj.files["io.map"];
-            assert!(!map.contains(" box di:0"), "start moved off the box: {map}");
-            assert!(map.contains("in  start bool iologik_e1213 di:0\n"), "{map}");
-            assert!(map.contains("in  di5 bool iologik_e1213 di:5\n"), "{map}");
-            let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
-            assert!(st.contains("  di5 : BOOL;"), "{st}");
-            assert!(helmsman_iec::ast::parse(st).is_ok(), "{st}");
-        }
-        // The I/O wiring link opens the file in the editor.
-        h.press("devices open map");
-        h.wait(0.2);
-        assert_eq!(h.app.sim.as_ref().unwrap().proj.current, "io.map");
-        // Rename start: the wiring line and the program together.
         h.press("pane devices");
-        h.wait(0.2);
+        h.wait(0.3);
         h.right_click(h.rect("point start").center());
         h.press("menu rename point");
         h.wait(0.2);
@@ -3803,7 +3585,11 @@ mod chrome {
         h.wait(0.3);
         assert!(!h.has("rename form"));
         let sim = h.app.sim.as_ref().unwrap();
-        assert!(sim.proj.files["io.map"].contains("in  go_button bool iologik_e1213 di:0\n"));
+        assert!(
+            sim.proj.files["io.map"].contains("in  go_button bool iologik_e1213 di:0\n"),
+            "{}",
+            sim.proj.files["io.map"]
+        );
         let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
         assert!(
             st.contains("go_button : BOOL;") && st.contains("(go_button OR motor)"),
@@ -3854,7 +3640,6 @@ mod chrome {
             egui::CursorIcon::PointingHand,
             "a button"
         );
-        h.app.chrome.advanced = true;
         h.right_click(h.rect("devices blank").center());
         h.press("menu new device");
         h.wait(0.2);
@@ -3912,9 +3697,30 @@ mod chrome {
             1,
             "run, kept for Save; no row for a channel not added"
         );
-        // The name and nothing else: no point to tick, and how the device
-        // is reached is Advanced's.
-        assert!(h.has("device name") && !h.has("device endpoint") && !h.has("point 0 on"));
+        // Nick, 2026-11-26: the name and the address; no point to tick,
+        // and the protocol and the timing stay hidden.
+        assert!(h.has("device name") && h.has("device endpoint") && !h.has("point 0 on"));
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .devices_ui
+                .adding
+                .as_ref()
+                .unwrap()
+                .endpoint,
+            "cip=991:515:0x00e12130",
+            "the address the line has"
+        );
+        for hidden in [
+            "device enip-io",
+            "device modbus-tcp",
+            "setting rpi_ms",
+            "setting poll_ms",
+        ] {
+            assert!(!h.has(hidden), "{hidden} stays hidden");
+        }
         h.press("device ok");
         h.wait(0.3);
         assert!(
@@ -3945,7 +3751,7 @@ mod chrome {
             map.contains("in  run bool e1213 di:0\n") && map.contains("out lamp bool box do:0 safe=false\n"),
             "its point and the box's own line are as they were: {map}"
         );
-        // With Advanced on, the same form has the address and the timing.
+        // A browser that saved Advanced on: the address is there as well.
         h.app.chrome.advanced = true;
         h.press("edit device e1213");
         h.wait(0.3);
@@ -3970,36 +3776,6 @@ mod chrome {
         let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
         assert!(!map.contains("e1213"), "{map}");
         assert!(!h.has("device e1213"));
-    }
-
-    /// The library's match fills the form's name and profile in.
-    #[test]
-    fn a_library_match_names_the_device_and_its_profile() {
-        use crate::devices::{Found, NewDevice};
-        use helmsman_project::devlib::Index;
-        let index = Index::parse(r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io", "identity": { "enip": { "vendor_id": 991, "product_code": 515 } }, "protocols": { "enip": { "driver": "enip-io", "map": "enip.map", "profile": "moxa-e1213" } } } ] }"#).unwrap();
-        let mut h = Harness::new(App::sim());
-        h.app.sim.as_mut().unwrap().proj.create("mine", None);
-        h.press("pane devices");
-        h.press("devices scan");
-        h.wait(0.2);
-        h.app.sim.as_mut().unwrap().devices_ui.attach_library(&index);
-        let f: Found = h.app.sim.as_ref().unwrap().devices_ui.found[0].clone();
-        assert_eq!(
-            f.library.as_ref().map(|l| l.model.as_str()),
-            Some("ioLogik E1213")
-        );
-        let d = NewDevice::from_found(&f);
-        assert_eq!(d.name, "iologik_e1213");
-        assert_eq!(d.params, "profile=moxa-e1213 rpi_ms=100 poll_ms=20");
-        assert!(
-            h.app
-                .sim
-                .as_ref()
-                .unwrap()
-                .devices_text()
-                .contains("library: Moxa ioLogik E1213")
-        );
     }
 
     /// Nick, 2026-11-02 (sim-feedback-devices): a plant model's `{state}`
@@ -4058,9 +3834,8 @@ mod chrome {
         assert!(text.contains("not measured; level transmitter would"), "{text}");
         // Add a sensor: the form, filled in for the state, writes one in line.
         h.wait(0.3);
-        // The Ask row pushed this row down to the messages strip's edge:
-        // scroll the pane so the row is in the clear.
-        let at = h.rect("devices scan").center();
+        // Scroll the pane so the row is in the clear of the messages strip.
+        let at = h.rect("state level_m").center();
         h.frame(vec![
             eframe::egui::Event::PointerMoved(at),
             eframe::egui::Event::MouseWheel {
@@ -4650,13 +4425,14 @@ mod chrome {
             "the tab under Code"
         );
         assert_eq!(c.rights, [Pane::Io, Pane::Code]);
-        c.pane = Pane::Files;
+        // Help is the last of the defaults (2026-11-26).
+        c.pane = Pane::Help;
         c.send_right();
-        assert_eq!(c.pane, Pane::Devices, "the last one: the one before");
+        assert_eq!(c.pane, Pane::Files, "the last one: the one before");
         c.dock(Pane::Io, false);
         assert_eq!(
             (c.pane, c.side),
-            (Pane::Io, Pane::Files),
+            (Pane::Io, Pane::Help),
             "back on the left, shown; the right keeps its tab"
         );
         assert_eq!(c.lefts.last(), Some(&Pane::Io), "at the end");
@@ -6246,7 +6022,8 @@ mod boxed {
         h.frame(vec![]);
         h.press("tab claude");
         h.frame(vec![]);
-        assert!(h.has("agent status") && h.has("agent instruction"));
+        assert!(h.has("agent instruction"));
+        assert!(!h.has("agent status"), "no status dot row (2026-11-26)");
 
         h.app.boxv.as_mut().unwrap().instruct.draft = "why does the conveyor stop?".into();
         h.frame(vec![]);
@@ -6315,19 +6092,14 @@ mod boxed {
         assert!(asked.iter().any(|u| u == "/api/proposals/3"), "{asked:?}");
     }
 
-    /// Help mode on a box's Agent tab (card `help-mode-box`): signed out,
-    /// Ask stays off; signed in as anyone, the question goes to
+    /// Help on a box (card `help-mode-box`; a tab of its own since Nick,
+    /// 2026-11-26, ? glyph, key L, no longer a mode of the Agent tab):
+    /// signed out, Ask stays off; signed in as anyone, the question goes to
     /// `POST /api/help` with the page's Messages; the answer shows the
     /// diagnosis and the issue, whose Copy puts the whole Markdown on the
     /// clipboard; and the panels keep their width throughout.
-    ///
-    /// Parked for the help-tab branch: on this branch (Nick, 2026-11-26)
-    /// the Agent tab lost its mode toggle and Help mode has no way in;
-    /// the help-tab branch gives Help a tab of its own and should drive
-    /// this through it and drop the `ignore`.
     #[test]
-    #[ignore = "help-tab branch: Help mode has no way in until Help gets its own tab (Nick, 2026-11-26)"]
-    fn help_mode_on_a_box_asks_and_shows_a_copyable_issue() {
+    fn help_on_a_box_asks_and_shows_a_copyable_issue() {
         use crate::box_agent::Incoming;
         use crate::review::Session;
         use serde_json::{Value as Json, json};
@@ -6335,8 +6107,8 @@ mod boxed {
         let bench = Bench::new();
         let (state, _) = watch(&bench);
         let mut h = Harness::new(App::boxed());
-        // Docked right: the Agent at the right pane's default width, its narrowest place.
-        h.app.chrome.dock(crate::editor::Pane::Claude, true);
+        // Docked right: Help at the right pane's default width, its narrowest place.
+        h.app.chrome.dock(crate::editor::Pane::Help, true);
         h.app.boxv.as_mut().unwrap().state = state;
         h.wait(0.3);
         let left = h.rect("left");
@@ -6347,31 +6119,37 @@ mod boxed {
             assert!((0.0..=8.0).contains(&l), "{when}: the left pane grew {l} pt");
             assert!((0.0..=8.0).contains(&r), "{when}: the right panel grew {r} pt");
         };
+        // The Describe tab has no Help in it any more.
         h.press("tab claude");
         h.frame(vec![]);
-        assert!(h.has("agent mode code") && h.has("agent mode help"));
-        assert!(h.has("agent instruction") && !h.has("help question"));
-        // Nick, 2026-11-08: the heading names the mode, the agent's state
-        // is a dot beside it, and the glyph toggle sits at the top right.
-        assert!(h.drew("Change the program") && !h.drew("Get help"));
-        assert!(!h.drew("Agent on this box") && !h.drew("Agent online"));
-        let (dot, code, help) = (
-            h.rect("agent status"),
-            h.rect("agent mode code"),
-            h.rect("agent mode help"),
-        );
         assert!(
-            dot.left() < code.left() && code.right() <= help.left(),
-            "{dot:?} {code:?} {help:?}"
+            !h.has("agent mode code") && !h.has("agent mode help"),
+            "no mode toggle"
         );
+        // Describe on the left and Help docked right: each its own field.
+        assert!(h.has("agent instruction") && h.has("help question"));
         assert!(
-            help.right() >= h.rect("right").right() - 40.0,
-            "at the right: {help:?}"
+            h.rect("agent instruction").right() <= h.rect("left").right() + 1.0
+                && h.rect("help question").left() >= h.rect("right").left() - 1.0,
+            "Describe's field on the left, Help's on the right"
         );
-        h.press("agent mode help");
+        // The ? tab, wherever it is docked, is the Help.
+        let tab = if h.has("tab help") {
+            "tab help"
+        } else {
+            "pane help"
+        };
+        h.press(tab);
         h.frame(vec![]);
-        assert!(h.has("help question") && h.has("help ask") && !h.has("agent instruction"));
-        assert!(h.drew("Get help") && !h.drew("Change the program"));
+        assert!(h.app.chrome.showing(crate::editor::Pane::Help));
+        assert!(h.has("help question") && h.has("help ask"));
+        assert!(
+            h.rect("help question").left() >= h.rect("right").left() - 1.0,
+            "in the pane it is docked in"
+        );
+        for word in ["Agent", "agent"] {
+            assert!(!h.drew(&format!("{word} ")), "no {word:?} on the Help tab");
+        }
 
         h.app
             .boxv
@@ -6447,18 +6225,22 @@ mod boxed {
                 .contains("Help: an issue was written (Conveyor stops when rio drops)."),
             "in Messages"
         );
-        h.press("agent mode code");
+        assert!(
+            boxed(&h).chat_sent.is_empty(),
+            "nothing went to the Describe agent"
+        );
+        h.press("tab claude");
         h.frame(vec![]);
         assert!(h.has("agent instruction"));
-        kept(&h, "back to the code");
+        kept(&h, "back to Describe");
     }
 
-    /// Nick, 2026-11-26: on a box the Agent (Describe) tab's heading is
-    /// the agent's status dot alone, at the right: no mode toggle and no
-    /// title. What follows it (the instruction, Send, Deploy) comes right
-    /// under it, on the page.
+    /// Nick, 2026-11-26: on a box the Agent (Describe) tab has no heading
+    /// at all: no mode toggle, no title, and no status dot row (whether
+    /// the answer service can be reached shows on Send). The instruction,
+    /// Send and Deploy come first, on the page.
     #[test]
-    fn on_a_box_the_agent_heading_is_the_status_dot_alone_and_the_field_follows_it() {
+    fn on_a_box_the_agent_tab_has_no_heading_and_the_field_comes_first() {
         for docked_right in [false, true] {
             let mut h = Harness::new(App::boxed());
             if docked_right {
@@ -6467,35 +6249,33 @@ mod boxed {
             h.wait(0.3);
             h.press("tab claude");
             h.wait(0.2);
-            for gone in ["agent mode help", "agent mode code"] {
-                assert!(!h.has(gone), "{gone} is gone");
+            for gone in ["agent mode help", "agent mode code", "agent status"] {
+                assert!(!h.has(gone), "docked right={docked_right}: {gone} is gone");
             }
             assert!(!h.drew("Change the program") && !h.drew("Get help"), "no title");
-            let (tab, dot) = (h.rect("agent tab"), h.rect("agent status"));
-            assert!(
-                tab.right() - dot.right() < 40.0,
-                "docked right={docked_right}: the dot {dot:?} at the right of {tab:?}"
-            );
+            let tab = h.rect("agent tab");
             for k in ["agent instruction", "agent send", "agent deploy"] {
                 let r = h.rect(k);
                 assert!(
-                    r.bottom() <= h.size.y && r.top() >= dot.top(),
-                    "docked right={docked_right}: {k} {r:?} on the page, under the dot {dot:?}"
+                    r.bottom() <= h.size.y && tab.contains_rect(r),
+                    "docked right={docked_right}: {k} {r:?} on the page, in {tab:?}"
                 );
             }
+            // First under the pane's row of tab glyphs.
+            let tabs = h.rect(if docked_right { "tabs right" } else { "tabs left" });
             let field = h.rect("agent instruction");
             assert!(
-                field.top() - dot.bottom() < 40.0,
-                "docked right={docked_right}: the field {field:?} right under the heading {dot:?}"
+                field.top() >= tabs.bottom() && field.top() - tabs.bottom() < 30.0,
+                "docked right={docked_right}: the field {field:?} first under the tabs {tabs:?}"
             );
         }
     }
 
-    /// A page that watches a Skipper: the Devices tab has one row for its
-    /// map, at the panel's default width, and its button opens a window
-    /// (the panel does not widen) where the map is edited, checked and,
-    /// once every device answered that exact text, downloaded. The Skipper
-    /// is the real router (`node_map_tests::Skipper`).
+    /// A page that watches a Skipper: Edit › Edit map… (Nick, 2026-11-26;
+    /// it was a row on the Devices tab) opens a window (the panels do not
+    /// widen) where the map is edited, checked and, once every device
+    /// answered that exact text, downloaded. The Skipper is the real
+    /// router (`node_map_tests::Skipper`).
     #[test]
     fn a_skippers_map_is_checked_and_downloaded_from_a_window_not_the_panel() {
         use crate::box_projects::PCall;
@@ -6523,22 +6303,14 @@ mod boxed {
         let right = h.rect("right");
         h.press("pane devices");
         h.wait(0.3);
-        assert!(h.has("node map open"), "the row is on a Skipper's Devices tab");
+        assert!(!h.has("node map open"), "no Skipper map row on the Devices tab");
+        assert!(!h.drew("Skipper map"), "nor its words");
         let grew = |h: &Harness| {
             (
                 h.rect("left").right() - left.right(),
                 right.left() - h.rect("right").left(),
             )
         };
-        let (l, r) = grew(&h);
-        assert!(
-            (0.0..=8.0).contains(&l) && (0.0..=8.0).contains(&r),
-            "row: {l} {r}"
-        );
-        assert!(
-            h.rect("node map open").right() <= h.rect("left").right(),
-            "the button is inside the panel"
-        );
         assert!(!h.has("node map window"), "closed until asked for");
 
         // What the page asks of the Skipper goes through the real router and
@@ -6558,7 +6330,9 @@ mod boxed {
             }
             h.wait(0.2);
         };
-        h.press("node map open");
+        h.press("bar edit");
+        assert!(h.has("edit map"), "Edit has Edit map… on a Skipper");
+        h.press("edit map");
         h.wait(0.3);
         serve(&mut h, &mut sk);
         for k in ["node map window", "node map text", "node map check"] {
@@ -6644,21 +6418,28 @@ mod boxed {
     }
 
     /// A page without a token cannot check or download, and says why; a
-    /// box's Devices tab has no Skipper row.
+    /// box (not a Skipper) has no Edit map… (it edits its map as a project
+    /// file), nor has the simulation.
     #[test]
-    fn without_a_token_the_skipper_window_says_what_is_needed_and_a_box_has_no_row() {
+    fn without_a_token_the_skipper_window_says_what_is_needed_and_a_box_has_no_edit_map() {
+        for make in [App::boxed as fn() -> App, App::sim] {
+            let mut h = Harness::new(make());
+            h.wait(0.2);
+            h.press("bar edit");
+            h.frame(vec![]);
+            assert!(h.has("edit undo") || h.has("edit xref"), "the Edit menu is open");
+            assert!(!h.has("edit map"), "only a Skipper's page has Edit map…");
+        }
         let mut h = Harness::new(App::boxed());
         h.wait(0.2);
-        h.press("pane devices");
-        h.wait(0.3);
-        assert!(!h.has("node map open"), "a box edits its map as a project file");
         {
             let b = h.app.boxv.as_mut().unwrap();
             b.state.io_map = Some("device rio modbus-tcp 192.168.3.60\n".into());
             b.state.io_map_node = true;
         }
         h.wait(0.3);
-        h.press("node map open");
+        h.press("bar edit");
+        h.press("edit map");
         h.wait(0.3);
         assert!(h.has("node map window") && h.has("node map check"));
         h.press("node map check");
@@ -6871,255 +6652,6 @@ mod boxed {
                 .any(|r| matches!(r.call, PCall::Wired(_))),
             "asked again"
         );
-    }
-
-    /// On a box, Scan posts to `/api/devices/discover` and the answer's
-    /// devices show with what the box said: mapped or not, the library's
-    /// match; a refusal shows as text, and a hostile body lists nothing.
-    #[test]
-    fn scan_on_a_box_posts_and_lists_the_answer() {
-        use crate::box_projects::PCall;
-        use crate::devices::Scan;
-        use crate::review::Answer;
-        let bench = Bench::new();
-        let (state, _) = watch(&bench);
-        let mut h = Harness::new(App::boxed());
-        h.app.boxv.as_mut().unwrap().state = state;
-        h.frame(vec![]);
-        h.press("pane devices");
-        h.wait(0.2);
-        h.press("devices scan");
-        h.frame(vec![]);
-        let sent = std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent);
-        let scan = sent
-            .iter()
-            .find(|r| r.call == PCall::Discover)
-            .expect("the scan was sent");
-        assert_eq!(
-            (scan.method, scan.url.as_str()),
-            ("POST", "/api/devices/discover?fresh=1")
-        );
-        assert_eq!(h.app.boxv.as_ref().unwrap().devices_ui.scan, Scan::Running);
-        let body = r#"{ "devices": [ { "address": "10.0.0.57", "mac": "00-90-e8-7e-af-be", "vendor_id": 991, "product_code": 515,
-            "revision": "3.1", "serial": "0x2a629eae", "product_name": "ioLogik E1213", "cip": "cip=991:515:0x2a629eae",
-            "mapped": "e1213", "library": { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "driver": "enip-io", "profile": "moxa-e1213" } },
-            { "address": "10.0.0.9", "vendor_id": 1, "product_code": 2, "product_name": "../etc/passwd\u0007", "mapped": null, "library": null } ],
-            "age_ms": 3, "library": { "devices": 1 } }"#;
-        let ctx = h.ctx.clone();
-        h.app.boxv.as_mut().unwrap().step_all(
-            &ctx,
-            Vec::new(),
-            vec![(
-                PCall::Discover,
-                Answer {
-                    status: 200,
-                    retry_after: None,
-                    body: body.into(),
-                },
-            )],
-            h.time,
-        );
-        h.frame(vec![]);
-        h.frame(vec![]);
-        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
-        assert_eq!(ui.scan, Scan::Done);
-        assert_eq!(ui.found.len(), 2);
-        assert_eq!(ui.found[0].mapped.as_deref(), Some("e1213"));
-        assert_eq!(
-            ui.found[1].product_name, "../etc/passwd",
-            "control characters dropped"
-        );
-        assert!(h.has("network 10.0.0.57") && h.has("network 10.0.0.9"));
-        // A refusal.
-        h.app.boxv.as_mut().unwrap().step_all(
-            &ctx,
-            Vec::new(),
-            vec![(
-                PCall::Discover,
-                Answer {
-                    status: 409,
-                    retry_after: None,
-                    body: r#"{"error":"busy"}"#.into(),
-                },
-            )],
-            h.time,
-        );
-        assert!(matches!(
-            h.app.boxv.as_ref().unwrap().devices_ui.scan,
-            Scan::Failed(_)
-        ));
-        // Garbage lists nothing and fails softly.
-        h.app.boxv.as_mut().unwrap().step_all(
-            &ctx,
-            Vec::new(),
-            vec![(
-                PCall::Discover,
-                Answer {
-                    status: 200,
-                    retry_after: None,
-                    body: "[[[".into(),
-                },
-            )],
-            h.time,
-        );
-        assert!(matches!(
-            h.app.boxv.as_ref().unwrap().devices_ui.scan,
-            Scan::Failed(_)
-        ));
-    }
-
-    /// Ask beside Scan: only one device's IPv4 address is sent, as
-    /// `?address=`; what answers joins the list (once per address), and
-    /// no answer or a refusal is said in words.
-    #[test]
-    fn ask_on_a_box_sends_one_address_and_lists_the_answer() {
-        use crate::box_projects::PCall;
-        use crate::review::Answer;
-        use eframe::egui::Event;
-        let bench = Bench::new();
-        let (state, _) = watch(&bench);
-        let mut h = Harness::new(App::boxed());
-        h.app.boxv.as_mut().unwrap().state = state;
-        h.frame(vec![]);
-        h.press("pane devices");
-        h.wait(0.2);
-        let asks = |h: &mut Harness| -> Vec<(String, String)> {
-            std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
-                .into_iter()
-                .filter_map(|r| match r.call {
-                    PCall::Ask(a) => Some((a, r.url)),
-                    _ => None,
-                })
-                .collect()
-        };
-        // Anything but a device's address leaves the button dead.
-        for bad in [
-            "",
-            "localhost",
-            "10.0.0",
-            "10.0.0.1:44818",
-            "255.255.255.255",
-            "224.0.0.1",
-            "0.0.0.0",
-        ] {
-            h.app.boxv.as_mut().unwrap().devices_ui.ask_address = bad.into();
-            h.frame(vec![]);
-            h.press("devices ask");
-            h.frame(vec![]);
-            assert!(asks(&mut h).is_empty(), "{bad:?} was sent");
-        }
-        h.app.boxv.as_mut().unwrap().devices_ui.ask_address.clear();
-        h.press("devices ask address");
-        h.frame(vec![Event::Text("192.168.33.1".into())]);
-        h.frame(vec![]);
-        h.press("devices ask");
-        h.frame(vec![]);
-        assert_eq!(
-            asks(&mut h),
-            vec![(
-                "192.168.33.1".to_string(),
-                "/api/devices/discover?address=192.168.33.1".to_string()
-            )]
-        );
-        let body = r#"{ "found": [ { "address": "192.168.33.1", "mapped": null, "library": null,
-            "identities": [ { "protocol": "ethernet-ip", "address": "192.168.33.1", "vendor_id": 1, "product_code": 2,
-              "product_name": "MDrive", "identity": "cip=1:2:0x1" } ] } ], "protocols": [] }"#;
-        let ctx = h.ctx.clone();
-        let answer = |h: &mut Harness, status: u16, body: &str| {
-            h.app.boxv.as_mut().unwrap().step_all(
-                &ctx,
-                Vec::new(),
-                vec![(
-                    PCall::Ask("192.168.33.1".into()),
-                    Answer {
-                        status,
-                        retry_after: None,
-                        body: body.into(),
-                    },
-                )],
-                h.time,
-            );
-        };
-        answer(&mut h, 200, body);
-        answer(&mut h, 200, body);
-        h.frame(vec![]);
-        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
-        assert_eq!(ui.found.len(), 1, "an address is listed once");
-        assert_eq!(ui.found[0].product_name, "MDrive");
-        assert_eq!(ui.ask_note, None);
-        assert!(h.has("network 192.168.33.1"));
-        answer(&mut h, 200, r#"{ "found": [] }"#);
-        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
-        assert_eq!(ui.found.len(), 1, "no answer leaves the list");
-        assert_eq!(
-            ui.ask_note.as_deref(),
-            Some("No device answered at 192.168.33.1.")
-        );
-        answer(
-            &mut h,
-            400,
-            r#"{"error":"address must be one IPv4 address\u0007"}"#,
-        );
-        assert_eq!(
-            h.app.boxv.as_ref().unwrap().devices_ui.ask_note.as_deref(),
-            Some("400: address must be one IPv4 address")
-        );
-        answer(&mut h, 200, "[[[");
-        assert!(h.app.boxv.as_ref().unwrap().devices_ui.ask_note.is_some());
-    }
-
-    /// In the simulation there is no network: Ask says so and lists nothing.
-    #[test]
-    fn ask_in_the_simulation_says_there_is_no_network() {
-        use eframe::egui::Event;
-        let mut h = Harness::new(App::sim());
-        h.messages();
-        h.press("pane devices");
-        h.wait(0.2);
-        h.press("devices ask address");
-        h.frame(vec![Event::Text("192.168.33.1".into())]);
-        h.frame(vec![]);
-        h.press("devices ask");
-        h.frame(vec![]);
-        let ui = &h.app.sim.as_ref().unwrap().devices_ui;
-        assert!(ui.found.is_empty(), "{:?}", ui.found);
-        assert!(
-            ui.ask_note.as_deref().is_some_and(|n| n.contains("no network")),
-            "{:?}",
-            ui.ask_note
-        );
-    }
-
-    /// The Ask row at the panel's default width: both controls sit inside
-    /// the panel that holds them, with a note showing as well.
-    #[test]
-    fn the_ask_row_fits_the_panel_at_its_default_width() {
-        let mut h = Harness::new(App::sim());
-        h.messages();
-        h.app.chrome.dock(crate::editor::Pane::Io, true);
-        h.wait(0.3);
-        h.press("pane devices");
-        h.wait(0.3);
-        let (left, right) = (h.rect("left"), h.rect("right"));
-        h.app.sim.as_mut().unwrap().devices_ui.ask_note = Some(
-            "400: address must be one device's address, not a multicast, broadcast or unspecified one".into(),
-        );
-        h.app.sim.as_mut().unwrap().devices_ui.ask_address = "192.168.100.100".into();
-        h.wait(0.3);
-        let (field, button) = (h.rect("devices ask address"), h.rect("devices ask"));
-        assert!(
-            field.right() < button.left() + 1.0 || button.top() > field.top(),
-            "side by side or wrapped, never overlapping: {field:?} {button:?}"
-        );
-        assert!(
-            button.right() <= 8.0 + 236.0,
-            "the Ask row reaches {} pt, past the 236 pt default",
-            button.right()
-        );
-        let l = h.rect("left").right() - left.right();
-        let r = right.left() - h.rect("right").left();
-        assert!((0.0..=8.0).contains(&l), "the left pane grew {l} pt");
-        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
     }
 
     #[test]
@@ -7955,83 +7487,65 @@ mod tour {
     }
 }
 
-/// The outputs as lamps in the diagram's corner (`lamps`; Nick,
-/// 2026-11-12: the first screen should show itself without words).
+/// The lamp fixture in the diagram's corner was removed (Nick, 2026-11-26:
+/// "the I/O tab shows the same"): no traffic light and no pilot lamps are
+/// painted over the diagram, on the page's first screen or on Blink.
 mod lamps {
-    use eframe::egui::{Color32, Pos2, Shape};
+    use eframe::egui::{Pos2, Shape};
 
     use super::Harness;
     use crate::app::App;
-    use crate::st_view::brand::{GREEN, RED, YELLOW};
 
-    /// The circles of radius `r` the last frame drew inside the diagram,
-    /// top to bottom: centre and fill.
-    fn lamps(h: &Harness, r: f32) -> Vec<(Pos2, Color32)> {
-        fn walk(s: &Shape, r: f32, out: &mut Vec<(Pos2, Color32)>) {
+    /// The filled circles the last frame drew inside the diagram's
+    /// bottom-right quarter, with their radius.
+    fn corner_circles(h: &Harness) -> Vec<(Pos2, f32)> {
+        fn walk(s: &Shape, out: &mut Vec<(Pos2, f32)>) {
             match s {
-                Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
-                Shape::Circle(c) if (c.radius - r).abs() < 0.01 => out.push((c.center, c.fill)),
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                Shape::Circle(c) if c.fill.a() > 0 => out.push((c.center, c.radius)),
                 _ => {}
             }
         }
         let area = h.app.chrome.diagram;
         let mut out = Vec::new();
         for c in &h.shapes {
-            walk(&c.shape, r, &mut out);
+            walk(&c.shape, &mut out);
         }
-        out.retain(|(c, _)| area.contains(*c));
-        out.sort_by(|a, b| a.0.y.total_cmp(&b.0.y).then(a.0.x.total_cmp(&b.0.x)));
+        out.retain(|(c, _)| area.contains(*c) && c.x > area.center().x && c.y > area.center().y);
         out
     }
 
     #[test]
-    fn the_page_opens_on_the_traffic_light_lit_in_the_diagrams_corner() {
+    fn the_traffic_light_runs_with_no_lamps_in_the_diagrams_corner() {
         let mut h = Harness::new(App::sim());
         h.wait(0.5);
         let sim = h.app.sim.as_ref().unwrap();
         assert_eq!(sim.title(), "traffic");
         assert!(sim.session.running);
-        let area = h.app.chrome.diagram;
-        let l = lamps(&h, 15.0);
-        assert_eq!(l.len(), 3, "red over yellow over green: {l:?}");
-        assert!(
-            l.iter()
-                .all(|(c, _)| c.x > area.center().x && c.y > area.center().y),
-            "in the bottom-right corner of {area:?}: {l:?}"
-        );
-        assert!(
-            l.iter().all(|(c, _)| (c.x - l[0].0.x).abs() < 0.01),
-            "one column: {l:?}"
-        );
-        // Green holds the first 3 s: full colour; the other two nearly out.
-        assert_eq!(l[2].1, GREEN, "{l:?}");
-        assert_ne!(l[0].1, RED, "{l:?}");
-        assert_ne!(l[1].1, YELLOW, "{l:?}");
-        // Then one second of yellow, then red.
-        h.wait(3.0);
-        let l = lamps(&h, 15.0);
-        assert_eq!(l[1].1, YELLOW, "{l:?}");
-        assert_ne!(l[2].1, GREEN, "{l:?}");
-        h.wait(1.5);
-        let l = lamps(&h, 15.0);
-        assert_eq!(l[0].1, RED, "{l:?}");
-        assert_ne!(l[1].1, YELLOW, "{l:?}");
+        // Through a whole green, yellow and red: never a lamp of the old
+        // fixture's sizes (15 pt traffic, 11 pt pilot).
+        for _ in 0..5 {
+            let lamps: Vec<_> = corner_circles(&h)
+                .into_iter()
+                .filter(|(_, r)| (r - 15.0).abs() < 0.01 || (r - 11.0).abs() < 0.01)
+                .collect();
+            assert!(lamps.is_empty(), "a lamp in the corner: {lamps:?}");
+            h.wait(1.0);
+        }
     }
 
     #[test]
-    fn any_other_bool_output_is_a_pilot_lamp_with_its_name() {
+    fn blinks_lamp_output_is_not_painted_over_the_diagram() {
         let mut h = Harness::blink();
         h.wait(0.3);
-        let l = lamps(&h, 11.0);
-        assert_eq!(l.len(), 1, "Blink's one lamp: {l:?}");
-        assert!(h.drew("lamp"), "named under it");
-        // It blinks: on at full brand yellow within a period.
-        let mut seen_on = false;
-        for _ in 0..40 {
+        for _ in 0..20 {
             h.wait(0.05);
-            seen_on |= lamps(&h, 11.0).first().is_some_and(|(_, c)| *c == YELLOW);
+            let lamps: Vec<_> = corner_circles(&h)
+                .into_iter()
+                .filter(|(_, r)| (r - 11.0).abs() < 0.01)
+                .collect();
+            assert!(lamps.is_empty(), "a pilot lamp in the corner: {lamps:?}");
         }
-        assert!(seen_on);
     }
 }
 
@@ -8094,7 +7608,10 @@ mod glyph_library {
             "dock=2 left=1 right=1 lefts=claude,code,palette pane=palette rights=io,palette side=palette",
         );
         // The tabs it named, less the palette; the rest join the left.
-        assert_eq!(c.lefts, [Pane::Claude, Pane::Code, Pane::Devices, Pane::Files]);
+        assert_eq!(
+            c.lefts,
+            [Pane::Claude, Pane::Code, Pane::Devices, Pane::Files, Pane::Help]
+        );
         assert_eq!(c.rights, [Pane::Io]);
         assert_eq!((c.pane, c.side), (Pane::Claude, Pane::Io));
     }
@@ -8515,6 +8032,7 @@ mod diagram_menu;
 mod files_tab;
 mod find_replace;
 mod front;
+mod help_tab;
 mod hotkeys;
 mod io_cards;
 mod io_names;
@@ -8523,7 +8041,9 @@ mod layouts;
 mod multi_select;
 mod outputs;
 mod proposal;
-mod scan_add;
+mod ribbon;
+mod scan_device;
+mod send_states;
 mod shell;
 mod sim_points;
 mod sim_popup;

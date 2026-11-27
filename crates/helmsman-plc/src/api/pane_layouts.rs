@@ -48,7 +48,7 @@ pub const MAX_BODY: usize = 4096;
 pub const MIN_SIZE: f64 = 120.0;
 pub const MAX_SIZE: f64 = 1600.0;
 /// The side tabs, by the names the page keeps them under.
-pub const TABS: [&str; 6] = ["claude", "code", "io", "devices", "files", "history"];
+pub const TABS: [&str; 7] = ["claude", "code", "io", "devices", "files", "history", "help"];
 /// The bottom panel's tabs.
 pub const BOTTOMS: [&str; 2] = ["trend", "messages"];
 

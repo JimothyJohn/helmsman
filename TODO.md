@@ -1023,6 +1023,20 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-26
   by: session e16d1c3b
 
+- [ ] **Merge the Devices tab into the I/O tab?** — Nick, 2026-11-26: "Now that I look at it I don't even know if the Devices page is necessary... there's got to be a way to instead merge it with the I/O so that you can easily add additional inputs per device rather than looking at the device level. Something to think about, but maybe not build out quite yet." Today the Devices tab lists the I/O map's devices with their points and adds a device (+), Add I/O per device, Edit and rename; the I/O tab lists the program's inputs and outputs as cards with their values, wiring, trend and diagram glyphs. A merged tab could group the I/O cards under their device (with a + Add I/O on each group and a + device at the end), keep the simulated points in their own group, and fold a device's settings into its group's header. Questions for a design pass: what the Skipper map window (Edit › Edit map…) becomes, where a device with no points yet shows, and how a point on no device (a placeholder) reads.
+  result: one tab where a device's inputs and outputs are added and watched together, and the Devices tab is gone
+  difficulty: high
+  id: merge-devices-into-io
+  asked: 2026-11-26
+  by: session e16d1c3b
+
+- [ ] **Update the guided tour to the new layout and flow** — Nick, 2026-11-26: once the bench rounds of 2026-11-26 land (#656 and feat/bench-round-2: Messages as the bottom panel's Log tab, the Help tab, the History arrows and H, the I/O card glyphs, the fit glyph and Z, the new hotkeys, the side-pane ribbon, the zoom ladder and lamps gone), walk crates/helmsman-canvas/src/tour.rs step by step against the page and rewrite every step that points at something moved or removed.
+  result: every tour step points at what is on the page and says what it does now
+  difficulty: med
+  id: tour-after-bench-rounds
+  asked: 2026-11-26
+  by: session e16d1c3b
+
 ## Canvas overhaul (interview 2026-11-21)
 
 Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, dive into blocks, bloom, fast snap navigation, device-library graphics on connections, and convert technical drawings (panel layouts, CAD, DXF, schematics) into matched components, "starting now". Decided in the interview that day: (1) one 3D stack for every level: plant and devices on top, programs and POUs in the middle, the ST diagram's blocks at the bottom; a dive goes down a level; (2) rendered by egui on glow with our own GL pass through a paint callback (camera, picking, two-pass bloom), no engine crate and no backend change; (3) for engineers and demos first: 3D on a desktop GPU, the 2D view kept reachable and tested; (4) two tracks at once: drawings now, and the 3D canvas, then navigation, then device graphics; (5) dive: a fly-through by default and a free orbit over the whole stack as a second mode, both offered; (6) drawings start with ASCII DXF panel layouts, read by a small reader of our own (no new crate, wasm-safe), built against DXFs vendors publish for parts already in the library; (7) a drawing gives devices matched to the library with a draft io.map, their placement in the 3D map and its wiring as connections; (8) a part not in the library or matching more than one record is shown and the engineer decides: never a guessed model; (9) device graphics are line art per device family in the canvas's own style (the library has no images, and vendor photos are not ours to publish); (10) first milestone: the playground's example in 3D behind a toggle, 2D still the default.

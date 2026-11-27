@@ -81,9 +81,16 @@ fn note(h: &Harness) -> Option<(String, bool)> {
     h.app.sim.as_ref().unwrap().proj.notice.clone()
 }
 
+/// Where a right click on the card of row `key` lands: its first line,
+/// clear of the glyphs, which in a narrow card sit on a row of their own
+/// under it (2026-11-26) where the card's middle used to be blank.
+fn on_card(h: &Harness, key: &str) -> eframe::egui::Pos2 {
+    h.rect(key).left_top() + eframe::egui::vec2(12.0, 12.0)
+}
+
 /// Right-click the row `key`, press the menu item `item`.
 fn menu(h: &mut Harness, key: &str, item: &str) {
-    h.right_click(h.rect(key).center());
+    h.right_click(on_card(h, key));
     h.press(item);
     h.wait(0.2);
 }
@@ -176,12 +183,12 @@ fn an_output_row_assigns_and_goes_back_to_simulated_io() {
     .replace("out motor bool box do:0 safe=false\n", "");
     assert_eq!(map(&h), moved);
     // On a device now: assigning again says to put it back first, and back is offered.
-    h.right_click(h.rect("io row motor").center());
+    h.right_click(on_card(&h, "io row motor"));
     assert!(h.has("menu assign port") && h.has("menu back to simulated"));
     h.press("menu assign port");
     h.wait(0.2);
     assert!(!h.has("assign form"), "off: it is on a device already");
-    h.right_click(h.rect("io row motor").center());
+    h.right_click(on_card(&h, "io row motor"));
     h.press("menu back to simulated");
     h.wait(0.3);
     let back = map(&h);
@@ -200,7 +207,7 @@ fn with_no_free_channel_the_item_is_off_and_says_to_add_a_device() {
     let mut h =
         project("in  start bool box di:0\nout motor bool box do:0 safe=false\nin spare bool box di:1\n");
     let before = map(&h);
-    h.right_click(h.rect("io row spare").center());
+    h.right_click(on_card(&h, "io row spare"));
     assert!(h.has("menu assign port"));
     assert!(says(
         &mut h,
@@ -229,7 +236,7 @@ fn an_example_is_read_only_and_the_item_says_so() {
         .map(|(k, _)| k.clone())
         .find(|k| k.starts_with("io row "))
         .expect("an output row");
-    h.right_click(h.rect(&key).center());
+    h.right_click(on_card(&h, &key));
     assert!(h.has("menu assign port"));
     assert!(says(&mut h, "menu assign port", "The examples are read-only"));
     h.press("menu assign port");
@@ -410,7 +417,7 @@ fn the_io_rows_and_the_devices_rows_stay_inside_the_panels_default_width() {
         "the pane grew"
     );
     // The Cancel of the question changes nothing.
-    h.right_click(h.rect("io row spare").center());
+    h.right_click(on_card(&h, "io row spare"));
     h.press("menu back to simulated");
     h.wait(0.3);
     let before = map(&h);
@@ -480,7 +487,7 @@ fn a_channel_with_no_line_yet_is_offered_and_gets_one_named_for_the_port() {
     );
     crate::assign::testing::loads_with(&got, PROFILE);
     // Back: the line is gone and the channel is the picker's again.
-    h.right_click(h.rect("io row motor").center());
+    h.right_click(on_card(&h, "io row motor"));
     h.press("menu back to simulated");
     h.wait(0.3);
     assert!(!map(&h).contains("ch:DO-03"), "{}", map(&h));
@@ -552,7 +559,7 @@ fn a_simulated_card_has_the_badge_and_a_dashed_outline_and_a_physical_one_is_sol
     assert!(h.has("io solid spare"), "solid");
     assert!(h.has("io sim stop"), "the others stay simulated");
     // And back: the badge returns.
-    h.right_click(h.rect("io row spare").center());
+    h.right_click(on_card(&h, "io row spare"));
     h.press("menu back to simulated");
     h.wait(0.3);
     assert!(h.has("io sim spare") && h.has("io dashed spare") && !h.has("io solid spare"));
@@ -591,7 +598,7 @@ fn the_plant_line_is_kept_and_switched_off_on_assign_and_back_on_with_the_way_ba
     assert_eq!(plant(&h), format!("{PLANT}off spare\n"), "kept, with an off line");
     let (spec, problems) = helmsman_sim::parse(&plant(&h));
     assert!(problems.is_empty() && spec.is_off("spare") && spec.devices.len() == 1);
-    h.right_click(h.rect("io row spare").center());
+    h.right_click(on_card(&h, "io row spare"));
     h.press("menu back to simulated");
     h.wait(0.3);
     assert_eq!(plant(&h), PLANT, "exactly as it was");
