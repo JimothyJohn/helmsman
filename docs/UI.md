@@ -85,7 +85,7 @@ only go down.
   and their lanes pop for a second and a half; at the cap of six the
   oldest pin nobody chose makes room, and the engineer's own stay. It
   opens 320 pt tall (the diagram keeps about 430 pt at 1280x800).
-- **Messages**, the bottom panel's second tab beside the trend (Nick,
+- **Log**, the bottom panel's second tab beside the trend (Nick,
   2026-11-26: they are historic and run long; under the left pane's tabs
   from 2026-11-23), the two tab glyphs stacked at the panel's left, the
   tab shown kept per browser. The standing notices sit above either tab.
@@ -322,9 +322,9 @@ only go down.
   entry only while that says it is open (and says when it is closed or
   the hour's allowance is used). A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
-  the tab (its reason goes to the Messages). One that does not is an
-  error in the Messages (their red count, and they open), the box is
-  outlined red, and one red line opens the Messages. Undo is Before /
+  the tab (its reason goes to the Log). One that does not is an
+  error in the Log (their red count, and they open), the box is
+  outlined red, and one red line opens the Log. Undo is Before /
   After there: the file swaps at once between the version before the
   change and the change, compiled and running, each marked green and red
   against the other; nothing is saved (Save keeps the version shown), and

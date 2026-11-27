@@ -56,7 +56,7 @@ impl Tab {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
             Self::Claude => "Describe: say what the program should do, and the change is made and checked.",
             Self::Help => {
-                "Help: ask what an error means or how to do something. It reads the Messages and the devices and changes nothing."
+                "Help: ask what an error means or how to do something. It reads the Log and the devices and changes nothing."
             }
         }
     }
@@ -966,6 +966,7 @@ fn strip(
     hover: &str,
     hits: &mut Vec<(String, Rect)>,
 ) -> (Option<usize>, egui::Response) {
+    let mid = ui.max_rect().center().y;
     let mut picked = None;
     let side = ui.available_width().clamp(STRIP - 16.0, TAB);
     for (k, t) in tabs.iter().enumerate() {
@@ -976,13 +977,15 @@ fn strip(
             picked = Some(k);
         }
     }
-    (picked, strip_toggle(ui, left, hover))
+    (picked, strip_toggle(ui, left, hover, mid))
 }
 
 /// The rest of a collapsed sidebar's strip as one button: the fold glyph
 /// for showing the pane, tinted under the pointer. `left`: the pane is the
 /// right one, so showing it moves it left (the strip is on the right).
-fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
+/// The glyph sits at height `mid`, the pane's middle, where the open
+/// pane's ribbon button is, unless the tabs reach past it.
+fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str, mid: f32) -> egui::Response {
     let size = Vec2::new(
         ui.available_width().max(STRIP - 8.0),
         ui.available_height().max(TAP),
@@ -993,20 +996,42 @@ fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
         let tint = ui.style().interact(&r).bg_fill;
         ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
     }
-    fold_glyph(ui, rect.center(), !left, false, r.hovered());
+    let y = mid.clamp(
+        rect.top() + TAP * 0.5,
+        (rect.bottom() - TAP * 0.5).max(rect.top() + TAP * 0.5),
+    );
+    fold_glyph(ui, Pos2::new(rect.center().x, y), !left, false, r.hovered(), 1.0);
     r
 }
 
-/// An open sidebar's hide button in the header row. `left`: the pane is
-/// the left one.
-fn header_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
-    let (rect, r) = ui.allocate_exact_size(Vec2::splat(TAP * 0.75), Sense::click());
-    let r = r.tip(hover);
+/// Width of an open sidebar's ribbon, points.
+const RIBBON: f32 = 20.0;
+
+/// An open sidebar's hide button (Nick, 2026-11-26): a thin ribbon along
+/// the pane's inner edge, `full` the pane's rect, the button at its
+/// vertical middle, the very spot the collapsed strip's button takes.
+/// `left`: the pane is the left one (its ribbon is on its right).
+fn ribbon(ui: &mut egui::Ui, full: Rect, left: bool, hover: &str) -> egui::Response {
+    let rib = if left {
+        Rect::from_min_max(Pos2::new(full.right() - RIBBON, full.top()), full.max)
+    } else {
+        Rect::from_min_max(full.min, Pos2::new(full.left() + RIBBON, full.bottom()))
+    };
+    let btn = Rect::from_center_size(
+        Pos2::new(rib.center().x, full.center().y),
+        Vec2::new(RIBBON, TAP * 0.9),
+    );
+    let r = ui
+        .interact(btn, ui.scope_id().with(("ribbon", left)), Sense::click())
+        .tip(hover);
+    let t = theme(ui);
+    ui.painter()
+        .rect_filled(rib, CornerRadius::ZERO, t.shade.gamma_multiply(0.5));
     if r.hovered() {
         let tint = ui.style().interact(&r).bg_fill;
-        ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
+        ui.painter().rect_filled(btn, CornerRadius::same(4), tint);
     }
-    fold_glyph(ui, rect.center(), left, true, r.hovered());
+    fold_glyph(ui, btn.center(), left, true, r.hovered(), 0.8);
     r
 }
 
@@ -1014,10 +1039,10 @@ fn header_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
 /// window outline with the pane's side filled, and an arrow in the rest
 /// of it pointing the way the pane will move, into its edge to hide it,
 /// out of it to show it. `pane_left`: the pane is on the left.
-fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool) {
+fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool, scale: f32) {
     let t = theme(ui);
     let ink = if hot { t.accent } else { t.muted };
-    let (w, h, slab) = (22.0, 18.0, 7.0);
+    let (w, h, slab) = (22.0 * scale, 18.0 * scale, 7.0 * scale);
     let frame = Rect::from_center_size(c, Vec2::new(w, h));
     let p = ui.painter();
     p.rect_stroke(
@@ -1040,12 +1065,12 @@ fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool) 
     // The arrow's head points toward the pane's edge to hide, away to show.
     let dir = if hiding { side } else { -side };
     let mid = Pos2::new(edge - side * (slab + (w - slab) / 2.0), c.y);
-    let reach = 3.0;
+    let reach = 3.0 * scale;
     let tip = Pos2::new(mid.x + dir * reach, c.y);
     let back = mid.x - dir * reach;
     let stroke = Stroke::new(2.0, ink);
-    p.line_segment([Pos2::new(back, c.y - 4.0), tip], stroke);
-    p.line_segment([Pos2::new(back, c.y + 4.0), tip], stroke);
+    p.line_segment([Pos2::new(back, c.y - 4.0 * scale), tip], stroke);
+    p.line_segment([Pos2::new(back, c.y + 4.0 * scale), tip], stroke);
 }
 
 /// How far from the window's right edge a tab dragged out of the left
@@ -1156,70 +1181,74 @@ fn side_pane(
     };
     let shown = egui::Panel::show_switched(ui, &mut open, strip_panel, panel, |ui, is_open| {
         let toggle = if is_open {
-            let mut t = None;
-            // The tabs shrink to share one row with the chevron (seven at
-            // full size are wider than the pane's 320 pt), down to 24 pt,
-            // and wrap below that: a row that overflows widens the pane
-            // every frame. The row's width is read here, before it starts:
-            // inside a wrapped row `available_width` is not what is left.
-            let row = ui.available_width();
-            let gap_x = ui.spacing().item_spacing.x;
-            #[allow(clippy::cast_precision_loss)]
-            let n = tabs.len() as f32;
-            let size = ((row - TAP * 0.75 - gap_x * (n + 1.0)) / n.max(1.0)).clamp(24.0, TAB);
-            let fill = row - n * (size + gap_x) - TAP * 0.75 - gap_x;
-            ui.horizontal_wrapped(|ui| {
-                if right {
-                    t = Some(header_toggle(ui, false, &chevron_tip));
-                }
-                for &p in tabs {
-                    let r =
-                        crate::glyphs::tab_sensed(ui, p.icon(), size, on == p, None, Sense::click_and_drag())
-                            .tip(format!(
-                                "{}\nDrag to reorder or to {other}; right-click hides the tab.",
-                                p.tip()
-                            ));
-                    r.dnd_set_drag_payload(p);
-                    row_tabs.push((p, r.rect));
-                    r.context_menu(|ui| {
-                        let b = ui
-                            .add(egui::Button::new("Hide tab").min_size(Vec2::new(74.0, TAP * 0.7)))
-                            .tip(format!(
-                                "Takes {} out of the pane. View › {} brings it back.",
-                                p.label(),
-                                p.label()
-                            ));
-                        hits.push((format!("hide {}", p.key()), b.rect));
-                        if b.clicked() {
-                            hidden = Some(p);
-                            ui.close();
+            let full = ui.max_rect();
+            let content = if right {
+                Rect::from_min_max(Pos2::new(full.left() + RIBBON, full.top()), full.max)
+            } else {
+                Rect::from_min_max(full.min, Pos2::new(full.right() - RIBBON, full.bottom()))
+            };
+            let t = ribbon(ui, full, !right, &chevron_tip);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+                // The tabs shrink to share one row (seven at full size are
+                // wider than the pane's 320 pt), down to 24 pt,
+                // and wrap below that: a row that overflows widens the pane
+                // every frame. The row's width is read here, before it starts:
+                // inside a wrapped row `available_width` is not what is left.
+                let row = ui.available_width();
+                let gap_x = ui.spacing().item_spacing.x;
+                #[allow(clippy::cast_precision_loss)]
+                let n = tabs.len() as f32;
+                let size = ((row - gap_x * (n + 1.0)) / n.max(1.0)).clamp(24.0, TAB);
+                ui.horizontal_wrapped(|ui| {
+                    for &p in tabs {
+                        let r = crate::glyphs::tab_sensed(
+                            ui,
+                            p.icon(),
+                            size,
+                            on == p,
+                            None,
+                            Sense::click_and_drag(),
+                        )
+                        .tip(format!(
+                            "{}\nDrag to reorder or to {other}; right-click hides the tab.",
+                            p.tip()
+                        ));
+                        r.dnd_set_drag_payload(p);
+                        row_tabs.push((p, r.rect));
+                        r.context_menu(|ui| {
+                            let b = ui
+                                .add(egui::Button::new("Hide tab").min_size(Vec2::new(74.0, TAP * 0.7)))
+                                .tip(format!(
+                                    "Takes {} out of the pane. View › {} brings it back.",
+                                    p.label(),
+                                    p.label()
+                                ));
+                            hits.push((format!("hide {}", p.key()), b.rect));
+                            if b.clicked() {
+                                hidden = Some(p);
+                                ui.close();
+                            }
+                        });
+                        // A tab is a control first: the finger, not the grab
+                        // hand a draggable thing gets (`theme::pointer_cursor`
+                        // leaves the dragged ones alone).
+                        if r.hovered() && !r.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
-                    });
-                    // A tab is a control first: the finger, not the grab
-                    // hand a draggable thing gets (`theme::pointer_cursor`
-                    // leaves the dragged ones alone).
-                    if r.hovered() && !r.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        hits.push((p.hit(), r.rect));
+                        if r.clicked() {
+                            on = p;
+                        }
+                        if r.double_clicked() {
+                            hide = true;
+                        }
                     }
-                    hits.push((p.hit(), r.rect));
-                    if r.clicked() {
-                        on = p;
-                    }
-                    if r.double_clicked() {
-                        hide = true;
-                    }
-                }
-                if !right {
-                    // The chevron at the right edge when the row has room.
-                    if fill > 0.0 {
-                        ui.add_space(fill);
-                    }
-                    t = Some(header_toggle(ui, true, &chevron_tip));
-                }
+                });
+                ui.separator();
+                pane_body(ui, on, body, chrome);
             });
-            ui.separator();
-            pane_body(ui, on, body, chrome);
-            t
+            ui.expand_to_include_rect(full);
+            Some(t)
         } else {
             let strip_tabs: Vec<StripTab> = tabs
                 .iter()
@@ -1451,7 +1480,7 @@ fn trend_panel(
                         chrome.msgs = false;
                     }
                     let r = crate::glyphs::tab(ui, Icon::Messages, TAB, chrome.msgs, cue.alarm)
-                        .tip("Messages: what happened, newest last.");
+                        .tip("Log: what happened, newest last.");
                     hits.push(("bottom messages".to_string(), r.rect));
                     if r.clicked() {
                         chrome.msgs = true;
@@ -1461,9 +1490,9 @@ fn trend_panel(
                         let r = ui
                             .label(RichText::new(cue.errors.to_string()).strong().color(red))
                             .tip(if cue.errors == 1 {
-                                "One error in the Messages.".to_string()
+                                "One error in the Log.".to_string()
                             } else {
-                                format!("{} errors in the Messages.", cue.errors)
+                                format!("{} errors in the Log.", cue.errors)
                             });
                         hits.push(("messages error count".to_string(), r.rect));
                     }
@@ -1933,7 +1962,7 @@ pub fn busy(ui: &mut egui::Ui, chrome: &mut Chrome, stage: &str, hit: &str) {
     let t = crate::theme::theme(ui);
     let r = ui
         .add(egui::Label::new(RichText::new(stage).color(t.muted)).truncate())
-        .tip("Deploy is under way. The Messages say how it ends.");
+        .tip("Deploy is under way. The Log says how it ends.");
     let s = ui.add(egui::Spinner::new().size(crate::glyphs::ROW * 0.8));
     chrome.hit(hit, r.rect.union(s.rect));
 }

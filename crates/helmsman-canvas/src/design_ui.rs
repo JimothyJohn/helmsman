@@ -288,7 +288,7 @@ fn kept_card(ui: &mut egui::Ui, chrome: &mut Chrome, k: &Kept, act: &mut Option<
         if k.problems.is_empty() && k.total > 0 {
             let r = ui
                 .add(egui::Label::new(RichText::new("Every step is built.").size(size).color(t.muted)).wrap())
-                .tip("Every step of the build order has been built in this page. Open the Messages for what each step did.");
+                .tip("Every step of the build order has been built in this page. Open the Log for what each step did.");
             chrome.hit("design built", r.rect);
         }
         return;

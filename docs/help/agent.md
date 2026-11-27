@@ -35,8 +35,8 @@ one short line, for example:
 > Done: the lamp now latches until stop is pressed.
 
 When nothing could be changed, the answer says why in red, with the
-first lines of what failed; **Details in the Messages** opens the
-Messages, which keep all of it: hold the pointer over a line there for
+first lines of what failed; **Details in the Log** opens the
+Log, which keeps all of it: hold the pointer over a line there for
 the whole text.
 
 ## Help with the words
@@ -136,7 +136,7 @@ marked green and red with what it changed, and its tooltip names the
 instruction behind it. Saving keeps the version shown; an edit of your
 own puts the arrows away. Each step also puts that version's instruction
 back in the box and what came of it in the answer area, and writes
-nothing to the Messages.
+nothing to the Log.
 
 The clock beside the arrows turns the answer area into the list of the
 project's versions, newest first, with a box to search what each one
@@ -272,16 +272,16 @@ policy.
 On a box the **?** tab (<kbd>L</kbd>) is for someone who did not write
 the program and has a machine that does not do what it should. It keeps
 its own conversation, apart from the Describe tab's. Every error the page
-shows (in the Messages, a refused deploy, a device form that will not
+shows (in the Log, a refused deploy, a device form that will not
 save) is underlined: click it and the **?** tab opens and asks about that
-error, with the Messages. Drag over the text to select it instead.
+error, with the Log. Drag over the text to select it instead.
 
 <img src="img/get-help.png" alt="Get help in the ? tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 Sign in (any role), say what you saw or what you want to do in your own
 words, and press **Ask for help**, the yellow paper plane (<kbd>Enter</kbd> works too;
 <kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a
-new line). The page sends your words with its recent Messages, and the box
+new line). The page sends your words with its recent Log, and the box
 adds what it knows: its version, the program it runs, its devices and
 their errors. Passwords, PINs and tokens are left out. Nothing on the box
 changes and nothing is filed anywhere.

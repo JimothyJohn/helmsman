@@ -3232,7 +3232,7 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
                 Tone::Ask => {
                     "A question for you: type your answer in the box and send. It goes with the question."
                 }
-                Tone::Warn => "The change is in the program. The Messages list what did not pass.",
+                Tone::Warn => "The change is in the program. The Log lists what did not pass.",
                 Tone::Error => "Nothing in the program changed.",
             });
         chrome.hit("agent result", r.rect);
@@ -3263,13 +3263,13 @@ fn outcome_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, o: &Outcome
     }
     if a.tone != Tone::Done && !matches!(o.kind, Kind::Said) {
         let more = match a.more {
-            0 => "Details in the Messages".to_string(),
-            n => format!("{n} more in the Messages"),
+            0 => "Details in the Log".to_string(),
+            n => format!("{n} more in the Log"),
         };
         let r = ui
             .add(egui::Label::new(RichText::new(more).color(t.muted).underline()).sense(egui::Sense::click()))
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .tip("Opens the Messages, which keep every line of it.");
+            .tip("Opens the Log, which keepss every line of it.");
         chrome.hit("agent details", r.rect);
         if r.clicked() {
             chrome.show_messages();

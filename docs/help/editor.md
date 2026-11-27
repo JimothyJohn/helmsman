@@ -27,7 +27,7 @@ One row along the top.
 
 <img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
-Anything the page has to say is in the **Messages** tab of the bottom
+Anything the page has to say is in the **Log** tab of the bottom
 panel. Its first rows are what is true now: a fault, a deploy under way
 or refused, a file someone else saved since you opened it (with a
 Reload). Under them is the log of what happened. When an error comes in
@@ -281,7 +281,7 @@ limits matches to whole words. At the header's right
 - **The trend** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>) runs along the whole
   bottom of the window, under both side panes: the signals you pin, each
   drawn as a pulse that sweeps from left to right.
-- **Messages** are the bottom panel's other tab, beside the trend: what
+- **Log** is the bottom panel's other tab, beside the trend: what
   needs saying now, then the last two hundred things the page had to say,
   with the error count beside the tab. The tab stays red while an error
   is unread. Tick or untick info, warnings and errors to list or leave out
