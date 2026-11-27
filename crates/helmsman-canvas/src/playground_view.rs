@@ -5483,7 +5483,10 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             .wrap_mode(egui::TextWrapMode::Truncate);
             if ui
                 .add_sized(rect.size(), b)
-                .on_hover_text("switch: click to flip · double-click: simulate it")
+                .on_hover_text(format!(
+                    "{label} {}\nswitch: click to flip · double-click: simulate it",
+                    if on { "TRUE" } else { "FALSE" }
+                ))
                 .clicked()
             {
                 MapInput::Set(Value::Bool(!on))
@@ -5498,7 +5501,14 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
                 Value::Int(n) => i64::try_from(n).unwrap_or(0),
                 _ => 0,
             };
-            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), TYPE_HINT);
+            let c = crate::commit::number(
+                ui,
+                id,
+                &v.to_string(),
+                "",
+                rect.size(),
+                &format!("{label} = {v}\n{TYPE_HINT}"),
+            );
             match crate::commit::int(&c, lo, hi) {
                 Some(n) if n != v => MapInput::Set(Value::Int(i128::from(n))),
                 _ => MapInput::Nothing,
@@ -5509,7 +5519,14 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
                 Value::Real(r) => r,
                 _ => 0.0,
             };
-            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), TYPE_HINT);
+            let c = crate::commit::number(
+                ui,
+                id,
+                &v.to_string(),
+                "",
+                rect.size(),
+                &format!("{label} = {v}\n{TYPE_HINT}"),
+            );
             match crate::commit::real(&c) {
                 Some(x) if x.to_bits() != v.to_bits() => MapInput::Set(Value::Real(x)),
                 _ => MapInput::Nothing,
