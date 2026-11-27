@@ -1783,6 +1783,14 @@ END_PROGRAM",
         );
         h.app.sim.as_mut().unwrap().link.inbox.push(Incoming::End { seq });
         h.wait(0.3);
+        // Checked and held (docs/UI.md "Show Changes"); Apply writes it.
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.files["main.st"],
+            LAMP,
+            "held until Apply"
+        );
+        h.press("agent apply");
+        h.wait(0.3);
         assert_eq!(
             h.app.sim.as_ref().unwrap().proj.files["main.st"],
             new,
@@ -2034,6 +2042,15 @@ END_PROGRAM",
         h.frame(vec![]);
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
+        // Held until Apply (docs/UI.md "Show Changes"), the old program
+        // still running.
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert_eq!(v.proj.files["main.st"], LAMP, "held until Apply");
+            assert!(v.session.running, "the current program runs on");
+        }
+        h.press("agent apply");
+        h.wait(0.2);
         {
             let v = h.app.sim.as_ref().unwrap();
             assert_eq!(v.proj.files["main.st"], new);
@@ -2095,6 +2112,9 @@ END_PROGRAM",
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
         let main = |h: &Harness| h.app.sim.as_ref().unwrap().proj.files["main.st"].clone();
+        assert_eq!(main(&h), new, "held until Apply");
+        h.press("agent apply");
+        h.wait(0.2);
         assert_eq!(main(&h), newer);
         assert!(
             h.app.sim.as_ref().unwrap().session.running,
@@ -8179,6 +8199,7 @@ mod ribbon;
 mod scan_device;
 mod send_states;
 mod shell;
+mod show_changes;
 mod sim_points;
 mod sim_popup;
 mod start_state;

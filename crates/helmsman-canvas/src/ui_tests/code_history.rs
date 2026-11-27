@@ -205,6 +205,10 @@ fn two_changes(tab: &str) -> (Harness, String, String) {
         );
         crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.3);
+        // Held until Apply (docs/UI.md "Show Changes").
+        assert_ne!(&main_st(&h), text, "held, not written");
+        h.press("agent apply");
+        h.wait(0.3);
         let _ = Event::Text(String::new());
     }
     assert_eq!(main_st(&h), second, "both changes landed");

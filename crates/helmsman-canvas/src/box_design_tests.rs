@@ -18,6 +18,17 @@ use crate::instruct::{BOX_RULES, Kind, Mode};
 use crate::instruct_tests::{LAMP, horn_follows, latches};
 
 const LAMP_DESIGN: &str = include_str!("fixtures/design/lamp.md");
+/// [`LAMP_DESIGN`] with the horn the scripted builds add listed among its
+/// outputs: a build may only change the outputs its design names
+/// (docs/UI.md "Show Changes", Nick 2026-11-27).
+fn lamp_and_horn_design() -> String {
+    let row = "| lamp_on | Out | BOOL | TRUE lights the lamp |\n";
+    assert!(LAMP_DESIGN.contains(row));
+    LAMP_DESIGN.replace(
+        row,
+        &format!("{row}| horn | Out | BOOL | TRUE sounds the horn |\n"),
+    )
+}
 const LINE_1: &str = include_str!("fixtures/design/bottling-line-1.md");
 const LINE_2: &str = include_str!("fixtures/design/bottling-line-2.md");
 
@@ -253,14 +264,15 @@ fn build_hands_the_designs_brief_to_the_boxs_agent_and_a_small_design_lands_once
     let b = Bench::new();
     let jar = Jar::default();
     let (mut v, ctx) = with_project(&b, &jar);
+    let lamp_design = lamp_and_horn_design();
     v.design.read = Some(crate::design_step::Read::new(
-        LAMP_DESIGN.into(),
+        lamp_design.clone(),
         1,
         "A lamp.".into(),
     ));
     v.keep_design();
     run(&b, &jar, &mut v, &ctx);
-    let d = design::parse(LAMP_DESIGN);
+    let d = design::parse(&lamp_design);
     v.build_design(&ctx);
     assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
     let m: Json = serde_json::from_str(&v.chat_sent[0].body).unwrap();
@@ -289,6 +301,9 @@ fn build_hands_the_designs_brief_to_the_boxs_agent_and_a_small_design_lands_once
             .contains("Build step 2 of 2 of a designed system")
     );
     agent_reply(&mut v, &answer(&horn_latched(), &latches()));
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(file(&b, "lamp", "main.st"), LAMP, "held until Apply");
+    crate::box_projects_tests::apply_on_box(&mut v);
     run(&b, &jar, &mut v, &ctx);
     let o = v.instruct.outcome.as_ref().unwrap();
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
