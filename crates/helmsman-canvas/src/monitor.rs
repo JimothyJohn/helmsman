@@ -1351,14 +1351,11 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool, laid: &Laid) -
             Piece::Text(at, g) => {
                 p.galley(r.min + at.to_vec2(), g.clone(), th.fg);
             }
-            Piece::Dot(c, rad, Some(fill)) => {
+            Piece::Dot(c, rad, Some(fill)) | Piece::Halo(c, rad, fill) => {
                 p.circle_filled(r.min + c.to_vec2(), *rad, *fill);
             }
             Piece::Dot(c, rad, None) => {
                 p.circle_stroke(r.min + c.to_vec2(), *rad, Stroke::new(1.5 * k, th.muted));
-            }
-            Piece::Halo(c, rad, fill) => {
-                p.circle_filled(r.min + c.to_vec2(), *rad, *fill);
             }
         }
     }
