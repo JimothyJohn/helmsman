@@ -120,14 +120,9 @@ switch its inputs. What you can do:
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Zoom with the
   wheel, a two-finger scroll or a pinch, about the pointer, or with the plus
-  and minus buttons in the bottom-right corner. Zooming changes how much
-  one block stands for. All the way in, each statement is shown as the
-  Structured Text that wrote it. Zoom out and the blocks of a statement
-  close into one card named by what it sets, then into one card per
-  section, and at last the whole program is one card. The groups that
-  will close together are outlined faintly before they do. Click a card
-  to look inside it. The name beside the zoom buttons says which level
-  you are on and steps to any other. A drag on empty space draws a box that selects; move the view
+  and minus buttons in the bottom-right corner. Zooming only scales the
+  view: the blocks and wires are always drawn as they are. A drag on empty
+  space draws a box that selects; move the view
   with the hand button beside the zoom buttons (a drag on empty space then
   moves it), with Space and a drag, the middle button, or the arrow keys
   while the pointer is over the diagram. The diagram never leaves the view, and a
@@ -140,7 +135,7 @@ switch its inputs. What you can do:
   to the first. After you move the view yourself, the next press starts
   from what is right (<kbd>.</kbd>) or left (<kbd>,</kbd>) of its centre.
 
-![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
+![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims.](img/diagram-why.png)
 
 Values that would clutter the diagram are left off it: a constant shows
 its name alone, a time reads as `T#500ms`. A wire that would cross the
@@ -165,12 +160,8 @@ TON = ⏱          # over the built-in one
 The project's rules win over the built-in pictures. Zoomed out past
 where the label is drawn, the icon stands alone at a readable size.
 
-**Lamps.** The program's BOOL outputs are also lamps in the bottom-right
-corner of the diagram, lit as the program runs. An output named after a
-colour (`red`, `lamp_green`, `amber`) is a lamp of that colour, in the
-I/O panel's list and on the trend too; a red, a yellow and a green
-together are drawn as a traffic light. Any other output is a pilot lamp
-with its name under it.
+**Lamps.** An output named after a colour (`red`, `lamp_green`, `amber`)
+is a lamp of that colour, in the I/O panel's list and on the trend.
 
 **Glyphs.** Every point in the I/O panel and the Devices list carries a
 small picture of what it is, read from its name: `start_pb` a push

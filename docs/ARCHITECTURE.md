@@ -3261,23 +3261,12 @@ the end of this section.
   feeds several rows. The Q/E jump keeps its stops when an IF is drawn
   as one block (`Viewer::stops`). What the reader opened or folded is
   carried across a redeploy; it is not yet in `diagram.layout`.
-  What the zoom shows is the zoom ladder (Nick, 2026-11-23):
-  `fold::ladder` (pure) names the rungs, closest first (`Rung::Code`,
-  `Wiring`, `Statements`, `Sections`, `Program`), gives each a band of
-  zoom (`Rung::band`, a factor `STEP` apart), and says how strongly a
-  rung's cards (`card`) and outlines (`outline`) are drawn at a zoom, as
-  continuous functions of the zoom alone. `ladder::groups` gives the
-  blocks each card stands for, from `structure::statements`, `sections`
-  and `arms`, never sharing a block within a rung; a statement keeps its
-  source (`structure::sources`) for the Code rung. On the canvas
-  (`st_ladder.rs`, a child of `st_view`) `Viewer::ladder_cards` is what a
-  frame draws: each group's bounds over its blocks as laid out, so
-  nothing is laid out again and nothing reaches the edit count or
-  `diagram.layout`. `ladder_paint` draws them over the diagram after
-  `draw`; a card at least half formed takes the pointer (`ladder_at`): a
-  click flies in one rung (`ladder_click`, `ladder_fly`, the Q/E glide),
-  a drag pans. The camera's limits are the ladder's (`MIN_ZOOM`,
-  `MAX_ZOOM`).
+  The zoom ladder (Nick, 2026-11-23: cards per statement, section and
+  program over the blocks, a rung picker) was removed from the canvas on
+  2026-11-26: the zoom only scales. `fold::ladder` stays in
+  helmsman-diagram for its tests alone, and the camera's limits are still
+  its `MIN_ZOOM` and `MAX_ZOOM`. The lamp fixture in the diagram's corner
+  went the same day (`lamps.rs` keeps `colour`, which the I/O tab uses).
   The earlier three-level semantic zoom (`fold::zoom`, `st_zoom.rs`), which
   closed folds and laid the diagram out again at each level, is off
   (`st_zoom::SEMANTIC_ZOOM` is `false`, `ZoomFolds::follows` starts from
@@ -3285,9 +3274,7 @@ the end of this section.
   corner of the diagram (`Viewer::corner_controls`, drawn by `canvas` so
   the page and a box both have it) holds the hand toggle (`Viewer::hand`,
   view state: a primary drag on empty space pans instead of boxing), zoom
-  in and zoom out (`ZOOM_STEP` about the middle of the area) and the
-  rung's name, a menu that steps to any rung, left of the lamp fixture
-  when there is one.
+  in and zoom out (`ZOOM_STEP` about the middle of the area) and fit.
   With `SEMANTIC_ZOOM` on, the zoom picks the level (`st_zoom.rs`, a child of
   `st_view`): each frame
   `follow_zoom` takes the camera's zoom through `zoom::level`, and when the

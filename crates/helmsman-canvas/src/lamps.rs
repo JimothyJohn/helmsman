@@ -1,14 +1,16 @@
 //! Outputs as lamps (Nick, 2026-11-12: the program should show itself
 //! without words). A BOOL output named after a colour (`red`, `lamp_green`,
 //! `AMBER`) is a lamp of that colour wherever it is drawn: its value's text
-//! in the I/O tab, its line on the trend, and the fixture this module paints
-//! in a corner of the diagram, a real traffic light when the outputs hold a
-//! red, a yellow and a green, and a row of pilot lamps otherwise.
+//! in the I/O tab and its line on the trend. (The fixture in the diagram's
+//! corner was removed, Nick, 2026-11-26.)
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Stroke, Vec2};
+use eframe::egui::Color32;
+#[cfg(test)]
+use eframe::egui::{Pos2, Rect, Vec2};
+#[cfg(test)]
 use helmsman_iec::Value;
 
-use crate::st_view::brand::{BLACK, GRAPHITE, GREEN, RED, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{GREEN, RED, WHITE, YELLOW};
 
 /// Pilot-lamp blue and white (the brand has neither).
 pub const BLUE: Color32 = Color32::from_rgb(0x5A, 0xA9, 0xFF);
@@ -28,7 +30,12 @@ pub fn colour(name: &str) -> Option<Color32> {
         })
 }
 
+// 2026-11-26: the fixture of lamps in the diagram's corner was removed
+// (Nick: the I/O tab shows it). Only tests use what follows; the tester
+// drops it with them.
+
 /// One output drawn as a lamp.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lamp {
     pub name: String,
@@ -37,13 +44,8 @@ pub struct Lamp {
     pub on: bool,
 }
 
-impl Lamp {
-    fn lit(&self) -> Color32 {
-        self.colour.unwrap_or(YELLOW)
-    }
-}
-
-/// What the diagram's corner shows for a program's BOOL outputs.
+/// What the diagram's corner showed for a program's BOOL outputs.
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fixture {
     /// A red, a yellow and a green output, top to bottom.
@@ -55,6 +57,7 @@ pub enum Fixture {
 /// The fixture for `outputs` (name, value): the BOOL ones become lamps;
 /// a traffic light when a red, a yellow and a green are among them (any
 /// further lamp is left to the I/O tab); `None` with no BOOL output.
+#[cfg(test)]
 #[must_use]
 pub fn fixture<'a>(outputs: impl IntoIterator<Item = (&'a str, Option<Value>)>) -> Option<Fixture> {
     let lamps: Vec<Lamp> = outputs
@@ -78,17 +81,21 @@ pub fn fixture<'a>(outputs: impl IntoIterator<Item = (&'a str, Option<Value>)>) 
     Some(Fixture::Lamps(lamps))
 }
 
+#[cfg(test)]
 /// Inset of the fixture from the area's bottom-right corner.
 const INSET: f32 = 16.0;
-/// A traffic light's lamp radius, and a pilot lamp's.
+/// A traffic light's lamp radius.
+#[cfg(test)]
 const TRAFFIC_R: f32 = 15.0;
-const PILOT_R: f32 = 11.0;
 /// Room between lamps, and around them in the housing.
+#[cfg(test)]
 const GAP: f32 = 9.0;
 /// A pilot lamp's cell: the lamp with its name under it.
+#[cfg(test)]
 const CELL: Vec2 = Vec2::new(64.0, 56.0);
 
 /// The rect the fixture takes in `area`.
+#[cfg(test)]
 #[must_use]
 pub fn rect(area: Rect, f: &Fixture) -> Rect {
     let size = match f {
@@ -97,69 +104,6 @@ pub fn rect(area: Rect, f: &Fixture) -> Rect {
         Fixture::Lamps(l) => Vec2::new(l.len() as f32 * CELL.x + GAP, CELL.y + GAP),
     };
     Rect::from_min_size(area.max - size - Vec2::splat(INSET), size)
-}
-
-/// Paints `f` in the bottom-right corner of `area`: a graphite housing on
-/// either page, each lamp its colour at full strength with a halo when on
-/// and nearly out when off. Returns what it painted on.
-pub fn paint(painter: &egui::Painter, area: Rect, f: &Fixture) -> Rect {
-    let r = rect(area, f);
-    painter.rect(
-        r,
-        CornerRadius::same(10),
-        GRAPHITE,
-        Stroke::new(1.5, BLACK),
-        egui::StrokeKind::Outside,
-    );
-    match f {
-        Fixture::Traffic(lamps) => {
-            for (k, l) in lamps.iter().enumerate() {
-                #[allow(clippy::cast_precision_loss)]
-                let y = r.top() + GAP + TRAFFIC_R + k as f32 * (2.0 * TRAFFIC_R + GAP);
-                lamp(painter, Pos2::new(r.center().x, y), TRAFFIC_R, l);
-            }
-        }
-        Fixture::Lamps(lamps) => {
-            for (k, l) in lamps.iter().enumerate() {
-                #[allow(clippy::cast_precision_loss)]
-                let cell =
-                    Rect::from_min_size(r.min + Vec2::new(GAP / 2.0 + k as f32 * CELL.x, GAP / 2.0), CELL);
-                lamp(
-                    painter,
-                    Pos2::new(cell.center().x, cell.top() + PILOT_R + 4.0),
-                    PILOT_R,
-                    l,
-                );
-                let mut job = egui::text::LayoutJob::simple(
-                    l.name.to_ascii_lowercase(),
-                    FontId::monospace(11.0),
-                    if l.on { WHITE } else { STEEL },
-                    CELL.x - 6.0,
-                );
-                job.wrap.max_rows = 1;
-                job.wrap.break_anywhere = true;
-                job.wrap.overflow_character = Some('…');
-                let galley = painter.layout_job(job);
-                let at = Pos2::new(
-                    cell.center().x - galley.size().x / 2.0,
-                    cell.bottom() - galley.size().y - 2.0,
-                );
-                painter.galley(at, galley, WHITE);
-            }
-        }
-    }
-    r
-}
-
-/// One lamp: a halo and the full colour on, the colour nearly out off.
-fn lamp(painter: &egui::Painter, c: Pos2, radius: f32, l: &Lamp) {
-    let colour = l.lit();
-    if l.on {
-        painter.circle_filled(c, radius * 1.45, colour.gamma_multiply(0.28));
-        painter.circle_filled(c, radius, colour);
-    } else {
-        painter.circle(c, radius, colour.linear_multiply(0.18), Stroke::new(1.0, BLACK));
-    }
 }
 
 #[cfg(test)]
