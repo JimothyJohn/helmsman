@@ -33,6 +33,7 @@ fn view() -> NodeView {
         seq: 0,
         at_ms: 0,
         uptime_ms: 0,
+        clock_offset_ms: None,
         heap_used: 0,
         heap_peak: 0,
         heap_size: 0,
