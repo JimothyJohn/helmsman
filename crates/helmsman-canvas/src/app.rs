@@ -739,6 +739,7 @@ impl App {
                     on_box: true,
                 });
                 let map = b.map_text().0;
+                crate::editor::bottom(ui, &mut self.chrome, b);
                 self.monitor
                     .show(ui, &b.state, &mut self.chrome, engineer, t, &map);
             }
@@ -750,12 +751,12 @@ impl App {
                     state: s.session.state(),
                     on_box: false,
                 };
+                crate::editor::bottom(ui, &mut self.chrome, s);
                 self.monitor
                     .show(ui, &*s, &mut self.chrome, engineer, Some(t), "");
             }
         }
         match self.monitor.wish.take() {
-            Some(Wish::Diagram { program, prefix }) => self.open_diagram(&program, &prefix),
             Some(Wish::Act(a)) if self.source == Source::Box => {
                 let targets = self
                     .boxv
@@ -1077,27 +1078,6 @@ impl App {
         }
     }
 
-    pub fn open_diagram(&mut self, program: &str, prefix: &str) {
-        self.screen = Screen::Editor;
-        match self.source {
-            Source::Box => {
-                let b = self.boxv.get_or_insert_with(BoxView::new);
-                b.state.set_monitor(false);
-                if !program.is_empty() {
-                    b.state.select(program);
-                }
-                b.open_at = Some(prefix.to_string());
-            }
-            Source::Sim => {
-                if let Some(v) = self.sim.as_mut().and_then(|s| s.viewer.as_mut())
-                    && let Some(k) = v.scopes.iter().position(|s| s.prefix == prefix)
-                {
-                    v.open(k);
-                }
-            }
-        }
-    }
-
     /// The brand's wordmark: the encoder mark and the name, a link to the site.
     /// The name is set in the canvas's own text face; the brand's stencil face
     /// is not bundled (the board's `brand-wordmark-font` question).
@@ -1180,7 +1160,11 @@ impl App {
                     }
                     // A phone signed out has a letter's room left here:
                     // "T…" says nothing, so the title waits for room.
-                    if !narrow || ui.available_width() >= TITLE_ROOM {
+                    if narrow && self.screen == Screen::Monitor {
+                        // Where the title would be: the programs' lamps and
+                        // names, elided to what is left of the row.
+                        self.monitor_status(ui, &mut hits, true);
+                    } else if !narrow || ui.available_width() >= TITLE_ROOM {
                         let r = ui
                             .add(
                                 egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
@@ -2165,6 +2149,10 @@ impl App {
     /// The open view's actions in the header: the simulation's run
     /// controls, scan period and status; a box's status and notices.
     fn actions(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        if self.screen == Screen::Monitor {
+            self.monitor_status(ui, hits, false);
+            return;
+        }
         if self.screen != Screen::Editor {
             return;
         }
@@ -2184,6 +2172,70 @@ impl App {
         });
         hits.extend(chrome.hits.drain(before..));
         self.chrome = chrome;
+    }
+
+    /// The Monitor's part of the header (Nick, 2026-11-26): each program
+    /// shown, its state's lamp (green running, red faulted, yellow held,
+    /// grey stopped, and grey whatever it was while the data is stale) and
+    /// its state in a word. The tooltip has the rest: the fault, who
+    /// stopped it, the scan detail.
+    fn monitor_status(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>, compact: bool) {
+        use crate::monitor::Run;
+        let t = theme(ui);
+        let now = ui.ctx().input(|i| i.time);
+        let engineer = is_engineer(self.session().as_ref()).is_ok();
+        let detail = engineer && self.chrome.scan;
+        let banners = match self.source {
+            Source::Box => self
+                .boxv
+                .as_ref()
+                .map(|b| self.monitor.banner(&b.state, now, detail)),
+            Source::Sim => self.sim.as_ref().map(|s| self.monitor.banner(s, now, detail)),
+        }
+        .unwrap_or_default();
+        let lamp = |b: &crate::monitor::Banner| {
+            if b.stale {
+                t.muted
+            } else {
+                match b.run {
+                    Run::Running => t.ink(crate::monitor::GREEN),
+                    Run::Faulted(_) => t.ink(crate::monitor::RED),
+                    Run::Held => t.ink(YELLOW),
+                    Run::Stopped(_) | Run::Starting => t.muted,
+                }
+            }
+        };
+        if compact {
+            // A phone: the lamp and the name, the word in the tooltip.
+            let font = egui::FontId::monospace(crate::theme::BODY);
+            let mut job = egui::text::LayoutJob::default();
+            for (i, b) in banners.iter().enumerate() {
+                let dot = egui::TextFormat::simple(font.clone(), lamp(b));
+                let name = egui::TextFormat::simple(font.clone(), t.fg);
+                job.append(if i == 0 { "● " } else { "  ● " }, 0.0, dot);
+                job.append(&b.name, 0.0, name);
+            }
+            if !banners.is_empty() {
+                let tip: Vec<&str> = banners.iter().map(|b| b.tip.as_str()).collect();
+                let r = ui.add(egui::Label::new(job).truncate()).tip(tip.join("\n\n"));
+                hits.push(("monitor program 0".to_string(), r.rect));
+            }
+            return;
+        }
+        ui.horizontal(|ui| {
+            for (i, b) in banners.iter().enumerate() {
+                let color = lamp(b);
+                ui.label(RichText::new("●").color(color)).tip(&b.tip);
+                let r = ui
+                    .label(RichText::new(&b.name).strong().monospace().color(t.fg))
+                    .tip(&b.tip);
+                hits.push((format!("monitor program {i}"), r.rect));
+                let w = ui
+                    .label(RichText::new(b.word).monospace().color(color))
+                    .tip(&b.tip);
+                hits.push((format!("monitor state {i}"), w.rect));
+            }
+        });
     }
 
     /// The edited-not-saved mark (Save and Deploy are the File menu's and

@@ -1485,6 +1485,28 @@ fn trend_panel(
     chrome.trend = open;
 }
 
+/// The bottom panel on the Monitor: the Editor's own (`trend_panel`, one
+/// `chrome.trend` and `chrome.msgs` between them), drawn before the
+/// Monitor's central panel.
+pub fn bottom(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
+    let now = ui.input(|i| i.time);
+    let standing = body.alarm();
+    let alarm = body.messages().alarm(now, standing);
+    if body.messages().take_fresh() && !chrome.trend {
+        chrome.show_messages();
+    }
+    if body.messages().flashing(now) {
+        ui.ctx().request_repaint();
+    }
+    let cue = Cue {
+        alarm,
+        errors: body.messages().errors(),
+    };
+    let mut hits = Vec::new();
+    trend_panel(ui, chrome, body, &cue, &mut hits);
+    chrome.hits.extend(hits);
+}
+
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut hits = Vec::new();
