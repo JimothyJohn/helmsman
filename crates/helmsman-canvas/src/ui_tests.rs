@@ -41,9 +41,8 @@ impl Harness {
             cursor: egui::CursorIcon::Default,
             copied: Vec::new(),
         };
-        // The Messages open to start and take the lower part of the left
-        // pane; the tests of the pane's tabs want its whole height, and
-        // the tests of the Messages open them (`h.messages()`).
+        // The bottom panel opens on the Trend (Nick, 2026-11-26); the tests
+        // of the Messages bring them up (`h.messages()`).
         h.app.chrome.msgs = false;
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
@@ -51,8 +50,9 @@ impl Harness {
         h
     }
 
-    /// Opens the Messages under the left pane's tabs.
+    /// Opens the bottom panel on its Messages tab.
     fn messages(&mut self) {
+        self.app.chrome.trend = true;
         self.app.chrome.msgs = true;
         self.wait(0.2);
     }
@@ -483,15 +483,22 @@ mod glyphs_and_help {
         for k in ["messages info", "messages warnings", "messages errors"] {
             assert!(h.has(k), "no {k}");
         }
+        // Nick, 2026-11-26: every level is listed to start.
         assert_eq!(
             h.app.sim.as_ref().unwrap().log.show,
-            [false, false, true],
-            "errors only, to start"
+            [true, true, true],
+            "all three levels, to start"
         );
         h.press("messages info");
         let log = &h.app.sim.as_ref().unwrap().log;
-        assert_eq!(log.show, [true, false, true], "info listed too");
-        assert!(h.app.chrome.msgs, "the Messages are open to start");
+        assert_eq!(log.show, [false, true, true], "info left out");
+        h.press("messages info");
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert_eq!(log.show, [true, true, true], "and listed again");
+        assert!(
+            !crate::editor::Chrome::default().msgs,
+            "the bottom panel shows the Trend first"
+        );
         assert!(!h.has("st"), "no Files header row either");
     }
 
@@ -514,12 +521,12 @@ mod glyphs_and_help {
             assert!(!h.drew(&format!("{word} ")), "the word {word:?} is drawn");
         }
         assert!(h.drew("deploy refused"), "the message itself is");
-        assert!(!h.drew("a deploy ran"), "info is hidden to start");
+        assert!(h.drew("a deploy ran"), "info is listed to start (2026-11-26)");
         let r = h.rect("messages errors");
         assert!(r.width() >= 24.0 && r.height() >= 24.0, "a target: {r:?}");
         h.press("messages errors");
         h.wait(0.1);
-        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [false, false, false]);
+        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [true, true, false]);
         assert!(!h.drew("deploy refused"), "errors left out");
         h.press("messages errors");
         h.wait(0.1);
@@ -588,6 +595,11 @@ mod glyphs_and_help {
             log.outcome(2.0, &refused);
         }
         h.wait(0.2);
+        assert!(h.drew("Updated main.st"), "info is listed to start (2026-11-26)");
+        // Info left out: still counted.
+        h.press("messages info");
+        h.wait(0.1);
+        assert_eq!(h.app.sim.as_ref().unwrap().log.show, [false, true, true]);
         assert!(h.drew("Not changed:"), "the short line");
         assert!(
             h.app
@@ -630,64 +642,101 @@ mod glyphs_and_help {
     }
 
     /// Nick, 2026-11-24: the left pane has the page's whole height and
-    /// the trend starts at its right edge, running under the right pane;
-    /// with the left pane shut the trend is the whole bottom. The Messages
-    /// are in the left pane under its tabs' content (2026-11-23), with a
-    /// fold that is kept.
+    /// the bottom panel starts at its right edge, running under the right
+    /// pane; with the left pane shut it is the whole bottom. Nick,
+    /// 2026-11-26: the Messages left the side pane for a tab of the bottom
+    /// panel beside the Trend, the Trend first; the tab shown is kept.
+    /// The two tabs are a strip at the panel's left, the Trend on top and
+    /// the Messages under it, the content to the strip's right.
     #[test]
-    fn the_trend_starts_beside_the_full_height_left_pane_which_holds_the_messages() {
+    fn the_bottom_panel_beside_the_full_height_left_pane_has_the_trend_and_the_messages_as_tabs() {
         let mut h = Harness::new(App::sim());
-        h.messages();
+        h.app.chrome.trend = true;
         h.wait(0.3);
-        assert!(h.app.chrome.trend && h.app.chrome.msgs);
-        for k in ["bottom trend", "bottom messages"] {
-            assert!(!h.has(k), "{k} was a tab of the old bottom panel");
-        }
-        let trend = h.rect("trend tab");
+        assert!(!h.app.chrome.msgs, "the Trend first");
+        assert!(!h.has("messages fold"), "the old fold is gone");
         let left = h.rect("left");
+        let (tt, tm) = (h.rect("bottom trend"), h.rect("bottom messages"));
         assert!(
-            // The chevron is the last thing in the pane's tab row.
+            tt.bottom() <= tm.top() + 1.0,
+            "Trend on top, Messages under it: {tt:?} {tm:?}"
+        );
+        assert!(
+            (tt.center().x - tm.center().x).abs() < 1.0,
+            "one column of tabs: {tt:?} {tm:?}"
+        );
+        assert!(
+            tt.left() >= left.right() - 1.0,
+            "beside the left pane: {tt:?} {left:?}"
+        );
+        let trend = h.rect("trend tab");
+        assert!(
             trend.left() >= left.right() - 1.0 && trend.left() < left.right() + 40.0,
             "from the left pane's edge: {trend:?} {left:?}"
         );
+        assert!(
+            tt.left() >= trend.left() - 1.0 && tm.bottom() <= trend.bottom() + 1.0,
+            "the strip is inside the bottom panel: {tt:?} {tm:?} {trend:?}"
+        );
         assert!(trend.right() > h.size.x - 12.0, "to the far right: {trend:?}");
         assert!(trend.height() >= 200.0, "taller than it was: {trend:?}");
-        let fold = h.rect("messages fold");
-        assert!(
-            fold.top() > trend.top(),
-            "the Messages have the height beside the trend: {fold:?} {trend:?}"
-        );
-        // The left pane shut: the trend has the whole bottom.
+        assert!(!h.has("messages errors"), "the Messages are not shown beside it");
+        // The Messages tab: the list and its filters, in the bottom panel.
+        h.press("bottom messages");
+        h.wait(0.2);
+        assert!(h.app.chrome.trend && h.app.chrome.msgs);
+        for k in [
+            "messages info",
+            "messages warnings",
+            "messages errors",
+            "messages copy",
+        ] {
+            let r = h.rect(k);
+            assert!(
+                r.left() >= tm.right() - 1.0,
+                "{k} is right of the strip, out of the left pane: {r:?} {tm:?}"
+            );
+            assert!(
+                r.top() >= trend.top() - 1.0 && r.bottom() <= trend.bottom() + 1.0,
+                "{k} is in the bottom panel: {r:?} {trend:?}"
+            );
+            assert!(
+                r.top() >= h.app.chrome.diagram.bottom() - 1.0,
+                "{k} under the diagram"
+            );
+        }
+        // No side pane tab holds them any more.
+        for p in &crate::editor::Pane::ALL {
+            h.app.chrome.show(*p);
+            h.wait(0.1);
+            let left = h.rect("left");
+            let r = h.rect("messages errors");
+            assert!(r.left() >= left.right() - 1.0, "{p:?}: {r:?} {left:?}");
+        }
+        let back = crate::editor::Chrome::restored(&h.app.chrome.saved());
+        assert!(back.msgs, "the tab shown is kept per browser");
+        // The left pane shut: the bottom panel has the whole bottom.
+        let open_at = h.rect("bottom trend").left();
         h.app.chrome.left = false;
         h.wait(0.3);
-        let wide = h.rect("trend tab");
-        assert!(wide.left() < 60.0, "from the strip at the far left: {wide:?}");
+        let (rail, strip) = (h.rect("left"), h.rect("bottom trend"));
+        assert!(
+            strip.left() >= rail.right() - 1.0 && strip.left() <= rail.right() + 40.0,
+            "the tab strip next to the shut pane's rail: {strip:?} {rail:?}"
+        );
+        assert!(
+            strip.left() < open_at - 200.0,
+            "the panel took the bottom the pane left: {strip:?}, {open_at} open"
+        );
         h.app.chrome.left = true;
         h.wait(0.3);
-        let left = h.rect("left");
-        let fold = h.rect("messages fold");
-        assert!(
-            fold.right() <= left.right() + 1.0,
-            "in the left pane: {fold:?} {left:?}"
-        );
-        assert!(fold.top() > h.rect("tab claude").bottom(), "under the tabs");
-        // The fold hides the list and its filters, and is kept.
-        assert!(h.has("messages errors"));
-        h.press("messages fold");
+        h.press("bottom trend");
         h.wait(0.2);
-        assert!(!h.app.chrome.msgs);
+        assert!(h.app.chrome.trend && !h.app.chrome.msgs);
         assert!(!h.has("messages errors"), "the filters went with the list");
-        assert!(h.has("messages fold"), "the header stays");
-        let (fold, trend) = (h.rect("messages fold"), h.rect("trend tab"));
-        assert!(
-            fold.bottom() > trend.bottom() - 12.0,
-            "folded, the header is at the page's bottom, beside the trend: {fold:?} {trend:?}"
-        );
+        assert!(h.has("trend tab"));
         let back = crate::editor::Chrome::restored(&h.app.chrome.saved());
         assert!(!back.msgs, "kept per browser");
-        h.press("messages fold");
-        h.wait(0.2);
-        assert!(h.app.chrome.msgs && h.has("messages errors"));
     }
 
     /// Nick, 2026-11-23: the trend is drawn as an EKG. A running program
@@ -722,8 +771,7 @@ mod glyphs_and_help {
 
     /// A browser that saved its layout when the bottom panel had tabs
     /// (`bottom=messages`, no `msgs=`) keeps its side panels and the
-    /// trend's state, and opens the Messages; a flag that is not one is
-    /// folded Messages, not a crash.
+    /// trend's state; a flag that is not one is the Trend, not a crash.
     #[test]
     fn a_layout_saved_with_the_bottom_tabs_still_reads_without_losing_the_side_panels() {
         let old = "dock=2 left=0 right=1 lefts=claude,files pane=files rights=code,io,devices,history side=code scan=1 trend=0 bottom=messages light=1 wrap=0 advanced=0 reset=0 iogrid=0 iofold=00 filefold=00";
@@ -741,9 +789,9 @@ mod glyphs_and_help {
             (c.pane, c.side),
             (crate::editor::Pane::Files, crate::editor::Pane::Code)
         );
-        assert!(c.msgs, "the Messages open, as the first page has them");
         assert!(!crate::editor::Chrome::restored("dock=2 msgs=x").msgs);
-        assert!(crate::editor::Chrome::restored("dock=2 msgs").msgs);
+        assert!(crate::editor::Chrome::restored("dock=2 msgs=1").msgs);
+        assert!(!crate::editor::Chrome::restored("dock=2 msgs=0").msgs);
         let kept = crate::editor::Chrome::restored(&c.saved());
         assert_eq!(
             (kept.left, kept.right, kept.trend, kept.msgs),
@@ -842,6 +890,11 @@ mod glyphs_and_help {
         assert!(
             (left - crate::editor::LEFT_W).abs() <= 16.0,
             "the left pane at its default width: {left}"
+        );
+        // Nick, 2026-11-26: the left pane opens 384 pt wide (was 320).
+        assert!(
+            (left - 384.0).abs() <= 16.0,
+            "the left pane opens 384 pt wide: {left}"
         );
     }
 
@@ -2851,11 +2904,15 @@ mod chrome {
     }
 
     /// Nick, 2026-11-11: nothing is said in a line under the menus. What
-    /// needs saying is in the Messages, whose header goes red on an error
-    /// (pulsing at first), stays red while the error stands or is unread,
-    /// and opens the pane they sit in if it was shut.
+    /// needs saying is in the Messages, whose tab goes red on an error
+    /// (pulsing at first) and stays red while the error stands or is
+    /// unread. Nick, 2026-11-26: the Messages are a tab of the bottom
+    /// panel beside the Trend; a new error opens the panel on the Messages
+    /// when it is shut, and an open panel keeps the tab it shows. The tabs
+    /// are a strip at the panel's left: Trend, Messages, the error count
+    /// under them; the content is to the strip's right.
     #[test]
-    fn an_error_is_in_the_messages_which_go_red_and_open_a_shut_pane() {
+    fn an_error_is_in_the_messages_which_go_red_and_open_a_shut_bottom_panel() {
         use crate::messages::FLASH;
         let mut h = Harness::new(App::sim());
         h.wait(0.2);
@@ -2865,19 +2922,31 @@ mod chrome {
             (l.alarm(h.time, false), l.flashing(h.time))
         };
         assert_eq!(log(&h), (None, false), "nothing wrong, nothing red");
-        // The pane shut and the Messages folded: a fault opens both.
-        h.app.chrome.left = false;
+        // The bottom panel shut: a fault opens it on the Messages.
+        h.app.chrome.trend = false;
         h.app.chrome.msgs = false;
         h.wait(0.2);
         h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
         h.wait(0.2);
         h.wait(0.5);
         assert!(
-            h.app.chrome.left && h.app.chrome.msgs,
-            "the pane and the Messages opened"
+            h.app.chrome.trend && h.app.chrome.msgs,
+            "the bottom panel opened on the Messages"
         );
         assert!(h.has("fault"), "the fault is in the Messages");
-        assert!(h.rect("fault").top() > h.rect("messages fold").bottom());
+        let (fault, tm) = (h.rect("fault"), h.rect("bottom messages"));
+        assert!(
+            fault.left() >= tm.right() - 1.0,
+            "the fault is right of the strip: {fault:?} {tm:?}"
+        );
+        assert!(
+            fault.top() >= h.rect("bottom trend").top() - 4.0 && fault.bottom() <= h.size.y,
+            "inside the bottom panel, at the top of its content: {fault:?}"
+        );
+        assert!(
+            h.rect("fault").top() > h.app.chrome.diagram.bottom() - 0.5,
+            "in the bottom panel, under the diagram"
+        );
         let now = h.app.chrome.diagram.top();
         assert!(
             (now - top).abs() < 0.5,
@@ -2885,29 +2954,48 @@ mod chrome {
         );
         let (alarm, flashing) = log(&h);
         assert!(alarm.is_some() && flashing, "red and pulsing");
-        // Folded, the fault still stands: red, steady once the pulse is
-        // over, and it never stops while the fault is there.
-        h.press("messages fold");
+        // On the Trend, the fault still stands: red, steady once the pulse
+        // is over, and it never stops while the fault is there.
+        h.press("bottom trend");
         h.wait(FLASH + 0.5);
+        assert!(h.app.chrome.trend && !h.app.chrome.msgs, "the Trend shows");
         let l = &h.app.sim.as_ref().unwrap().log;
         assert!(!l.flashing(h.time), "the pulse ends");
         assert!(l.alarm(h.time, true).is_some(), "red while the fault stands");
-        // A new error while they are folded: unread, so red on its own
-        // account (on the fold's header) until the Messages are looked at,
-        // and the fold stays where the engineer put it.
+        // A new error while the Trend shows: unread, so red on its own
+        // account until the Messages are looked at, and the open panel
+        // keeps its tab.
         let at = h.time;
         h.app.sim.as_mut().unwrap().session.fault = None;
         h.app.sim.as_mut().unwrap().log.error(at, "deploy refused");
         h.wait(FLASH + 0.5);
         assert!(log(&h).0.is_some(), "unread: red");
-        assert!(!h.app.chrome.msgs, "a folded Messages keeps its fold");
+        assert!(
+            h.app.chrome.trend && !h.app.chrome.msgs,
+            "an open panel keeps the Trend"
+        );
         assert!(
             h.has("messages error count"),
-            "and the error count shows beside the header"
+            "and the error count shows by the Messages tab"
         );
-        h.press("messages fold");
+        let (count, tab) = (h.rect("messages error count"), h.rect("bottom messages"));
+        assert!(
+            count.top() >= tab.bottom() - 1.0 && (count.center().x - tab.center().x).abs() < tab.width(),
+            "the count {count:?} under the tab {tab:?}"
+        );
+        h.press("bottom messages");
         h.wait(0.2);
+        assert!(h.drew("deploy refused"), "the Messages show the error");
         assert_eq!(log(&h), (None, false), "read, and nothing stands");
+        // Shut again, a new error opens it on the Messages again.
+        h.app.chrome.trend = false;
+        h.app.chrome.msgs = false;
+        h.wait(0.2);
+        let at = h.time;
+        h.app.sim.as_mut().unwrap().log.error(at, "second refusal");
+        h.wait(0.3);
+        assert!(h.app.chrome.trend && h.app.chrome.msgs, "opened on the Messages");
+        assert!(h.drew("second refusal"));
     }
 
     #[test]
@@ -4798,8 +4886,8 @@ mod simulated {
         h.frame(vec![Event::Zoom(1.5)]);
         let pinched = sim_view(&h).cams[0];
         assert!(pinched.zoom > further.zoom, "a pinch still zooms");
-        // The arrow keys and W A S D move the view; right shows what is
-        // further right.
+        // The arrow keys move the view; right shows what is further
+        // right. W A S D no longer do (Nick, 2026-11-26).
         let held = |h: &mut Harness, key: Key| {
             let ev = |pressed| Event::Key {
                 key,
@@ -4818,13 +4906,9 @@ mod simulated {
         };
         for (key, x, y) in [
             (Key::ArrowRight, -1.0, 0.0),
-            (Key::D, -1.0, 0.0),
             (Key::ArrowLeft, 1.0, 0.0),
-            (Key::A, 1.0, 0.0),
             (Key::ArrowDown, 0.0, -1.0),
-            (Key::S, 0.0, -1.0),
             (Key::ArrowUp, 0.0, 1.0),
-            (Key::W, 0.0, 1.0),
         ] {
             let by = held(&mut h, key);
             assert!(
@@ -4832,10 +4916,62 @@ mod simulated {
                 "{key:?} moved the view by {by:?}"
             );
         }
+        // W is no view's letter, so nothing else moves the view under it.
+        assert_eq!(held(&mut h, Key::W), Vec2::ZERO, "W panned");
         let v = h.app.sim.as_mut().unwrap().viewer.as_mut().unwrap();
         v.open(1);
         h.frame(vec![]);
         assert_eq!(sim_view(&h).diagram().pou, "STATION");
+    }
+
+    /// Nick, 2026-11-26: hovering empty diagram space shows no tip (the
+    /// long how-to that followed the pointer is gone).
+    #[test]
+    fn hovering_empty_diagram_space_shows_no_tip() {
+        use std::collections::BTreeSet;
+        let mut h = Harness::blink();
+        h.press("stop");
+        h.frame(vec![Event::PointerGone]);
+        h.wait(1.5);
+        let lines = |h: &mut Harness| -> BTreeSet<String> {
+            super::all_text(h).lines().map(str::to_string).collect()
+        };
+        let at_rest = lines(&mut h);
+        // A point of the diagram well away from any block, region or control.
+        let area = h.app.chrome.diagram.shrink(60.0);
+        let empty = {
+            let v = sim_view(&h);
+            let (d, cam) = (v.diagram(), v.cams[v.scope]);
+            let mut found = None;
+            'grid: for i in 0..24 {
+                for j in 0..24 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let p = Pos2::new(
+                        area.left() + area.width() * (i as f32 + 0.5) / 24.0,
+                        area.top() + area.height() * (j as f32 + 0.5) / 24.0,
+                    );
+                    let (x, y) = cam.to_world(p);
+                    let in_region = d.regions.iter().any(|r| {
+                        x >= r.rect.x - 30.0
+                            && x <= r.rect.right() + 30.0
+                            && y >= r.rect.y - 30.0
+                            && y <= r.rect.bottom() + 30.0
+                    });
+                    let on_control = h.app.chrome.hits.iter().any(|(_, r)| r.expand(30.0).contains(p));
+                    if node_near(d, x, y, 60.0).is_none() && !in_region && !on_control {
+                        found = Some(p);
+                        break 'grid;
+                    }
+                }
+            }
+            found.expect("some empty diagram space")
+        };
+        h.frame(vec![Event::PointerMoved(empty)]);
+        h.wait(1.5);
+        let hovered = lines(&mut h);
+        let new: Vec<&String> = hovered.difference(&at_rest).collect();
+        assert!(new.is_empty(), "hovering empty space at {empty:?} drew {new:?}");
+        assert!(!h.drew("Click a block to select it"), "the old tip is gone");
     }
 
     #[test]
@@ -5358,8 +5494,8 @@ mod simulated {
             "pane code",
             "tab io",
             "tab claude",
-            "messages fold",
-            "messages fold",
+            "bottom trend",
+            "bottom messages",
         ] {
             h.press(key);
             h.wait(0.3);
@@ -5776,8 +5912,8 @@ mod simulated {
             "pane code",
             "tab claude",
             "tab io",
-            "messages fold",
-            "messages fold",
+            "bottom trend",
+            "bottom messages",
             "pane files",
             "tab claude",
         ] {
@@ -6187,7 +6323,13 @@ mod boxed {
     /// `POST /api/help` with the page's Messages; the answer shows the
     /// diagnosis and the issue, whose Copy puts the whole Markdown on the
     /// clipboard; and the panels keep their width throughout.
+    ///
+    /// Parked for the help-tab branch: on this branch (Nick, 2026-11-26)
+    /// the Agent tab lost its mode toggle and Help mode has no way in;
+    /// the help-tab branch gives Help a tab of its own and should drive
+    /// this through it and drop the `ignore`.
     #[test]
+    #[ignore = "help-tab branch: Help mode has no way in until Help gets its own tab (Nick, 2026-11-26)"]
     fn help_mode_on_a_box_asks_and_shows_a_copyable_issue() {
         use crate::box_agent::Incoming;
         use crate::review::Session;
@@ -6312,6 +6454,44 @@ mod boxed {
         h.frame(vec![]);
         assert!(h.has("agent instruction"));
         kept(&h, "back to the code");
+    }
+
+    /// Nick, 2026-11-26: on a box the Agent (Describe) tab's heading is
+    /// the agent's status dot alone, at the right: no mode toggle and no
+    /// title. What follows it (the instruction, Send, Deploy) comes right
+    /// under it, on the page.
+    #[test]
+    fn on_a_box_the_agent_heading_is_the_status_dot_alone_and_the_field_follows_it() {
+        for docked_right in [false, true] {
+            let mut h = Harness::new(App::boxed());
+            if docked_right {
+                h.app.chrome.dock(crate::editor::Pane::Claude, true);
+            }
+            h.wait(0.3);
+            h.press("tab claude");
+            h.wait(0.2);
+            for gone in ["agent mode help", "agent mode code"] {
+                assert!(!h.has(gone), "{gone} is gone");
+            }
+            assert!(!h.drew("Change the program") && !h.drew("Get help"), "no title");
+            let (tab, dot) = (h.rect("agent tab"), h.rect("agent status"));
+            assert!(
+                tab.right() - dot.right() < 40.0,
+                "docked right={docked_right}: the dot {dot:?} at the right of {tab:?}"
+            );
+            for k in ["agent instruction", "agent send", "agent deploy"] {
+                let r = h.rect(k);
+                assert!(
+                    r.bottom() <= h.size.y && r.top() >= dot.top(),
+                    "docked right={docked_right}: {k} {r:?} on the page, under the dot {dot:?}"
+                );
+            }
+            let field = h.rect("agent instruction");
+            assert!(
+                field.top() - dot.bottom() < 40.0,
+                "docked right={docked_right}: the field {field:?} right under the heading {dot:?}"
+            );
+        }
     }
 
     /// A page that watches a Skipper: the Devices tab has one row for its

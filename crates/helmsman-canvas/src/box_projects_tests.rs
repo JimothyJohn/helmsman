@@ -1304,6 +1304,144 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
     assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
 }
 
+/// Nick, 2026-11-26: a save or a deploy that went through is a popup under
+/// the header's save glyph for `FLASH_S` (2.5 s), "Saved" or "Deployed",
+/// and one info line in the log; it is no notice. Driven on the bench box
+/// through the page, the requests carried out as the browser would.
+#[test]
+fn a_save_and_a_deploy_that_went_through_flash_under_the_save_glyph_and_log_one_line() {
+    use crate::box_projects::FLASH_S;
+    use crate::messages::Level;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    v.projects.open_file("main.st");
+    let session = Some(b.login(&jar, "alice", ALICE));
+    let mut h = Harness::new(v, session);
+    h.wait(0.3);
+    // Carries out what the page asked the box until it is quiet.
+    let settle_page = |h: &mut Harness| {
+        for _ in 0..30 {
+            h.frame(vec![]);
+            let (ctx, now) = (h.ctx.clone(), h.time);
+            if h.bv().psent.is_empty() && h.bv().sent.is_empty() {
+                return;
+            }
+            pump(&b, &jar, h.bv(), &ctx, now);
+        }
+        panic!("the page never went quiet");
+    };
+    settle_page(&mut h);
+    let lines = |h: &mut Harness, text: &str| {
+        h.bv()
+            .log
+            .iter()
+            .filter(|m| m.text == text && m.level == Level::Info)
+            .count()
+    };
+    let flash_up = |h: &Harness| h.app.chrome.rect("save flash");
+    // What `make` saved before the page was drawn is past.
+    h.wait(FLASH_S + 0.2);
+    assert!(flash_up(&h).is_none(), "nothing flashes at rest");
+
+    // A save.
+    let edited = MAIN.replace("reset := FALSE", "reset := NOT start");
+    h.bv().projects.current_mut().unwrap().text.clone_from(&edited);
+    h.frame(vec![]);
+    let before = lines(&mut h, "Saved line.");
+    h.press("save");
+    let saved_at = h.time;
+    settle_page(&mut h);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        edited.as_str()
+    );
+    let f = h.bv().projects.flash.clone().expect("the save flashes");
+    assert_eq!((f.word, f.line.as_str()), ("Saved", "Saved line."));
+    assert!(
+        (f.at - saved_at).abs() < 1.0,
+        "flashed at page time {} not {saved_at}",
+        f.at
+    );
+    h.frame(vec![]);
+    let pop = flash_up(&h).expect("the popup is up");
+    let save = h.rect("save");
+    assert!(
+        pop.top() >= save.bottom() - 1.0 && pop.right() > save.left() && pop.left() < save.right(),
+        "the popup {pop:?} is under the save glyph {save:?}"
+    );
+    assert!(h.drew("Saved"), "the popup says Saved");
+    assert!(
+        !h.bv()
+            .projects
+            .notice
+            .as_ref()
+            .is_some_and(|(n, _)| n.contains("Saved line")),
+        "no notice: {:?}",
+        h.bv().projects.notice
+    );
+    h.wait(1.0);
+    assert!(flash_up(&h).is_some(), "still up a second on");
+    h.wait(FLASH_S);
+    assert!(flash_up(&h).is_none(), "gone after {FLASH_S} s");
+    assert_eq!(lines(&mut h, "Saved line."), before + 1, "one line in the log");
+
+    // A deploy.
+    let before: usize = h
+        .bv()
+        .log
+        .iter()
+        .filter(|m| m.text.starts_with("Deployed "))
+        .count();
+    // The Code tab's deploy arrow, as a user deploys.
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    h.press("code deploy");
+    let deployed_at = h.time;
+    settle_page(&mut h);
+    let p = &h.bv().projects;
+    assert!(
+        matches!(p.deploy, Deploy::Done(_)),
+        "{:?} {:?}",
+        p.deploy,
+        p.diags
+    );
+    let f = h.bv().projects.flash.clone().expect("the deploy flashes");
+    assert_eq!(f.word, "Deployed");
+    assert!(
+        f.line.starts_with("Deployed ") && f.line.ends_with('.') && f.line.contains("line"),
+        "{:?}",
+        f.line
+    );
+    assert!((f.at - deployed_at).abs() < 1.0);
+    h.frame(vec![]);
+    assert!(flash_up(&h).is_some(), "the popup is up");
+    assert!(h.drew("Deployed"), "the popup says Deployed");
+    assert!(h.app.chrome.rect("deployed").is_none(), "no deploy notice");
+    assert!(
+        !h.drew("is running the version deployed from here"),
+        "no deploy notice"
+    );
+    h.wait(FLASH_S + 0.3);
+    assert!(flash_up(&h).is_none(), "gone after {FLASH_S} s");
+    let after: Vec<String> = h
+        .bv()
+        .log
+        .iter()
+        .filter(|m| m.text.starts_with("Deployed "))
+        .map(|m| m.text.clone())
+        .collect();
+    assert_eq!(after.len(), before + 1, "one line in the log: {after:?}");
+    assert_eq!(after.last(), Some(&f.line));
+}
+
 /// Alice's page on the bench box, watched until the running module is
 /// drawn with a scan.
 fn drawn(b: &Bench, jar: &Jar) -> BoxView {
@@ -2101,9 +2239,14 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
         .projects
         .history
         .iter()
-        .find(|r| r.what == "took the described change into main.st")
+        .find(|r| r.what == "Described: comment it")
         .cloned()
-        .expect("the change's revision");
+        .unwrap_or_else(|| {
+            panic!(
+                "the change's revision says what was asked: {:?}",
+                v.projects.history.iter().map(|r| &r.what).collect::<Vec<_>>()
+            )
+        });
     assert!(saved.page);
     let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
     assert!(
@@ -5190,10 +5333,11 @@ fn the_first_sign_in_asks_for_the_projects_a_locked_box_refused() {
 
 /// Nick 2026-11-24: "there needs to be a deploy button on the agent tab as
 /// well ... make it pulse or something to indicate that it's required".
-/// The Agent tab has Deploy; it says the program is not running yet while
-/// an edit waits, and pressing it sends the program as the Code tab's does.
+/// The Agent tab has Deploy; it pulses while the Agent's edit waits (no
+/// label since 2026-11-26), and pressing it sends the program as the Code
+/// tab's does.
 #[test]
-fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
+fn the_agent_tab_deploys_and_pulses_while_a_change_is_not_running() {
     use crate::remote::Fetch;
     const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
     let mut bv = BoxView::new();
@@ -5224,14 +5368,11 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
         h.app.chrome.rect("agent deploy").is_some(),
         "Deploy is on the Agent tab"
     );
-    assert!(
-        h.app.chrome.rect("agent deploy pending").is_none(),
-        "nothing waits: no pulse"
-    );
+    assert!(!h.bv().agent_pending, "nothing waits: no pulse");
     h.bv().projects.module.as_mut().unwrap().text = SRC.replace("slew := 0;", "slew := 500;");
     h.wait(0.1);
     assert!(
-        h.app.chrome.rect("agent deploy pending").is_none(),
+        !h.bv().agent_pending,
         "an edit by hand does not pulse (Nick: only a successful Agent output)"
     );
     // A refusal does not either.
@@ -5247,12 +5388,15 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
     h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Refused));
     h.bv().log_agent();
     h.wait(0.1);
-    assert!(h.app.chrome.rect("agent deploy pending").is_none());
-    // The Agent's answer was written: it pulses and says so.
+    assert!(!h.bv().agent_pending);
+    // The Agent's answer was written: Deploy pulses. Nick, 2026-11-26: the
+    // ring alone, no line saying so under it.
     h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Applied));
     h.bv().log_agent();
     h.wait(0.1);
-    assert!(h.app.chrome.rect("agent deploy pending").is_some());
+    assert!(h.bv().agent_pending, "the Agent's change waits: Deploy pulses");
+    assert!(h.app.chrome.rect("agent deploy pending").is_none(), "no label");
+    assert!(!h.drew("is not running yet"), "no label");
     // Deploy sits at the tab's right edge.
     let tab = h.rect("agent tab");
     let deploy = h.rect("agent deploy");
@@ -5265,10 +5409,9 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
         ("PUT", "/api/modules/drive")
     );
     // The deploy ran: the pulse stops.
-    h.bv().projects.deploy = crate::box_projects::Deploy::Done("drive is running".into());
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("drive deployed.".into());
     h.wait(0.1);
     assert!(!h.bv().agent_pending);
-    assert!(h.app.chrome.rect("agent deploy pending").is_none());
 }
 
 /// Nick 2026-11-24: File › New project makes the project with a program

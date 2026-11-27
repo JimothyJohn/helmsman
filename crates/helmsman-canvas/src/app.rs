@@ -804,8 +804,8 @@ impl App {
             Action::St => self.chrome.show(crate::editor::Pane::Code),
             Action::Describe => self.chrome.show(crate::editor::Pane::Claude),
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
-            Action::Messages => self.chrome.msgs = !self.chrome.msgs,
-            Action::Trend => self.chrome.trend = !self.chrome.trend,
+            Action::Messages => self.chrome.toggle_messages(),
+            Action::Trend => self.chrome.toggle_trend(),
             _ => {}
         }
     }
@@ -1000,7 +1000,7 @@ impl App {
             Action::St => self.chrome.toggle_code(),
             Action::Panel => self.chrome.right = !self.chrome.right,
             Action::DockRight => self.chrome.send_right(),
-            Action::Trend => self.chrome.trend = !self.chrome.trend,
+            Action::Trend => self.chrome.toggle_trend(),
             Action::Describe
             | Action::Io
             | Action::Messages
@@ -1388,6 +1388,7 @@ impl App {
                 (any, running)
             });
 
+        let mut save_at = None;
         egui::Area::new(egui::Id::unique("glyphs"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
@@ -1415,6 +1416,7 @@ impl App {
                                     if r.clicked() {
                                         act.push(a);
                                     }
+                                    r.rect
                                 };
                             if let Some((built, running)) = sim {
                                 let (icon, tip) = if !built {
@@ -1496,7 +1498,7 @@ impl App {
                                 g(ui, "restart", glyphs::Icon::Restart, enabled, false, tip, Action::Restart);
                                 ui.separator();
                             }
-                            g(
+                            save_at = Some(g(
                                 ui,
                                 "save",
                                 glyphs::Icon::Save,
@@ -1504,7 +1506,7 @@ impl App {
                                 false,
                                 &save_tip,
                                 Action::Save,
-                            );
+                            ));
                             g(
                                 ui,
                                 "upload",
@@ -1527,6 +1529,9 @@ impl App {
                     });
             });
         let ctx = ui.ctx().clone();
+        if let Some(at) = save_at {
+            self.save_flash(&ctx, at, &mut hits);
+        }
         for a in act {
             // On a box the run and restart glyphs are the box's (the
             // simulation's are not drawn there): every module it runs.
@@ -1537,6 +1542,39 @@ impl App {
             }
         }
         self.chrome.hits.extend(hits);
+    }
+
+    /// "Saved" or "Deployed" in a small popup under the save glyph for
+    /// [`crate::box_projects::FLASH_S`] after one went through (Nick,
+    /// 2026-11-26: not a note in the Messages). The hit is `save flash`.
+    fn save_flash(&self, ctx: &egui::Context, save: Rect, hits: &mut Vec<(String, Rect)>) {
+        let Some(f) = self
+            .boxv
+            .as_ref()
+            .filter(|_| self.source == Source::Box)
+            .and_then(|b| b.projects.flash.as_ref())
+        else {
+            return;
+        };
+        let now = ctx.input(|i| i.time);
+        let age = now - f.at;
+        if !(0.0..crate::box_projects::FLASH_S).contains(&age) {
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+            crate::box_projects::FLASH_S - age,
+        ));
+        let r = egui::Area::new(egui::Id::unique("save flash"))
+            .order(egui::Order::Tooltip)
+            .pivot(egui::Align2::CENTER_TOP)
+            .fixed_pos(save.center_bottom() + Vec2::new(0.0, 6.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(RichText::new(f.word).color(theme(ui).accent));
+                });
+            });
+        hits.push(("save flash".to_string(), r.response.rect));
     }
 
     /// View › Pane layouts…: the popup, and the browser's side of its

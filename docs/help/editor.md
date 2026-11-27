@@ -129,16 +129,16 @@ switch its inputs. What you can do:
   to look inside it. The name beside the zoom buttons says which level
   you are on and steps to any other. A drag on empty space draws a box that selects; move the view
   with the hand button beside the zoom buttons (a drag on empty space then
-  moves it), with Space and a drag, the middle button, or the arrow keys or
-  W A S D while the pointer is over the diagram. The diagram never leaves the view, and a
+  moves it), with Space and a drag, the middle button, or the arrow keys
+  while the pointer is over the diagram. The diagram never leaves the view, and a
   double-click on empty space fits it again.
-- **Jump.** With the pointer over the diagram, <kbd>E</kbd> goes to the
-  next function block call, IF, CASE or loop and <kbd>Q</kbd> to the
+- **Jump.** With the pointer over the diagram, <kbd>.</kbd> goes to the
+  next function block call, IF, CASE or loop and <kbd>,</kbd> to the
   previous one. The view zooms in to frame it with its inputs and picks
   it, so a long program is a few key presses from one end to the other.
   The keys follow the program's order and carry on round from the last
   to the first. After you move the view yourself, the next press starts
-  from what is right (<kbd>E</kbd>) or left (<kbd>Q</kbd>) of its centre.
+  from what is right (<kbd>.</kbd>) or left (<kbd>,</kbd>) of its centre.
 
 ![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
 
@@ -308,11 +308,11 @@ limits matches to whole words. At the header's right
 - **The trend** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>) runs along the whole
   bottom of the window, under both side panes: the signals you pin, each
   drawn as a pulse that sweeps from left to right.
-- **Messages** sit in the left pane under the tab's content: what needs
-  saying now, then the last two hundred things the page had to say, with
-  the error count beside their header. Click the header to fold them
-  away; it stays red while an error is unread. Tick or untick info,
-  warnings and errors to list or leave out each.
+- **Messages** are the bottom panel's other tab, beside the trend: what
+  needs saying now, then the last two hundred things the page had to say,
+  with the error count beside the tab. The tab stays red while an error
+  is unread. Tick or untick info, warnings and errors to list or leave out
+  each.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 

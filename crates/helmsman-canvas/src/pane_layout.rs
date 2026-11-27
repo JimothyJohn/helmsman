@@ -70,7 +70,7 @@ pub struct PaneLayout {
     pub left: bool,
     pub right: bool,
     pub trend: bool,
-    /// The Messages under the left pane's tab are open.
+    /// The bottom panel shows its Messages tab, not the Trend.
     pub msgs: bool,
     pub sizes: Sizes,
 }

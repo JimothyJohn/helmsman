@@ -498,3 +498,111 @@ fn a_tile_paints_nothing_that_moves_while_the_pointer_is_over_it() {
     );
     assert_eq!(still, card, "and it is where it was");
 }
+
+/// An input read once and wired to three uses.
+const FAN: &str = "\
+PROGRAM fan
+VAR_INPUT start : BOOL; other : BOOL; END_VAR
+VAR_OUTPUT a : BOOL; b : BOOL; c : BOOL; END_VAR
+a := start AND other;
+b := start OR other;
+c := NOT start;
+END_PROGRAM
+";
+
+/// What is lit on the simulation's diagram for `name`: the reads of it,
+/// every wire into or out of one, the block at each such wire's other
+/// end, and (to check nothing else is) the reads of `other` with their
+/// wires.
+/// The reads of `start` lit; per wire of start, the wire and its far
+/// block lit; the reads of `other` lit; other's own wires lit.
+type FanLit = (Vec<bool>, Vec<(bool, bool)>, Vec<bool>, Vec<bool>);
+
+fn fan_lit(h: &Harness) -> FanLit {
+    use helmsman_diagram::NodeKind;
+    let v = super::sim_view(h);
+    let on = v.highlighted().expect("something is lit");
+    let d = v.diagram();
+    let reads_of = |name: &str| -> Vec<helmsman_diagram::NodeId> {
+        d.nodes
+            .iter()
+            .filter(|n| matches!(&n.kind, NodeKind::Read { path } if path == name))
+            .map(|n| n.id)
+            .collect()
+    };
+    let start = reads_of("START");
+    let other = reads_of("OTHER");
+    assert!(!start.is_empty() && !other.is_empty(), "both inputs are drawn");
+    let mut wires = Vec::new();
+    let mut ends = Vec::new();
+    for (k, w) in d.wires.iter().enumerate() {
+        if start.contains(&w.from) || start.contains(&w.to) {
+            let end = if start.contains(&w.from) { w.to } else { w.from };
+            wires.push((on.wire(k), on.node(end)));
+            ends.push(end);
+        }
+    }
+    let other_wires: Vec<bool> = d
+        .wires
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| other.contains(&w.from) && !ends.contains(&w.from))
+        .map(|(k, _)| on.wire(k))
+        .collect();
+    (
+        start.iter().map(|n| on.node(*n)).collect(),
+        wires,
+        other.iter().map(|n| on.node(*n)).collect(),
+        other_wires,
+    )
+}
+
+/// Nick, 2026-11-26: "an input lit one leg, not all its places". The I/O
+/// card's diagram glyph lights every wire into or out of a block that
+/// reads the point, and the block at each wire's other end: `start`, read
+/// once and wired to three uses, lights all three wires and all three
+/// blocks it feeds.
+#[test]
+fn the_diagram_glyph_lights_every_wire_of_a_point_and_every_use_it_feeds() {
+    let mut h = sim_with(FAN);
+    h.press("io diagram start");
+    h.wait(0.6);
+    let (reads, wires, others, other_wires) = fan_lit(&h);
+    assert!(reads.iter().all(|&l| l), "the read of start is lit: {reads:?}");
+    assert!(wires.len() >= 3, "start is wired to its three uses: {wires:?}");
+    assert!(
+        wires.iter().all(|&(wire, end)| wire && end),
+        "every wire of start and the block at its other end are lit: {wires:?}"
+    );
+    assert!(others.iter().all(|&l| !l), "other is not start: {others:?}");
+    assert!(
+        other_wires.iter().all(|&l| !l),
+        "nor are other's wires: {other_wires:?}"
+    );
+}
+
+/// The same through Cross references (Alt Shift X) on the picked read.
+#[test]
+fn cross_references_light_every_wire_of_a_variable_and_every_use_it_feeds() {
+    use eframe::egui::{Key, Modifiers};
+    let mut h = sim_with(FAN);
+    h.app.chrome.show(Pane::Code);
+    h.wait(0.3);
+    let read = |k: &helmsman_diagram::NodeKind| matches!(k, helmsman_diagram::NodeKind::Read { path } if path == "START");
+    let (at, _) = super::node(super::sim_view(&h), read);
+    h.click(at);
+    h.frame(vec![]);
+    assert_eq!(
+        super::sim_view(&h).picked_var().as_deref(),
+        Some("START"),
+        "the read is picked"
+    );
+    h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::X);
+    h.wait(0.3);
+    let (reads, wires, others, other_wires) = fan_lit(&h);
+    assert!(reads.iter().all(|&l| l), "{reads:?}");
+    assert!(wires.len() >= 3, "{wires:?}");
+    assert!(wires.iter().all(|&(wire, end)| wire && end), "{wires:?}");
+    assert!(others.iter().all(|&l| !l), "{others:?}");
+    assert!(other_wires.iter().all(|&l| !l), "{other_wires:?}");
+}

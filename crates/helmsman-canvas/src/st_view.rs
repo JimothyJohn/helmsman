@@ -62,7 +62,7 @@ pub const FIT_MAX: f32 = 1.6;
 /// Points of wheel or two-finger scroll that zoom the diagram by e
 /// (egui's own figure for a Ctrl scroll).
 pub const SCROLL_ZOOM: f32 = 200.0;
-/// How fast a held arrow key (or W A S D) moves the view, points a second.
+/// How fast a held arrow key moves the view, points a second.
 pub const KEY_PAN: f32 = 900.0;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
@@ -372,11 +372,6 @@ pub struct TreeRow {
     pub has_kids: bool,
     pub folded: bool,
 }
-
-/// What hovering empty diagram space says.
-const EMPTY_TIP: &str = "Click a block to select it, or drag to select the blocks the box touches; \
-Shift or Ctrl adds. The Describe tab then asks about them. Esc, a click here or a click off the diagram \
-lets them go. Move the view with Space and a drag, the middle button, or the arrow keys.";
 
 /// What a drag on the diagram holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1320,8 +1315,10 @@ impl Viewer {
         true
     }
 
-    /// The reads and writes of `head` on this diagram, with the wires
-    /// between them.
+    /// The reads and writes of `head` on this diagram, every wire that
+    /// leaves or enters one of them, and the block at its other end: a
+    /// variable is drawn once and wired to each use, so each use shows
+    /// (Nick, 2026-11-26: an input lit one leg, not all its places).
     fn references(&self, head: &str) -> Drivers {
         let d = self.diagram();
         let of = |n: &helmsman_diagram::Node| match &n.kind {
@@ -1336,12 +1333,19 @@ impl Viewer {
             NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
             _ => false,
         };
-        let nodes: Vec<bool> = d.nodes.iter().map(of).collect();
-        let wires = d
+        let named: Vec<bool> = d.nodes.iter().map(of).collect();
+        let wires: Vec<bool> = d
             .wires
             .iter()
-            .map(|w| nodes[w.from.0 as usize] && nodes[w.to.0 as usize])
+            .map(|w| named[w.from.0 as usize] || named[w.to.0 as usize])
             .collect();
+        let mut nodes = named;
+        for (w, &on) in d.wires.iter().zip(&wires) {
+            if on {
+                nodes[w.from.0 as usize] = true;
+                nodes[w.to.0 as usize] = true;
+            }
+        }
         Drivers {
             nodes,
             wires,
@@ -2362,28 +2366,30 @@ impl Viewer {
         }
         let glided = (cam.offset, cam.zoom);
         // The wheel (or a two-finger scroll) zooms about the pointer, as
-        // a pinch does; a drag on empty space, the arrow keys or W A S D
-        // move the view (Nick, 2026-11-14: scroll moved it up and down).
-        // Q and E jump to the previous and the next stop.
+        // a pinch does; a drag on empty space or the arrow keys move the
+        // view (Nick, 2026-11-14: scroll moved it up and down; 2026-11-26:
+        // no W A S D, those letters are the views' keys).
+        // , and . jump to the previous and the next stop (E and Q until
+        // 2026-11-26: E is the Editor's key).
         let (hover, scroll, zoom, keys, jump, dt) = ui.ctx().input(|i| {
             use egui::Key;
-            let held = |a: Key, b: Key| f32::from(u8::from(i.key_down(a) || i.key_down(b)));
-            // The key's own modifiers: a chord with E or Q is not a jump.
+            let held = |k: Key| f32::from(u8::from(i.key_down(k)));
+            // The key's own modifiers: a chord with . or , is not a jump.
             let jump = i.events.iter().find_map(|e| match e {
                 egui::Event::Key {
-                    key: key @ (Key::E | Key::Q),
+                    key: key @ (Key::Period | Key::Comma),
                     pressed: true,
                     modifiers,
                     ..
-                } if modifiers.is_none() => Some(*key == Key::E),
+                } if modifiers.is_none() => Some(*key == Key::Period),
                 _ => None,
             });
             let keys = if i.modifiers.any() {
                 Vec2::ZERO
             } else {
                 Vec2::new(
-                    held(Key::ArrowRight, Key::D) - held(Key::ArrowLeft, Key::A),
-                    held(Key::ArrowDown, Key::S) - held(Key::ArrowUp, Key::W),
+                    held(Key::ArrowRight) - held(Key::ArrowLeft),
+                    held(Key::ArrowDown) - held(Key::ArrowUp),
                 )
             };
             (
@@ -2726,15 +2732,8 @@ impl Viewer {
                     .on_hover_text_at_pointer("Double-click draws what this arm does as one block.");
             }
         }
-        if response.hovered()
-            && carded.is_none()
-            && let Some(p) = hover
-            && self.grab.is_none()
-            && !self.on_pin(cam, p)
-            && matches!(self.grab_at(cam, p), Grab::Empty)
-        {
-            response.clone().on_hover_text_at_pointer(EMPTY_TIP);
-        }
+        // Empty space says nothing (Nick, 2026-11-26: tooltips only over
+        // something that does something).
         if response.hovered()
             && carded.is_none()
             && let Some(p) = hover
