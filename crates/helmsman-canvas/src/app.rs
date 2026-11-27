@@ -833,7 +833,10 @@ impl App {
                 }
             }
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
-            Action::HelpTab => self.chrome.show(crate::editor::Pane::Help),
+            Action::HelpTab => {
+                self.chrome.show(crate::editor::Pane::Help);
+                self.chrome.focus_help = true;
+            }
             Action::Messages => self.chrome.toggle_messages(),
             Action::Trend => self.chrome.toggle_trend(),
             Action::Fit => {

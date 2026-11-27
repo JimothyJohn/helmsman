@@ -4051,6 +4051,14 @@ impl PlaygroundView {
         let cards = self.viewer.as_ref().map(crate::st_view::Viewer::output_cards);
         // What is on the Trend: its cards show their trend glyph on.
         let pinned = self.session.trend.signals.clone();
+        // Which points the program's diagram has a block for.
+        let on_diagram: std::collections::HashSet<String> = self
+            .session
+            .inputs()
+            .chain(self.session.outputs())
+            .filter(|p| self.viewer.as_ref().is_some_and(|v| v.has_signal(&p.name)))
+            .map(|p| p.name.to_ascii_lowercase())
+            .collect();
         let lit = self
             .viewer
             .as_ref()
@@ -4108,14 +4116,23 @@ impl PlaygroundView {
                             simulate: true,
                             designation: crate::assign::Designation::of(&place),
                             trended: pinned.iter().any(|t| t.eq_ignore_ascii_case(&p.name)),
+                            on_diagram: on_diagram.contains(&p.name.to_ascii_lowercase()),
                         };
                         let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             if form == Form::Detail {
                                 // Its control is on its tile.
                                 let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
-                                let text =
-                                    format!("{} = {}", p.name.to_ascii_lowercase(), show(p.ty, p.value));
-                                crate::io_cards::value(ui, Some(glyph), state_ink(&t, p.value), &text, true);
+                                // A BOOL says its state by colour and glyph.
+                                let text = if p.ty == Ty::Bool {
+                                    p.name.to_ascii_lowercase()
+                                } else {
+                                    format!("{} = {}", p.name.to_ascii_lowercase(), show(p.ty, p.value))
+                                };
+                                let state = match p.value {
+                                    Value::Bool(b) => Some(b),
+                                    _ => None,
+                                };
+                                crate::io_cards::value(ui, Some(glyph), state_ink(&t, p.value), &text, state);
                                 return None;
                             }
                             let r = ui.scope(|ui| input_ui(ui, p, &said, form == Form::Tile));
@@ -4186,6 +4203,7 @@ impl PlaygroundView {
                             simulate: false,
                             designation: crate::assign::Designation::of(&place),
                             trended: pinned.iter().any(|t| t.eq_ignore_ascii_case(&p.name)),
+                            on_diagram: on_diagram.contains(&p.name.to_ascii_lowercase()),
                         };
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             output_ui(ui, p, form == Form::Tile);
@@ -5921,8 +5939,9 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
         None => p.name.to_ascii_lowercase(),
     };
+    // A BOOL says its state by colour and glyph (Nick, 2026-11-27).
     let text = if p.ty == Ty::Bool {
-        format!("{} {name}", if on { "●" } else { "○" })
+        name
     } else {
         format!("{name} = {}", show(p.ty, p.value))
     };
@@ -5936,7 +5955,8 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     };
     // A tile has the lamp and the name; the glyph would take half of it.
     let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
-    crate::io_cards::value(ui, glyph, color, &text, !tile);
+    let state = (p.ty == Ty::Bool).then_some(on);
+    crate::io_cards::value(ui, glyph, color, &text, state);
 }
 
 /// A value for a readout (TIME in ms).

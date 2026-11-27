@@ -1310,18 +1310,7 @@ impl Viewer {
     /// alone: no wires.
     fn named(&self, head: &str) -> Drivers {
         let d = self.diagram();
-        let of = |n: &helmsman_diagram::Node| match &n.kind {
-            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
-                // An address (`%IX0.0`) is one name, dots and all.
-                path.eq_ignore_ascii_case(head)
-                    || path
-                        .split(['.', '['])
-                        .next()
-                        .is_some_and(|h| h.eq_ignore_ascii_case(head))
-            }
-            NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
-            _ => false,
-        };
+        let of = |n: &helmsman_diagram::Node| names_point(n, head);
         Drivers {
             nodes: d.nodes.iter().map(of).collect(),
             wires: vec![false; d.wires.len()],
@@ -2062,6 +2051,21 @@ impl Viewer {
     #[must_use]
     pub fn shown_signal(&self) -> Option<(&str, usize)> {
         self.xref.as_deref().map(|k| (k, self.xref_at))
+    }
+
+    /// Whether the program's diagram has a block that reads or writes
+    /// `name`: what an I/O card's diagram glyph needs to show anything
+    /// (2026-11-27: a point the program declares and never reads showed
+    /// nothing, so its glyph is off and says why).
+    #[must_use]
+    pub fn has_signal(&self, name: &str) -> bool {
+        let head = name.split(['.', '[']).next().unwrap_or(name);
+        let head = if name.starts_with('%') { name } else { head };
+        let pou = self.scopes.first().map_or(0, |s| s.pou);
+        self.module
+            .pous
+            .get(pou)
+            .is_some_and(|p| p.diagram.nodes.iter().any(|n| names_point(n, head)))
     }
 
     /// The source line that declares the program's variable `name`.
@@ -4715,5 +4719,21 @@ mod ghost_tests {
         assert!(long.ends_with('…'));
         assert_eq!(ghost_name("größenänderungswert_für_zone"), "größenänderungswe…");
         assert_eq!(ghost_name(""), "");
+    }
+}
+
+/// Whether block `n` reads or writes the variable `head` or is its
+/// instance (an address, `%IX0.0`, is one name, dots and all).
+fn names_point(n: &helmsman_diagram::Node, head: &str) -> bool {
+    match &n.kind {
+        NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
+            path.eq_ignore_ascii_case(head)
+                || path
+                    .split(['.', '['])
+                    .next()
+                    .is_some_and(|h| h.eq_ignore_ascii_case(head))
+        }
+        NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
+        _ => false,
     }
 }
