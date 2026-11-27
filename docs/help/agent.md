@@ -257,8 +257,10 @@ engineer, open a program file, type the instruction and press **Send** or <kbd>E
 (<kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line).
 The checked change is saved on the box as a revision with its History
 entry, by you, and **Undo** asks the box to restore the revision before
-it. The dot beside the tab's heading says whether the answer service is online
-(green), offline (red) or not heard from yet (grey).
+it. When the answer service cannot be reached, the **Send** arrow turns red
+on gray like a deactivated button; a click says why and sends nothing.
+**Send** with an empty box also sends nothing and asks you to say what it
+should do.
 
 If Helmsman stores a **proposal** for review instead of sending the file
 back, the file is not touched and the tab offers **Review** to open it on

@@ -224,21 +224,7 @@ redrawn.
   to take it out of the project; the program's variable stays and the
   channel returns to the list. A device that holds points the program
   has no variable for offers **Remove unused**, which asks before it
-  removes them. **Wire it** walks through wiring a device's inputs: it
-  lists the inputs the program uses, in the device's channel order,
-  each with the terminal it goes to. Where the device library has them
-  it shows the device's own wiring note with its source, and for a
-  sensor named on the line (`wired=`) its connector with each wire's
-  pin, colour and function. Where the library has nothing it says so;
-  check the device's manual then. On a running box the window also
-  checks each input: switch the one it names and the step ticks with
-  what the box saw. If a different input of the device changes
-  instead, the window names it, since the wire is probably on the
-  wrong terminal. In the simulation there is no hardware, so you tick
-  each step yourself. **Tick** and **Skip** work on a box too, and the
-  window says which steps were seen and which you ticked. It only
-  reads: nothing is written to the project or the device, and the
-  ticks last until the page is reloaded. **Edit** beside a device opens its name and its address, so a device that moved can be fixed; Save keeps its points
+  removes them. The per-device wiring walkthrough is not there for now. **Edit** beside a device opens its name and its address, so a device that moved can be fixed; Save keeps its points
   as they are. **Delete** asks, then takes the device and its inputs
   and outputs out (the program's variables stay). Double-click or
   right-click a wired signal to rename it:

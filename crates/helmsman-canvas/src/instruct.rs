@@ -2902,7 +2902,16 @@ fn buttons_ui(
 ) -> Option<Act> {
     let mut act = None;
     let target = &v.target;
-    let why_not = v.blocked.clone().or_else(|| s.refusal());
+    // Send's four states (Nick, 2026-11-26): the agent cannot be reached
+    // (red on gray, still clickable: a click says why); a field that is
+    // empty (looks as usual: a click says to type first); another refusal
+    // (gray and off, as it was); otherwise on.
+    let empty = s.draft.trim().is_empty();
+    let unreachable = v.blocked.clone().filter(|w| !w.ends_with('\u{2026}'));
+    let why_not = v
+        .blocked
+        .clone()
+        .or_else(|| if empty { None } else { s.refusal() });
     // As many buttons as the row holds share its width, none wider than
     // an action button is: four of those do not fit the pane's default.
     let count = 1
@@ -2996,15 +3005,26 @@ fn buttons_ui(
                     act = Some(Act::Stop);
                 }
             } else {
-                let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Send, why_not.is_none(), true, wide)
-                    .tip(why_not.clone().unwrap_or_else(|| {
-                    format!(
-                        "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
+                let r = if let Some(why) = &unreachable {
+                    crate::glyphs::send_off(ui, wide).tip(why)
+                } else {
+                    crate::glyphs::action_wide(ui, crate::glyphs::Icon::Send, why_not.is_none(), true, wide).tip(
+                        why_not.clone().unwrap_or_else(|| {
+                            format!(
+                                "Send (Enter): sends the instruction with the whole of {target}. A checked answer is written into it."
+                            )
+                        }),
                     )
-                }));
+                };
                 chrome.hit("agent send", r.rect);
-                if r.clicked() || (enter && why_not.is_none()) {
-                    act = Some(Act::Send);
+                if r.clicked() || (enter && why_not.as_ref().is_none_or(|_| unreachable.is_some())) {
+                    if let Some(why) = &unreachable {
+                        s.failed(why);
+                    } else if empty {
+                        s.failed("Say what it should do first.");
+                    } else {
+                        act = Some(Act::Send);
+                    }
                 }
             }
         });

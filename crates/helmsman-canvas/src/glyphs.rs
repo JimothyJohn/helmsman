@@ -158,6 +158,25 @@ pub fn action_wide(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool, 
     r
 }
 
+/// Send when the agent cannot be reached (Nick, 2026-11-26): the arrow in
+/// red on the gray of a deactivated button, which still takes a click.
+/// The caller tips it with why.
+pub fn send_off(ui: &mut egui::Ui, width: f32) -> Response {
+    let size = Vec2::new(width, TAP * 0.75);
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    let t = theme(ui);
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(5), t.rule.gamma_multiply(0.5));
+    let side = rect.height() * 0.56;
+    draw(
+        painter,
+        Rect::from_center_size(rect.center(), Vec2::splat(side)),
+        Icon::Send,
+        t.ink(RED),
+    );
+    r
+}
+
 /// How wide the Deploy button is, points.
 pub const DEPLOY_W: f32 = ROW * 1.7;
 
