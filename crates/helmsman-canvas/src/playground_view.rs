@@ -4230,7 +4230,7 @@ impl PlaygroundView {
                             on_diagram: on_diagram.contains(&p.name.to_ascii_lowercase()),
                         };
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
-                            output_ui(ui, p, form == Form::Tile);
+                            output_ui(ui, p);
                         });
                         crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks, &mut chat);
                         asked.push((p.name.clone(), false, a));
@@ -6054,7 +6054,7 @@ fn named_tip(ui: &mut egui::Ui, label: &str, rest: &str) {
 }
 
 /// One output's first line on its card: a lamp (BOOL) or a readout.
-fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
+fn output_ui(ui: &mut egui::Ui, p: &Point) {
     let t = theme(ui);
     let on = p.value == Value::Bool(true);
     let name = match p.address() {
@@ -6070,8 +6070,9 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     // A lamp is green on and red off whatever its name says (Nick,
     // 2026-11-27); its name is muted while it is off.
     let color = if on { t.ink(GREEN) } else { t.muted };
-    // A tile has the lamp and the name; the glyph would take half of it.
-    let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
+    // A tile keeps its glyph too: it is the lamp, lit or dimmed (Nick,
+    // 2026-11-27: lamps green on, red off), as an input tile's icon is.
+    let glyph = Some(crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
     let state = (p.ty == Ty::Bool).then_some(on);
     crate::io_cards::value_with(ui, glyph, color, t.ink(crate::st_view::brand::RED), &text, state);
 }

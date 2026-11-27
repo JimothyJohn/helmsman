@@ -39,8 +39,9 @@ use crate::tips::Tip;
 pub const BAR: f32 = 12.0;
 /// The narrowest a tile gets before the grid drops a column, pt: 88 since
 /// the side panes' ribbon (2026-11-26) left the right pane 185 pt, where
-/// two tiles of 96 no longer fit and the grid went to one a row.
-const TILE: f32 = 88.0;
+/// two tiles of 96 no longer fit and the grid went to one a row; 80 since
+/// the floating chrome's margins (2026-11-27) left it 169.
+const TILE: f32 = 80.0;
 
 /// The width of a card's glyph strip, pt: three glyphs and their gaps. An
 /// input's control leaves this much free at its right end, so the glyphs
