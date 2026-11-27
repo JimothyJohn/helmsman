@@ -18,6 +18,18 @@ use crate::playground_view::PlaygroundView;
 const LINE_1: &str = include_str!("fixtures/design/bottling-line-1.md");
 const LINE_2: &str = include_str!("fixtures/design/bottling-line-2.md");
 const LAMP_DESIGN: &str = include_str!("fixtures/design/lamp.md");
+
+/// [`LAMP_DESIGN`] with the horn the scripted builds add listed among its
+/// outputs: a build may only change the outputs its design names
+/// (docs/UI.md "Show Changes", Nick 2026-11-27).
+fn lamp_and_horn_design() -> String {
+    let row = "| lamp_on | Out | BOOL | TRUE lights the lamp |\n";
+    assert!(LAMP_DESIGN.contains(row));
+    LAMP_DESIGN.replace(
+        row,
+        &format!("{row}| horn | Out | BOOL | TRUE sounds the horn |\n"),
+    )
+}
 const OPEN: &str = r#"{"open": true, "agents": ["design"], "design": {"open": true}}"#;
 
 fn ctx() -> egui::Context {
@@ -296,7 +308,7 @@ fn build_hands_the_first_batch_of_a_big_design_to_the_steps_run_with_the_designs
 #[test]
 fn a_small_design_builds_step_by_step_and_is_written_once_when_every_step_has_passed() {
     let mut v = mine();
-    v.proj.files.insert(DESIGN_FILE.into(), LAMP_DESIGN.into());
+    v.proj.files.insert(DESIGN_FILE.into(), lamp_and_horn_design());
     v.proj.save_as("kept the design", None);
     let revs = v.proj.revisions().len();
     v.build_design(&ctx());
@@ -322,6 +334,9 @@ fn a_small_design_builds_step_by_step_and_is_written_once_when_every_step_has_pa
         "{step2}"
     );
     reply(&mut v, &answer(&horn_latched(), &latches()));
+    assert_eq!(v.proj.files["main.st"], LAMP, "held until Apply");
+    assert_eq!(v.proj.revisions().len(), revs);
+    crate::instruct_tests::apply(&mut v);
     let o = v.instruct.outcome.as_ref().unwrap();
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
     assert_eq!(v.proj.files["main.st"], horn_latched());
@@ -342,6 +357,60 @@ fn a_small_design_builds_step_by_step_and_is_written_once_when_every_step_has_pa
         (2, None),
         "both steps are counted once they are written"
     );
+}
+
+/// A built batch is held like any described change (docs/UI.md "Show
+/// Changes"): the kept design does not count it until it is applied, and
+/// Discard leaves it to build again. Apply takes it, as a change whose file
+/// has not moved since the build started; an edit by hand while it is held
+/// still refuses it.
+#[test]
+fn a_held_design_batch_is_counted_only_once_applied_and_apply_checks_the_file() {
+    let built = |v: &mut PlaygroundView| {
+        let k = v.kept_design_for_test().unwrap();
+        (k.built, k.next)
+    };
+    let held = |v: &mut PlaygroundView| {
+        v.build_design(&ctx());
+        reply(v, &answer(&horn(), &horn_follows()));
+        reply(v, &answer(&horn_latched(), &latches()));
+        assert!(v.instruct.pending.is_some(), "held: {:?}", v.instruct.outcome);
+        assert_eq!(v.proj.files["main.st"], LAMP, "nothing written");
+    };
+    let mut v = mine();
+    v.proj.files.insert(DESIGN_FILE.into(), lamp_and_horn_design());
+    v.proj.save_as("kept the design", None);
+    let before = built(&mut v);
+    assert_eq!(before.0, 0);
+    assert!(before.1.is_some(), "a batch to build");
+
+    // Held: not built yet.
+    held(&mut v);
+    assert_eq!(built(&mut v), before, "a held batch is not counted");
+
+    // Discarded: still not built, and Build offers the same batch.
+    crate::instruct_tests::press_on_page(&mut v, "agent discard");
+    assert!(v.instruct.pending.is_none());
+    assert_eq!(v.proj.files["main.st"], LAMP);
+    assert_eq!(built(&mut v), before, "Discard builds nothing");
+
+    // Built again and applied: taken (the file did not move), and counted.
+    held(&mut v);
+    crate::instruct_tests::apply(&mut v);
+    assert_eq!(v.proj.files["main.st"], horn_latched());
+    assert_eq!(built(&mut v), (2, None), "counted once applied");
+
+    // An edit by hand while a batch is held: Apply refuses it.
+    let mut v = mine();
+    v.proj.files.insert(DESIGN_FILE.into(), lamp_and_horn_design());
+    v.proj.save_as("kept the design", None);
+    held(&mut v);
+    let edited = format!("{LAMP}(* mine *)\n");
+    v.proj.current_text_mut().unwrap().clone_from(&edited);
+    v.proj.save();
+    crate::instruct_tests::press_on_page(&mut v, "agent apply");
+    assert_eq!(v.proj.files["main.st"], edited, "the edit stands");
+    assert_eq!(built(&mut v), before, "nothing counted");
 }
 
 #[test]
@@ -436,7 +505,7 @@ fn a_closed_entry_and_a_spent_allowance_say_so_without_touching_the_chat() {
     assert!(v.design.error.as_deref().unwrap().contains("closed for now"));
     // The chat's own state is untouched and it answers.
     assert!(v.chat.route().is_ok());
-    let _ = crate::instruct_tests::instruct(
+    let _ = crate::instruct_tests::instruct_applied(
         &mut v,
         "make the lamp latch",
         &[&st(&LAMP.replace("lamp := start;\n", "lamp := start OR lamp;\n"))],
@@ -459,7 +528,7 @@ fn a_closed_entry_and_a_spent_allowance_say_so_without_touching_the_chat() {
         v.design.notice
     );
     assert!(v.chat.route().is_ok());
-    let _ = crate::instruct_tests::instruct(
+    let _ = crate::instruct_tests::instruct_applied(
         &mut v,
         "make the lamp latch",
         &[&st(&LAMP.replace("lamp := start;\n", "lamp := start OR lamp;\n"))],
@@ -719,7 +788,7 @@ fn with_unshown(answer_text: &str, requirement: &str) -> String {
 #[test]
 fn a_requirement_with_no_scenario_is_kept_as_a_test_with_nothing_in_it_and_said_in_the_status() {
     let mut v = mine();
-    v.proj.files.insert(DESIGN_FILE.into(), LAMP_DESIGN.into());
+    v.proj.files.insert(DESIGN_FILE.into(), lamp_and_horn_design());
     v.proj.save_as("kept the design", None);
     v.build_design(&ctx());
     assert!(
@@ -730,6 +799,8 @@ fn a_requirement_with_no_scenario_is_kept_as_a_test_with_nothing_in_it_and_said_
     let unshown = "With the lamp lit, the lamp is still lit at 9 min 59 s and out by 10 min 0.1 s.";
     reply(&mut v, &with_unshown(&answer(&horn(), &horn_follows()), unshown));
     reply(&mut v, &answer(&horn_latched(), &latches()));
+    assert_eq!(v.proj.files["main.st"], LAMP, "held until Apply");
+    crate::instruct_tests::apply(&mut v);
     let o = v.instruct.outcome.as_ref().unwrap();
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
     assert!(
@@ -762,7 +833,7 @@ fn a_requirement_with_no_scenario_is_kept_as_a_test_with_nothing_in_it_and_said_
 #[test]
 fn a_requirement_listed_twice_or_stated_by_a_scenario_is_kept_once_or_not_at_all() {
     let mut v = mine();
-    v.proj.files.insert(DESIGN_FILE.into(), LAMP_DESIGN.into());
+    v.proj.files.insert(DESIGN_FILE.into(), lamp_and_horn_design());
     v.proj.save_as("kept the design", None);
     v.build_design(&ctx());
     // Step one lists a requirement its own scenario states, and one that
@@ -783,6 +854,8 @@ fn a_requirement_listed_twice_or_stated_by_a_scenario_is_kept_once_or_not_at_all
             answer(&horn_latched(), &latches())
         ),
     );
+    assert_eq!(v.proj.files["main.st"], LAMP, "held until Apply");
+    crate::instruct_tests::apply(&mut v);
     let o = v.instruct.outcome.as_ref().unwrap();
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
     let with = |w: &str| {

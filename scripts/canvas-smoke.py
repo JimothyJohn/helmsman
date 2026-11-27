@@ -165,19 +165,39 @@ MENU_VIEW = (215, 138)
 MENU_HELP = (215, 168)
 VIEW_PANE_LAYOUTS = (404, 545)
 # The box's View menu lists the Help tab above Pane layouts (2026-11-26).
-VIEW_PANE_LAYOUTS_BOX = (396, 615)
+# Re-measured with the native harness on a signed-in box page on
+# 2026-11-27 (`view layouts` at 269..539, 646..676): (396, 615) had become
+# View › Help.
+VIEW_PANE_LAYOUTS_BOX = (404, 661)
 VIEW_PROPOSALS_BOX = (396, 198)
 LAYOUT_DEFAULT = (669, 324)
 LAYOUT_PROGRAMMING = (669, 363)
-HEADER_RIGHT = (1150, 8, 200, 36)
+# The header's right end (Editor | Monitor, Sign in or the user, Help),
+# its items centred at y 40 under the floating chrome (2026-11-27).
+HEADER_RIGHT = (1130, 20, 260, 40)
 # The header's Editor | Monitor toggle, each side.
 TOGGLE_EDITOR = (1255, 40)
 TOGGLE_MONITOR = (1312, 40)
 MOD = "ControlOrMeta"
 # The header's Sign in, and the Proposals screen's "Sign in…" on a box
-# signed out, in points (measured from the smoke's screenshots, 2026-11-27).
-HEADER_SIGN_IN = (1309, 17)
-PROPOSALS_SIGN_IN = (55, 143)
+# signed out, in points. Re-measured on 2026-11-27 under the floating
+# chrome (the header is 85 pt tall, its items centred at y 40): the
+# header's from the native harness (`sign in` at 1263..1341, 25..55), the
+# Proposals screen's from the smoke's screenshot.
+HEADER_SIGN_IN = (1302, 40)
+PROPOSALS_SIGN_IN = (54, 181)
+# The Monitor's bottom panel: its Trend tab, the first of the strip at the
+# page's left (native harness, 1400 x 860: `bottom trend` 24..57, 591..624).
+MONITOR_TREND_TAB = (40, 607)
+# The Deploy sheet ("What changes on the machine") on a box: its Cancel.
+# The sheet's Deploy and Cancel are pinned to its bottom edge, which sits a
+# fixed 58 pt above the window's (what it shows scrolls above them), so
+# the button is found from the window's height, whatever the sheet holds:
+# measured with the native harness at 1400 x 860 and 1400 x 1180 for two
+# programs on 2026-11-27 (`deploy sheet cancel` at 377..457, H-88..H-58).
+# The program has no I/O, so the box needs no map.
+SHEET_CANCEL = (417, H - 73)
+SHEET_PROGRAM = "PROGRAM tally\nVAR\n  n : INT;\nEND_VAR\nn := n + 1;\nEND_PROGRAM\n"
 # The box sign-in in the browser build is a real HTML form, so the
 # browser's password manager can fill and save it (Nick, 2026-11-26).
 LOGIN = "#helmsman-login"
@@ -567,6 +587,9 @@ def box(ctx, base, out):
     # runs none, so box_projects_tests covers it against a real box.)
     r.page.mouse.move(700, 300); r.wait(200)
     r.step("help-tab", lambda: r.key("Shift+Slash"), LEFT, 800)
+    # The Help tab opens with the keyboard in its question box, where an L
+    # is a letter: a click on the empty diagram gives the view its keys.
+    r.click(900, 450); r.wait(300)
     r.step("key-l-log-shut", lambda: r.key("l"), BOTTOM_TABS, 600)
     r.step("key-l-log", lambda: r.key("l"), BOTTOM_TABS, 600)
     # A pane layout kept on the box (this page's engineer session puts it
@@ -585,6 +608,25 @@ def box(ctx, base, out):
         r.click(*VIEW_PANE_LAYOUTS_BOX)
     r.step("pane-layouts", layouts, LEFT, 2500)
     r.key("Escape"); r.wait(400)
+    # What changes on the machine (docs/UI.md "Show Changes"): a project
+    # made through the API opens on a reload, and Deploy (Ctrl/Cmd Shift
+    # Enter) opens the sheet against the program the box runs: it checks
+    # and replays, and deploys nothing until its own Deploy; Cancel shuts
+    # it with nothing deployed.
+    hdr = {"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base}
+    for method, url, body in (
+        ("post", "/api/projects", {"name": "smoke-sheet"}),
+        ("put", "/api/projects/smoke-sheet/files/main.st", {"text": SHEET_PROGRAM}),
+    ):
+        q = getattr(r.page.request, method)(base + url, data=json.dumps(body), headers=hdr)
+        if q.status not in (200, 201):
+            extra.append(f"{method.upper()} {url} was refused: {q.status} {q.text()[:200]}")
+    r.page.reload(wait_until="load"); r.wait(5000)
+    r.step("deploy-sheet", lambda: r.key(f"Shift+{MOD}+Enter"), DIAGRAM, 3000)
+    r.step("deploy-sheet-cancel", lambda: r.click(*SHEET_CANCEL), DIAGRAM, 1000)
+    deployed = [u for u in r.urls if u.endswith("/deploy")]
+    if deployed:
+        extra.append(f"[smoke] {r.prefix}: the Deploy sheet deployed before its Deploy was pressed: {deployed}")
     problems = extra + r.problems()
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once
@@ -594,7 +636,7 @@ def box(ctx, base, out):
     m = Run(open_app(ctx, base, "?monitor", layout()), out, "box-monitor")
     m.wait(3000); m.shot("signed-in")
     # The bottom panel's Trend tab, at the page's left on the Monitor.
-    m.step("monitor-trend", lambda: m.click(32, 561), BOTTOM_TABS, 800)
+    m.step("monitor-trend", lambda: m.click(*MONITOR_TREND_TAB), BOTTOM_TABS, 800)
     problems += m.problems()
     m.page.close()
     return problems

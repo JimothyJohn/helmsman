@@ -46,3 +46,47 @@ writes it (query included); `tab:KEY`, the key the tab saves in a layout;
 | Drivers | `drivers` | `GET /api/drivers`, `PUT /api/drivers/{name}`, `DELETE /api/drivers/{name}` |
 | Site view | `site` | `GET /api/site` |
 | Agent tools for your own client | `mcp` | `POST /mcp` |
+
+## On the page alone
+
+What follows is page state with no route, tab or profile of its own, so
+it has no row above and no journey: the box's side of it is the rows it
+uses (`deploy`, `health`, `history`, `projects`). The canvas's own tests
+walk it through the page (docs/UI.md "Show Changes", Nick 2026-11-27).
+
+- **A described change is held.** Describe tab, type an instruction,
+  Send (Enter). A checked answer is not written: the tab shows the
+  pending change (`agent pending`), its size in blocks and lines (`agent
+  pending size`), the outputs it switches by name (`agent pending
+  outputs`), and Show Changes, Apply, Discard (`agent show changes`,
+  `agent apply`, `agent discard`). Nothing is written, saved, run or
+  deployed until Apply; Send is off ("Apply or Discard the change first").
+  Apply writes it as before (the simulation runs it at once; on a box it
+  is the file's PUT, deployed only from the sheet below); Discard changes
+  nothing; Apply refuses when the file changed since Send. One step is at
+  most 8 blocks or 30 lines and switches only outputs the instruction
+  names; past that Apply is off and `agent pending refusal` says why. A
+  current file that does not compile is held to the line cap, with `agent
+  pending note`. A new program from an example is not held. Tests:
+  `ui_tests::show_changes`, `box_projects_tests::on_a_box_*`.
+- **Show Changes.** `agent show changes` with a change held: the Code tab
+  shows the proposed file read-only (`st proposed`, `changes code note`)
+  and the canvas the proposed diagram under the banner "Proposed change,
+  not applied: the machine runs the current program" (`changes banner`),
+  with Show current, Apply, Discard (`changes show current`, `changes
+  apply`, `changes discard`). The simulation or the box runs the current
+  program the whole time. Tests: `ui_tests::show_changes`.
+- **What changes on the machine.** On a box, the Code header's deploy
+  arrow, File › Deploy, a file's right-click Deploy and Ctrl/⌘ Shift Enter
+  open the sheet (`deploy sheet`) and deploy nothing. It shows each file's
+  diff against the running program (`deploy sheet diff <file>`), the
+  counts (`deploy sheet counts`), the outputs whose logic changes (`deploy
+  sheet outputs`), the check, the tier and who may apply, the replay
+  (`deploy sheet check`, `deploy sheet tier`, `deploy sheet replay`) and
+  the first changed module's diagram (`deploy sheet diagram`). Deploy on
+  the sheet (`deploy sheet deploy`) sends one deploy; Cancel (`deploy
+  sheet cancel`) sends none, also while the check or replay is out; when
+  the box already runs the project it says so (`deploy sheet same`) and
+  Deploy is off. Deploy in the simulation is unchanged, with no sheet.
+  Tests: `box_projects_tests` (`every_way_to_deploy_*`, `cancel_while_*`,
+  `deploy_on_the_sheet_*`, `the_sheet_names_*`).

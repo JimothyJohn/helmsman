@@ -106,6 +106,8 @@ pub enum Icon {
     Palette,
     /// A pencil: edit (a device's row on the Devices tab).
     Edit,
+    /// A tick: apply a held change (Show Changes, Nick, 2026-11-27).
+    Apply,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -969,6 +971,13 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             ));
             p.line_segment([shoulder + n * hw, shoulder - n * hw], stroke);
+        }
+        Icon::Apply => {
+            let u = b.width();
+            let a = Pos2::new(l + u * 0.12, t + b.height() * 0.55);
+            let m = Pos2::new(l + u * 0.4, bt - b.height() * 0.15);
+            let e = Pos2::new(r - u * 0.08, t + b.height() * 0.15);
+            p.add(egui::Shape::line(vec![a, m, e], stroke));
         }
         Icon::Clear => {
             // A bin: the lid and its handle over a tapering body.

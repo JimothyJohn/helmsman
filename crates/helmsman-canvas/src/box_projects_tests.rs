@@ -727,6 +727,104 @@ impl Harness {
     }
 }
 
+/// Presses `key` on the page `v` is, the Describe tab up, as a click
+/// does; what it asks of the box stays queued in `v` for [`pump`]. The
+/// page is drawn by itself, so what the test set on it (a watched node)
+/// stays as it was.
+pub(crate) fn press_on_box(v: &mut BoxView, key: &str) {
+    let ctx = egui::Context::default();
+    let mut chrome = crate::editor::Chrome::default();
+    chrome.msgs = false;
+    chrome.dock(crate::editor::Pane::Claude, true);
+    let mut time = 0.0;
+    let mut frame = |v: &mut BoxView, chrome: &mut crate::editor::Chrome, events: Vec<Event>| {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 1180.0))),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        time += 1.0 / 60.0;
+        chrome.hits.clear();
+        let mut out = ctx.run_ui(input, |ui| v.show(ui, chrome));
+        out.textures_delta.clear();
+    };
+    frame(v, &mut chrome, vec![]);
+    frame(v, &mut chrome, vec![]);
+    if chrome.rect("agent instruction").is_none()
+        && let Some(r) = chrome.rect("tab claude")
+    {
+        let at = r.center();
+        for e in [
+            vec![Event::PointerMoved(at)],
+            vec![Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![],
+        ] {
+            frame(v, &mut chrome, e);
+        }
+    }
+
+    let at = chrome
+        .rect(key)
+        .unwrap_or_else(|| {
+            let keys: Vec<&String> = chrome.hits.iter().map(|(k, _)| k).collect();
+            panic!("no {key} on screen: {keys:?}")
+        })
+        .center();
+    for e in [
+        vec![Event::PointerMoved(at)],
+        vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        }],
+        vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        }],
+        vec![],
+    ] {
+        frame(v, &mut chrome, e);
+    }
+}
+
+/// The answer is held on the box's page too (docs/UI.md "Show Changes"):
+/// nothing was sent to be written. Apply, as a person presses it; the
+/// PUT it queues goes with the next [`pump`].
+pub(crate) fn apply_on_box(v: &mut BoxView) {
+    assert!(
+        v.instruct.pending.is_some(),
+        "a change is held: {:?}",
+        v.instruct.outcome
+    );
+    assert!(
+        !v.psent.iter().any(|q| q.method == "PUT"),
+        "nothing is written before Apply: {:?}",
+        v.psent
+    );
+    let refusal = v.instruct.pending.as_ref().and_then(|p| p.summary.refusal());
+    press_on_box(v, "agent apply");
+    assert!(
+        v.instruct.pending.is_none(),
+        "Apply took the held change: {:?} {refusal:?}",
+        v.instruct.outcome
+    );
+}
+
 // ---- the tests ----
 
 /// Nick 2026-11-01 (project-history): the page lists the box's revisions
@@ -1267,17 +1365,35 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
         }),
     );
     // Right-click a file › Deploy starts the deploy, the check first
-    // (Nick, 2026-11-05).
+    // (Nick, 2026-11-05), into the sheet that says what changes on the
+    // machine; nothing deploys from the menu (docs/UI.md "Show Changes":
+    // "never deploys straight from the button").
     h.app.chrome.show_files();
     h.wait(0.3);
     h.right_click(h.rect("file main.st").center());
     h.press("menu deploy");
-    let sent = h.sent();
+    let mut sent = Vec::new();
+    for _ in 0..30 {
+        h.frame(vec![]);
+        let (ctx, now) = (h.ctx.clone(), h.time);
+        if h.bv().psent.is_empty() && h.bv().sent.is_empty() {
+            break;
+        }
+        sent.extend(h.bv().psent.iter().cloned());
+        pump(&b, &jar, h.bv(), &ctx, now);
+    }
     assert!(
         sent.iter()
             .any(|q| q.method == "POST" && q.url.ends_with("/check")),
         "{sent:?}"
     );
+    assert!(
+        !sent.iter().any(|q| q.url.ends_with("/deploy")),
+        "the menu deploys nothing: {sent:?}"
+    );
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("deploy sheet").is_some(), "the sheet is up");
+    h.press("deploy sheet cancel");
     h.bv().projects.deploy = Deploy::Idle;
     h.bv().projects.current_mut().unwrap().text.push_str("(* mine *)");
     h.frame(vec![]);
@@ -1295,13 +1411,14 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
     h.app.chrome.show_code();
     h.wait(0.3);
     h.press("code deploy");
-    assert_eq!(
-        h.bv().projects.deploy,
-        Deploy::Saving,
-        "saves, then checks and deploys"
-    );
+    // Saves first, then the sheet shows what changes; it deploys only
+    // from the sheet (docs/UI.md "Show Changes").
     let sent = h.sent();
     assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
+    assert!(
+        !sent.iter().any(|q| q.url.ends_with("/deploy")),
+        "the arrow deploys nothing: {sent:?}"
+    );
 }
 
 /// Nick, 2026-11-26: a save or a deploy that went through is a popup under
@@ -1404,6 +1521,16 @@ fn a_save_and_a_deploy_that_went_through_flash_under_the_save_glyph_and_log_one_
     h.app.chrome.show_code();
     h.wait(0.3);
     h.press("code deploy");
+    settle_page(&mut h);
+    // The arrow opens what changes on the machine; Deploy there sends it
+    // (docs/UI.md "Show Changes").
+    h.frame(vec![]);
+    assert!(
+        matches!(h.bv().projects.deploy, Deploy::Idle),
+        "nothing deployed from the arrow: {:?}",
+        h.bv().projects.deploy
+    );
+    h.press("deploy sheet deploy");
     let deployed_at = h.time;
     settle_page(&mut h);
     let p = &h.bv().projects;
@@ -2223,6 +2350,13 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
     answer(&mut v, &st(&new));
     run(&b, &jar, &mut v, &ctx);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "held: nothing is written on the box before Apply"
+    );
+    apply_on_box(&mut v);
+    run(&b, &jar, &mut v, &ctx);
     let o = v.instruct.outcome.clone().unwrap();
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
     assert_eq!(o.status, "Updated main.st: 1 scenario passed, kept as a test.");
@@ -2271,7 +2405,8 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     // a red answer goes back in the same conversation; still red after
     // the retries, it is written with what did not pass said.
     run(&b, &jar, &mut v, &ctx);
-    v.instruct.draft = "now invert it".into();
+    // The lamp named: the change switches it (docs/UI.md "Show Changes").
+    v.instruct.draft = "now invert the lamp".into();
     v.send_instruction(&ctx);
     let m = body(&v, 1);
     assert_eq!(m["session"], Json::Null, "a new conversation per instruction");
@@ -2298,6 +2433,13 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     answer(&mut v, &red);
     run(&b, &jar, &mut v, &ctx);
     answer(&mut v, &red);
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "held: nothing is written on the box before Apply"
+    );
+    apply_on_box(&mut v);
     run(&b, &jar, &mut v, &ctx);
     let o = v.instruct.outcome.clone().unwrap();
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
@@ -2380,7 +2522,9 @@ fn the_agent_on_a_box_checks_against_the_boxs_sizes_and_period() {
         Duration::from_millis(2),
         "the bench box scans at 2 ms"
     );
-    v.instruct.draft = "keep a counter word".into();
+    // The new output named: the change switches it (docs/UI.md "Show
+    // Changes").
+    v.instruct.draft = "keep a counter word in kept".into();
     v.send_instruction(&ctx);
     let seq = v.chat_sent.last().expect("a message").seq;
     let answer = format!("Why: it keeps a word.\n\n```st\n{big}```\n\n{scenario}");
@@ -2393,6 +2537,9 @@ fn the_agent_on_a_box_checks_against_the_boxs_sizes_and_period() {
     .concat();
     v.agent.apply(Incoming::Chunk { seq, text: body });
     v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    // Checked against the box's sizes, it passed and is held; Apply lands it.
+    apply_on_box(&mut v);
     v.tick(&ctx);
     let o = v.instruct.outcome.clone().expect("an outcome");
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
@@ -5816,6 +5963,12 @@ fn an_agent_answer_on_a_skipper_gets_its_placeholders_saved_with_it() {
     v.agent.apply(Incoming::End { seq });
     let mut sent = Vec::new();
     run(&mut v, &mut sent);
+    assert!(
+        !sent.iter().any(|q| q.method == "PUT"),
+        "held: nothing is written before Apply: {sent:?}"
+    );
+    apply_on_box(&mut v);
+    run(&mut v, &mut sent);
     let urls: Vec<&str> = sent.iter().map(|q| q.url.as_str()).collect();
     let map = sent
         .iter()
@@ -6026,4 +6179,439 @@ fn space_on_a_box_does_nothing_for_someone_who_may_not_stop_it() {
     assert!(!h.drew("Stop the machine?"), "an operator is not asked");
     assert_eq!(writes(&mut h), [], "and nothing is sent");
     assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
+}
+
+// ---- Show Changes on a box (docs/UI.md "Show Changes", Nick 2026-11-27) ----
+
+/// Alice's page on the bench box with project `line` (`main.st` is
+/// `main`, the latch's blocks and the map beside it), `main.st` open.
+fn sheet_page(b: &Bench, jar: &Jar, main: &str) -> Harness {
+    let mut v = page(b, jar, Some(("alice", ALICE)));
+    make(
+        b,
+        jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", main), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    v.projects.open_file("main.st");
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    settle_box(b, jar, &mut h);
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    h
+}
+
+/// What the page asked of the box, carried out until it is quiet.
+fn settle_box(b: &Bench, jar: &Jar, h: &mut Harness) -> Vec<PReq> {
+    let mut seen = Vec::new();
+    for _ in 0..40 {
+        h.frame(vec![]);
+        let (ctx, now) = (h.ctx.clone(), h.time);
+        if h.bv().psent.is_empty() && h.bv().sent.is_empty() {
+            return seen;
+        }
+        seen.extend(h.bv().psent.iter().cloned());
+        pump(b, jar, h.bv(), &ctx, now);
+    }
+    panic!("the page never went quiet");
+}
+
+fn deploys(sent: &[PReq]) -> usize {
+    sent.iter()
+        .filter(|q| q.method == "POST" && q.url.ends_with("/deploy"))
+        .count()
+}
+
+/// The text the last frame drew inside the control `key`.
+fn text_in(h: &Harness, key: &str) -> String {
+    fn walk(s: &egui::Shape, r: Rect, out: &mut String) {
+        match s {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
+            egui::Shape::Text(t) if r.expand(2.0).contains(t.visual_bounding_rect().center()) => {
+                out.push_str(t.galley.text());
+                out.push('\n');
+            }
+            _ => {}
+        }
+    }
+    let r = h.rect(key);
+    let mut out = String::new();
+    for c in &h.shapes {
+        walk(&c.shape, r, &mut out);
+    }
+    out
+}
+
+/// The box's agent answers the last message with `text`.
+fn box_answer(h: &mut Harness, text: &str) {
+    use crate::box_agent::Incoming;
+    let seq = h.bv().chat_sent.last().expect("a message").seq;
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", serde_json::json!({"id": "s1"})),
+        ev("text", serde_json::json!({ "delta": text })),
+        ev("done", serde_json::json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    h.bv().agent.apply(Incoming::Chunk { seq, text: body });
+    h.bv().agent.apply(Incoming::End { seq });
+}
+
+/// Alice's page with `line` on [`crate::instruct_tests::LAMP`], asked to
+/// invert the lamp and answered: the change is held. What the page sent
+/// so far, and the inverted file.
+fn box_held(b: &Bench, jar: &Jar) -> (Harness, Vec<PReq>, String) {
+    use crate::instruct_tests::{LAMP, st};
+    let mut h = sheet_page(b, jar, LAMP);
+    h.app.chrome.dock(crate::editor::Pane::Claude, true);
+    h.wait(0.2);
+    if h.app.chrome.rect("agent instruction").is_none() {
+        h.press("tab claude");
+    }
+    h.bv().instruct.draft = "invert the lamp".into();
+    h.press("agent send");
+    let mut sent = settle_box(b, jar, &mut h);
+    let inverted = LAMP.replace("lamp := start;", "lamp := NOT start;");
+    for _ in 0..3 {
+        let n = h.bv().chat_sent.len();
+        box_answer(&mut h, &st(&inverted));
+        sent.extend(settle_box(b, jar, &mut h));
+        h.wait(0.2);
+        if !h.bv().instruct.busy() || h.bv().chat_sent.len() == n {
+            break;
+        }
+    }
+    assert!(
+        h.bv().instruct.pending.is_some(),
+        "held: {:?}",
+        h.bv().instruct.outcome
+    );
+    (h, sent, inverted)
+}
+
+/// On a box the answer is held too: nothing is saved to the box, and the
+/// box runs what it ran, while it is held and shown. Apply saves the
+/// project's file (a PUT) and deploys nothing: the program runs only once
+/// deployed.
+#[test]
+fn on_a_box_the_answer_is_held_and_apply_saves_the_file_and_deploys_nothing() {
+    use crate::instruct_tests::LAMP;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ran = b.json("/api/running");
+    let (mut h, mut sent, inverted) = box_held(&b, &jar);
+    assert!(
+        !sent
+            .iter()
+            .any(|q| q.method == "PUT" && q.url.contains("/files/")),
+        "nothing saved to the box: {sent:?}"
+    );
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], LAMP);
+    // Shown: the banner, the proposal; the box runs what it ran.
+    h.press("agent show changes");
+    sent.extend(settle_box(&b, &jar, &mut h));
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("changes banner").is_some(),
+        "the banner on a box"
+    );
+    assert!(h.drew("Proposed change, not applied: the machine runs the current program"));
+    assert_eq!(b.json("/api/running"), ran, "the box runs what it ran");
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], LAMP);
+    // Apply in the tab: the PUT, and no deploy.
+    h.press("agent apply");
+    sent.extend(settle_box(&b, &jar, &mut h));
+    assert!(h.bv().instruct.pending.is_none(), "{:?}", h.bv().instruct.outcome);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        inverted.as_str(),
+        "Apply saved the file on the box"
+    );
+    assert_eq!(deploys(&sent), 0, "nothing deployed: {sent:?}");
+    assert_eq!(b.json("/api/running"), ran, "the box still runs what it ran");
+}
+
+/// On a box the banner's Show current, Apply and Discard are clear of the
+/// page's other controls, so a click reaches them.
+#[test]
+fn on_a_box_the_banners_buttons_are_clear_of_the_other_controls() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let (mut h, _, _) = box_held(&b, &jar);
+    h.press("agent show changes");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    let mut covered = Vec::new();
+    for k in ["changes show current", "changes apply", "changes discard"] {
+        let r = h.rect(k);
+        for (o, other) in &h.app.chrome.hits {
+            if !o.starts_with("changes") && other.intersects(r.shrink(1.0)) && other.area() < 200_000.0 {
+                covered.push(format!("{k} {r:?} under {o} {other:?}"));
+            }
+        }
+    }
+    assert!(covered.is_empty(), "{covered:#?}");
+    h.press("changes discard");
+    settle_box(&b, &jar, &mut h);
+    assert!(h.bv().instruct.pending.is_none(), "the banner's Discard drops it");
+}
+
+/// One way to ask for a deploy on the page.
+type OpenSheet = fn(&mut Harness);
+
+/// Deploy on a box never deploys from the arrow, the File menu, a file's
+/// menu or Ctrl Shift Enter: each opens "What changes on the machine",
+/// with the per-file diff, the counts, the outputs, the check, the tier
+/// and the replay; Cancel there changes nothing.
+#[test]
+fn every_way_to_deploy_on_a_box_opens_the_sheet_and_sends_no_deploy() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut h = sheet_page(&b, &jar, MAIN);
+    let ran = b.json("/api/running");
+    let ways: [(&str, OpenSheet); 4] = [
+        ("the arrow", |h| h.press("code deploy")),
+        ("File › Deploy", |h| {
+            h.press("bar file");
+            h.press("file deploy");
+        }),
+        ("a file's menu", |h| {
+            h.app.chrome.show_files();
+            h.wait(0.3);
+            h.right_click(h.rect("file main.st").center());
+            h.press("menu deploy");
+        }),
+        ("Ctrl Shift Enter", |h| {
+            h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::Enter);
+        }),
+    ];
+    for (way, open) in ways {
+        h.app.chrome.show_code();
+        h.wait(0.3);
+        open(&mut h);
+        let sent = settle_box(&b, &jar, &mut h);
+        h.wait(0.3);
+        assert_eq!(deploys(&sent), 0, "{way}: no deploy: {sent:?}");
+        assert!(
+            h.app.chrome.rect("deploy sheet").is_some(),
+            "{way}: the sheet is up"
+        );
+        assert!(h.drew("What changes on the machine"), "{way}: its title");
+        for k in [
+            "deploy sheet deploy",
+            "deploy sheet cancel",
+            "deploy sheet counts",
+            "deploy sheet outputs",
+            "deploy sheet check",
+            "deploy sheet tier",
+            "deploy sheet replay",
+            "deploy sheet diff main.st",
+        ] {
+            assert!(h.app.chrome.rect(k).is_some(), "{way}: {k} on the sheet");
+        }
+        h.press("deploy sheet cancel");
+        let sent = settle_box(&b, &jar, &mut h);
+        h.frame(vec![]);
+        assert_eq!(deploys(&sent), 0, "{way}: Cancel deploys nothing: {sent:?}");
+        assert!(
+            h.app.chrome.rect("deploy sheet").is_none(),
+            "{way}: Cancel shuts it"
+        );
+        assert_eq!(b.json("/api/running"), ran, "{way}: the box runs what it ran");
+    }
+}
+
+/// Cancel changes nothing however early: pressed before the box has said
+/// what it runs, while the check is out, and while the replay is out, no
+/// deploy follows when the answers come back.
+#[test]
+fn cancel_while_the_check_or_the_replay_is_out_sends_no_deploy() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut h = sheet_page(&b, &jar, MAIN);
+    let ran = b.json("/api/running");
+    for wait_for in [None, Some("/check"), Some("/replay")] {
+        h.press("code deploy");
+        // Carry out what the page asks until `wait_for` is asked, and
+        // leave that unanswered.
+        let mut seen = Vec::new();
+        if let Some(what) = wait_for {
+            let mut asked = false;
+            for _ in 0..40 {
+                h.frame(vec![]);
+                if h.bv().psent.iter().any(|q| q.url.ends_with(what)) {
+                    asked = true;
+                    break;
+                }
+                let (ctx, now) = (h.ctx.clone(), h.time);
+                seen.extend(h.bv().psent.iter().cloned());
+                pump(&b, &jar, h.bv(), &ctx, now);
+            }
+            assert!(asked, "{what} was asked: {seen:?}");
+        }
+        h.frame(vec![]);
+        assert!(
+            h.app.chrome.rect("deploy sheet cancel").is_some(),
+            "{wait_for:?}: Cancel is there while it waits"
+        );
+        h.press("deploy sheet cancel");
+        seen.extend(settle_box(&b, &jar, &mut h));
+        h.wait(0.3);
+        seen.extend(settle_box(&b, &jar, &mut h));
+        assert_eq!(deploys(&seen), 0, "{wait_for:?}: no deploy: {seen:?}");
+        assert!(h.app.chrome.rect("deploy sheet").is_none(), "{wait_for:?}: shut");
+        assert_eq!(
+            b.json("/api/running"),
+            ran,
+            "{wait_for:?}: the box runs what it ran"
+        );
+    }
+}
+
+/// Deploy on the sheet sends one deploy, a double click no more; then the
+/// box runs this program, and the sheet opened again says so and has
+/// Deploy off.
+#[test]
+fn deploy_on_the_sheet_sends_one_deploy_and_then_the_box_already_runs_it() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut h = sheet_page(&b, &jar, MAIN);
+    h.press("code deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("deploy sheet same").is_none(),
+        "it differs from what runs"
+    );
+    let at = h.rect("deploy sheet deploy").center();
+    h.click(at);
+    h.click(at);
+    let sent = settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    let sent = [sent, settle_box(&b, &jar, &mut h)].concat();
+    assert_eq!(deploys(&sent), 1, "one deploy: {sent:?}");
+    assert!(
+        matches!(h.bv().projects.deploy, Deploy::Done(_)),
+        "{:?}",
+        h.bv().projects.deploy
+    );
+    assert!(h.app.chrome.rect("deploy sheet").is_none(), "the sheet is shut");
+
+    // Opened again with nothing changed: the box already runs this.
+    h.press("code deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    assert!(h.app.chrome.rect("deploy sheet same").is_some(), "it says so");
+    assert!(h.drew("already runs this program"), "in the spec's words");
+    if let Some(r) = h.app.chrome.rect("deploy sheet deploy") {
+        h.click(r.center());
+    }
+    let sent = settle_box(&b, &jar, &mut h);
+    assert_eq!(deploys(&sent), 0, "Deploy is off: {sent:?}");
+}
+
+/// The same in one file: the box runs `lamp := start;`, the project
+/// inverts it.
+#[test]
+fn the_sheet_names_an_output_inverted_in_a_one_file_program() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut h = sheet_page(&b, &jar, &SOURCE.replace("lamp := start;", "lamp := NOT start;"));
+    h.press("code deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    let counts = text_in(&h, "deploy sheet counts");
+    let outputs = text_in(&h, "deploy sheet outputs");
+    assert!(
+        outputs.to_ascii_uppercase().contains("LAMP"),
+        "the inverted lamp is named: {outputs:?} ({counts:?})"
+    );
+    assert!(
+        h.app.chrome.rect("deploy sheet diagram").is_some(),
+        "its diagram diff"
+    );
+    h.press("deploy sheet deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    settle_box(&b, &jar, &mut h);
+    // A comment alone changes no output's logic.
+    let commented = SOURCE.replace("lamp := start;", "lamp := NOT start; (* inverted *)");
+    h.bv().projects.current_mut().unwrap().text.clone_from(&commented);
+    h.frame(vec![]);
+    h.press("code deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("deploy sheet same").is_none(),
+        "the file differs"
+    );
+    assert!(
+        h.app.chrome.rect("deploy sheet diff main.st").is_some(),
+        "its diff"
+    );
+    let outputs = h
+        .app
+        .chrome
+        .rect("deploy sheet outputs")
+        .map(|_| text_in(&h, "deploy sheet outputs"))
+        .unwrap_or_default();
+    assert!(
+        !outputs.to_ascii_uppercase().contains("LAMP"),
+        "a comment switches no output: {outputs:?}"
+    );
+}
+
+/// The sheet names every output whose logic changes against what the box
+/// runs (here the lamp latched by a block from another file), and no
+/// output whose logic does not.
+#[test]
+fn the_sheet_names_the_outputs_whose_logic_changes() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    // The box runs `lamp := start;`; MAIN latches the lamp.
+    let mut h = sheet_page(&b, &jar, MAIN);
+    h.press("code deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    let outputs = text_in(&h, "deploy sheet outputs");
+    let counts = text_in(&h, "deploy sheet counts");
+    assert!(
+        outputs.to_ascii_uppercase().contains("LAMP"),
+        "the latched lamp is named: {outputs:?} ({counts:?})"
+    );
+    assert!(
+        h.app.chrome.rect("deploy sheet diagram").is_some(),
+        "its diagram diff"
+    );
+    h.press("deploy sheet deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    settle_box(&b, &jar, &mut h);
+    // A comment alone changes no output's logic.
+    let commented = MAIN.replace("lamp := l.q;", "lamp := l.q; (* the latch *)");
+    h.bv().projects.current_mut().unwrap().text.clone_from(&commented);
+    h.frame(vec![]);
+    h.press("code deploy");
+    settle_box(&b, &jar, &mut h);
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.rect("deploy sheet same").is_none(),
+        "the file differs"
+    );
+    assert!(
+        h.app.chrome.rect("deploy sheet diff main.st").is_some(),
+        "its diff"
+    );
+    let outputs = h
+        .app
+        .chrome
+        .rect("deploy sheet outputs")
+        .map(|_| text_in(&h, "deploy sheet outputs"))
+        .unwrap_or_default();
+    assert!(
+        !outputs.to_ascii_uppercase().contains("LAMP"),
+        "a comment switches no output: {outputs:?}"
+    );
 }
