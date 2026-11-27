@@ -1,10 +1,12 @@
 //! The I/O tab's cards on one line (Nick, 2026-11-27): a compact card is
-//! the point's glyph and name with its code, diagram and trend glyphs
-//! beside it, in any pane; a BOOL says its state by its colour and its
-//! glyph (lit on a soft disc when on, dimmed when off), never by
-//! "= TRUE"; a number keeps "= value"; the diagram glyph of a point the
-//! program never reads or writes is off and says so; and ? opens Help
-//! with the caret in its question field.
+//! the point's glyph and name, its code, diagram and trend glyphs over the
+//! line's right end while the pointer is on it, in any pane; a BOOL says
+//! its state by its colour and its glyph (lit on a soft disc when on,
+//! dimmed when off), never by "= TRUE"; a number keeps its value, right
+//! aligned at the card's end (finish 6), with "name = value" whole on
+//! hover; the diagram glyph of a point the program never reads or writes
+//! is off and says so; and ? opens Help with the caret in its question
+//! field.
 
 use eframe::egui::{Color32, Event, Key, Modifiers, Pos2, Rect, Shape, TextureId};
 
@@ -189,10 +191,20 @@ fn a_bools_line_is_its_name_alone_and_a_number_keeps_its_value_in_the_simulation
             said.push(format!("{name}: {words:?}"));
         }
     }
-    // An input switched on says it no more than one off.
-    let at = h.rect("input run");
-    h.click(Pos2::new(at.right() - 10.0, at.center().y));
+    // An input flipped by its icon (its control since 2026-11-27) says it
+    // no more than before, once the pointer has left the card (the hover
+    // says "name = value": decided, docs/UI.md "An I/O card at rest").
+    let before = h.app.sim.as_ref().unwrap().session.value("run");
+    let at = super::io_cards::icon(&h, "run");
+    h.click(at.center());
     h.wait(0.3);
+    assert_ne!(
+        h.app.sim.as_ref().unwrap().session.value("run"),
+        before,
+        "the click on run's icon flipped it"
+    );
+    h.frame(vec![Event::PointerMoved(Pos2::new(700.0, 600.0))]);
+    h.wait(0.5);
     let words = state_words(&h, "run");
     if !words.is_empty() {
         said.push(format!("run, clicked: {words:?}"));
@@ -204,10 +216,8 @@ fn a_bools_line_is_its_name_alone_and_a_number_keeps_its_value_in_the_simulation
     );
     let speed = texts_in(&h, h.rect("io card speed"));
     assert!(
-        speed
-            .iter()
-            .any(|(t, _, _)| t.contains("speed") && t.contains("= 7")),
-        "a number keeps = value: {speed:?}"
+        speed.iter().any(|(t, _, _)| t == "speed") && speed.iter().any(|(t, _, _)| t == "7"),
+        "a number keeps its value beside its name: {speed:?}"
     );
 }
 
@@ -224,22 +234,92 @@ fn on_a_box_a_bools_line_is_its_name_alone() {
     }
 }
 
+/// A piece of text the last frame drew: what it says, where, whether it
+/// was cut short, and whether it is in the code face.
+fn drawn(h: &Harness) -> Vec<(String, Rect, bool, bool)> {
+    fn walk(s: &Shape, out: &mut Vec<(String, Rect, bool, bool)>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            Shape::Text(t) if !t.galley.job.text.trim().is_empty() => out.push((
+                t.galley.job.text.clone(),
+                t.galley.rect.translate(t.pos.to_vec2()),
+                t.galley.elided,
+                t.galley
+                    .job
+                    .sections
+                    .first()
+                    .is_some_and(|s| s.format.font_id.family == eframe::egui::FontFamily::Monospace),
+            )),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, &mut out);
+    }
+    out
+}
+
 /// A number's value is what its card is for: at the pane's default width
-/// a short name and its value are seen, not cut to "speed = …".
+/// a short name and its value are seen whole. Since 2026-11-27 they are
+/// two texts: the name, and the value right-aligned in the code face at
+/// the card's end with no " = " between (finish 5 and 6); the hover says
+/// "speed = 7" whole.
 #[test]
 fn a_numbers_value_is_seen_at_the_right_panes_default_width() {
-    let h = sim(PLANT, true);
-    let speed = texts_in(&h, h.rect("io card speed"));
+    let mut h = sim(PLANT, true);
+    h.frame(vec![Event::PointerMoved(Pos2::new(700.0, 600.0))]);
+    h.wait(0.5);
+    let card = h.rect("io card speed");
+    let on_card: Vec<_> = drawn(&h)
+        .into_iter()
+        .filter(|(_, r, _, _)| card.contains(r.center()))
+        .collect();
+    let name = on_card
+        .iter()
+        .find(|(t, ..)| t == "speed")
+        .unwrap_or_else(|| panic!("speed's name on its card: {on_card:?}"));
+    let value = on_card
+        .iter()
+        .find(|(t, ..)| t == "7")
+        .unwrap_or_else(|| panic!("speed's value on its card: {on_card:?}"));
+    assert!(!name.2 && !value.2, "neither is cut: {on_card:?}");
+    assert!(value.3, "the value is a live number, in the code face: {value:?}");
     assert!(
-        speed.iter().any(|(t, _, cut)| t.contains("= 7") && !cut),
-        "speed's value is on its line, not behind an ellipsis: {speed:?}"
+        card.contains_rect(value.1) && card.right() - value.1.right() <= 12.0,
+        "the value is whole and right-aligned at the card's end: {:?} in {card:?}",
+        value.1
+    );
+    assert!(
+        name.1.right() < value.1.left(),
+        "the name ends before the value: {:?} {:?}",
+        name.1,
+        value.1
+    );
+    assert!(
+        !on_card.iter().any(|(t, ..)| t.contains('=')),
+        "no \" = \" on the line: {on_card:?}"
+    );
+    // The hover says it as one: name = value, whole.
+    h.frame(vec![Event::PointerMoved(Pos2::new(
+        name.1.center().x,
+        name.1.center().y,
+    ))]);
+    h.wait(1.5);
+    assert!(
+        drawn(&h)
+            .iter()
+            .any(|(t, _, cut, _)| t.contains("speed = 7") && !cut),
+        "the hover shows speed = 7 whole: {:?}",
+        drawn(&h).iter().map(|d| &d.0).collect::<Vec<_>>()
     );
 }
 
 /// The point glyph of card `name`: its bounds and its colour (the
 /// library glyphs are meshes on a texture other than the font's; the
-/// point's is the one left of the card's code glyph).
-fn point_glyph(h: &Harness, name: &str) -> (Rect, Color32) {
+/// point's is the one at the card's left edge,
+/// [`super::io_cards::icon`]).
+pub(super) fn point_glyph(h: &Harness, name: &str) -> (Rect, Color32) {
     fn walk(s: &Shape, area: Rect, out: &mut Vec<(Rect, Color32)>) {
         match s {
             Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
@@ -257,9 +337,7 @@ fn point_glyph(h: &Harness, name: &str) -> (Rect, Color32) {
             _ => {}
         }
     }
-    let card = h.rect(&format!("io card {name}"));
-    let code = h.rect(&format!("io code {name}"));
-    let area = Rect::from_min_max(card.min, Pos2::new(code.left(), card.bottom()));
+    let area = super::io_cards::icon(h, name).expand(0.5);
     let mut out = Vec::new();
     for c in &h.shapes {
         walk(&c.shape, area, &mut out);
@@ -270,7 +348,7 @@ fn point_glyph(h: &Harness, name: &str) -> (Rect, Color32) {
 }
 
 /// Whether a filled disc is drawn under the glyph at `glyph`.
-fn disc_under(h: &Harness, glyph: Rect) -> bool {
+pub(super) fn disc_under(h: &Harness, glyph: Rect) -> bool {
     fn walk(s: &Shape, glyph: Rect) -> bool {
         match s {
             Shape::Vec(v) => v.iter().any(|s| walk(s, glyph)),
@@ -284,7 +362,7 @@ fn disc_under(h: &Harness, glyph: Rect) -> bool {
 }
 
 /// Full colour on a disc (on), or at 35% with no disc (off).
-fn lit(h: &Harness, name: &str) -> Result<bool, String> {
+pub(super) fn lit(h: &Harness, name: &str) -> Result<bool, String> {
     let (r, c) = point_glyph(h, name);
     let disc = disc_under(h, r);
     // 35% of full: 89 of 255, give or take rounding.
@@ -346,6 +424,14 @@ fn tooltip(h: &mut Harness, key: &str) -> Vec<String> {
     }
     h.frame(vec![Event::PointerMoved(Pos2::new(700.0, 600.0))]);
     h.wait(0.5);
+    // A card's glyphs are up only while the pointer is on its card
+    // (2026-11-27): onto the card first, then onto the glyph.
+    if let Some(name) = ["io code ", "io diagram ", "io trend "]
+        .iter()
+        .find_map(|g| key.strip_prefix(g))
+    {
+        super::io_cards::hover_card(h, name);
+    }
     let mut before = all(h);
     h.frame(vec![Event::PointerMoved(h.rect(key).center())]);
     h.wait(1.5);
@@ -406,7 +492,7 @@ fn the_diagram_glyph_of_a_point_the_program_never_reads_or_writes_is_off_and_say
             "{name}: the glyph says why it is off: {tip:?}"
         );
         h.wait(1.0);
-        h.press(&format!("io diagram {name}"));
+        super::io_cards::press_glyph(&mut h, "diagram", name);
         h.wait(0.6);
         assert!(!lit_now(&h), "{name}: pressing an off glyph lights nothing");
     }
@@ -418,7 +504,7 @@ fn the_diagram_glyph_of_a_point_the_program_never_reads_or_writes_is_off_and_say
         "run is read: its glyph's tooltip says what it does: {tip:?}"
     );
     h.wait(1.0);
-    h.press("io diagram run");
+    super::io_cards::press_glyph(&mut h, "diagram", "run");
     h.wait(0.6);
     assert!(lit_now(&h), "a read input's glyph lights its blocks");
 }

@@ -23,6 +23,8 @@ struct Seen {
     clip: Rect,
     color: Color32,
     elided: bool,
+    /// Its face and size (its first section's).
+    font: Option<egui::FontId>,
     /// Its place in the frame's paint order.
     order: usize,
 }
@@ -55,6 +57,7 @@ fn texts(h: &Harness) -> Vec<Seen> {
                     clip,
                     color: color.gamma_multiply(t.opacity_factor),
                     elided: t.galley.elided,
+                    font: t.galley.job.sections.first().map(|s| s.format.font_id.clone()),
                     order,
                 });
             }
@@ -280,8 +283,10 @@ fn dump(all: &[Seen]) -> String {
 // ---- (a) nothing clipped ---------------------------------------------------
 
 /// Finish 1 and 8: a block holds all its text (it sizes to it), nothing
-/// on the canvas is cut to an ellipsis, a short name on an I/O card is
-/// not cut, a text in a widget is not cut at the side by the widget's
+/// on the canvas is cut to an ellipsis, an I/O card's value is never cut
+/// and its name is cut only where the card has no room for it, with the
+/// whole name on hover (docs/UI.md "An I/O card at rest is its point",
+/// finish 1), a text in a widget is not cut at the side by the widget's
 /// clip, and a port's name reads on its block, on the tank and every
 /// example, running.
 #[test]
@@ -289,7 +294,7 @@ fn no_glyph_is_clipped_by_its_widget_or_its_block() {
     let mut problems = Vec::new();
     let mut checked = 0;
     for (name, src) in programs() {
-        let h = running(src, false);
+        let mut h = running(src, false);
         let bl = blocks(&h);
         let canvas = canvas_texts(&h);
         let clip = canvas_clip(&h, &texts(&h));
@@ -308,26 +313,6 @@ fn no_glyph_is_clipped_by_its_widget_or_its_block() {
                         s.text, s.rect
                     ));
                 }
-            }
-        }
-        // An I/O card cuts a long name to its one line (shown whole on
-        // hover); a short one, up to a dozen characters, is never cut.
-        for (k, r) in &h.app.chrome.hits {
-            let Some(point) = k.strip_prefix("io card ") else {
-                continue;
-            };
-            if point.chars().count() > 12 {
-                continue;
-            }
-            for s in texts(&h)
-                .iter()
-                .filter(|s| s.elided && r.contains(s.rect.center()))
-            {
-                problems.push(format!(
-                    "{name}: the I/O card of {point:?} cuts {:?} to {:.0} pt",
-                    s.text,
-                    s.rect.width()
-                ));
             }
         }
         // Widgets anywhere: a text whole in its clip's height (so not a
@@ -374,10 +359,105 @@ fn no_glyph_is_clipped_by_its_widget_or_its_block() {
                 ));
             }
         }
+        // Last: it moves the pointer, so the frame the checks above read
+        // is not the one it leaves.
+        problems.extend(io_cards_cut(&mut h, name));
     }
     problems.dedup();
     assert!(problems.is_empty(), "{}", problems.join("\n"));
     assert!(checked > 10, "only {checked} port names were read");
+}
+
+/// docs/UI.md, "An I/O card at rest is its point" and finish 1: on each
+/// I/O card of the right pane, with the pointer off the cards, a value
+/// (the live number in the code face) is whole and on its card; a name cut
+/// to an ellipsis had no room (laid out whole in its own face it would run
+/// past the value less the card's own spacing, or past the card's end less
+/// its own margin, where there is no value; both measured on the card: the
+/// gap between its icon and its name, and its icon's inset from its left
+/// edge); and with the pointer on the card the whole name is drawn, uncut. Short of room is the one reason a name is cut, so a card that
+/// keeps room for glyphs that are not shown (they are drawn over the line
+/// on hover) cuts a name it need not.
+fn io_cards_cut(h: &mut Harness, program: &str) -> Vec<String> {
+    let mut problems = Vec::new();
+    h.frame(vec![egui::Event::PointerMoved(h.rect("tab io").center())]);
+    h.wait(0.5);
+    let cards: Vec<(String, Rect)> = h
+        .app
+        .chrome
+        .hits
+        .iter()
+        .filter_map(|(k, r)| k.strip_prefix("io card ").map(|p| (p.to_string(), *r)))
+        .collect();
+    let mut cut_names = Vec::new();
+    let all = texts(h);
+    for (point, card) in &cards {
+        // The card's first line: the texts level with its name.
+        let on: Vec<&Seen> = all.iter().filter(|s| card.contains(s.rect.center())).collect();
+        let Some(label) = on.iter().find(|s| s.text.eq_ignore_ascii_case(point)) else {
+            continue;
+        };
+        let line = |s: &&&Seen| (s.rect.center().y - label.rect.center().y).abs() < label.rect.height() / 2.0;
+        let values: Vec<&&Seen> = on
+            .iter()
+            .filter(line)
+            .filter(|s| {
+                s.font
+                    .as_ref()
+                    .is_some_and(|f| f.family == egui::FontFamily::Monospace)
+            })
+            .collect();
+        for v in &values {
+            if v.elided || !card.contains_rect(v.rect) {
+                problems.push(format!(
+                    "{program}: the I/O card of {point:?} cuts its value {:?} ({:?} on {card:?})",
+                    v.text, v.rect
+                ));
+            }
+        }
+        if !label.elided {
+            continue;
+        }
+        let icon = super::io_cards::icon(h, point);
+        let gap = label.rect.left() - icon.right();
+        let margin = icon.left() - card.left();
+        let end = values
+            .iter()
+            .map(|v| v.rect.left() - gap)
+            .fold(card.right() - margin, f32::min);
+        let font = label.font.clone().expect("a name has a face");
+        let whole = h.ctx.fonts_mut(|f| {
+            f.layout_no_wrap(label.text.clone(), font, Color32::WHITE)
+                .size()
+                .x
+        });
+        if label.rect.left() + whole <= end {
+            problems.push(format!(
+                "{program}: the I/O card of {point:?} cuts {:?} to {:.0} pt though it has {:.0} pt for its {whole:.0}",
+                label.text,
+                label.rect.width(),
+                end - label.rect.left()
+            ));
+        }
+        cut_names.push((point.clone(), label.rect));
+    }
+    // The whole of each cut name on hover.
+    for (point, at) in cut_names {
+        h.frame(vec![egui::Event::PointerMoved(at.center())]);
+        h.wait(1.5);
+        let whole = point.to_lowercase();
+        if !texts(h)
+            .iter()
+            .any(|s| s.text.to_lowercase().contains(&whole) && !s.elided)
+        {
+            problems.push(format!(
+                "{program}: hovering the I/O card of {point:?} does not show its whole name"
+            ));
+        }
+        h.frame(vec![egui::Event::PointerMoved(h.rect("tab io").center())]);
+        h.wait(0.5);
+    }
+    problems
 }
 
 /// The filled rects the last frame painted, in paint order, each with
