@@ -538,6 +538,12 @@ impl App {
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // A field that had the keyboard as the frame began typed this
+        // frame's letters, even if it lets go during the frame: Enter in
+        // the sign-in's password ends its focus, and on a slow page "…pw"
+        // and Enter come in one frame, so the P after it opened Proposals
+        // (the tester's find, 2026-11-26).
+        let typing = ctx.egui_wants_keyboard_input();
         hotkeys::swallow_text(&ctx);
         glyphs::set_hotkeys(&ctx, self.chrome.hotkeys);
         let now = ctx.input(|i| i.time);
@@ -777,8 +783,10 @@ impl App {
             && ctx
                 .input(|i| i.pointer.hover_pos())
                 .is_some_and(|p| self.chrome.diagram.contains(p));
-        for a in hotkeys::pressed_views(&ctx, over_diagram) {
-            self.view_key(a);
+        if !typing {
+            for a in hotkeys::pressed_views(&ctx, over_diagram) {
+                self.view_key(a);
+            }
         }
         self.tour_ui(&ctx);
         self.box_popup(&ctx, now);
