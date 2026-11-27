@@ -432,8 +432,30 @@ const MAX_ASKED: usize = 1500;
 /// The question the Help tab is asked about `error`.
 #[must_use]
 pub fn help_question(error: &str) -> String {
-    let e: String = error.trim().chars().take(MAX_ASKED).collect();
+    let e: String = one_line(error).chars().take(MAX_ASKED).collect();
     format!("This error came up:\n{e}\nWhat does it mean, and what should I do about it?")
+}
+
+/// `text` as one plain line: line breaks, tabs and other whitespace one
+/// space each, control characters gone, and the invisible ones that
+/// reorder or hide text (bidi overrides and isolates, zero-width marks)
+/// gone, so an error can neither start a line of its own in the question
+/// nor read differently than it shows (the tester's find, 2026-11-26).
+fn one_line(text: &str) -> String {
+    let invisible = |c: char| matches!(c, '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}');
+    text.chars()
+        .filter(|&c| !invisible(c))
+        .map(|c| {
+            if c.is_whitespace() || c.is_control() {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// An error as a link (Nick, 2026-11-26: errors are small accidents, and a
