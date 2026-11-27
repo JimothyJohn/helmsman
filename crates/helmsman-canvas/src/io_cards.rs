@@ -91,91 +91,6 @@ fn block_word(fb: &str) -> &'static str {
     }
 }
 
-/// A source as a card names it: `start`, `timer t1`.
-fn source_name(s: &Source) -> String {
-    let n = s.name.to_ascii_lowercase();
-    match s.kind {
-        SourceKind::Block => format!("{} {n}", block_word(&s.fb)),
-        SourceKind::Input | SourceKind::Kept => n,
-    }
-}
-
-/// An output's sources in the order a card lists them: signals read from
-/// outside, then the blocks it reads, then what the program keeps.
-fn ordered(card: &OutputCard) -> Vec<&Source> {
-    let of = |k: SourceKind| card.signals.iter().filter(move |s| s.kind == k);
-    of(SourceKind::Input)
-        .chain(of(SourceKind::Block))
-        .chain(of(SourceKind::Kept))
-        .collect()
-}
-
-/// The one line a card says of its point's part in the control scheme.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Summary {
-    /// `driven by`, `affects`, or the whole of it when nothing is named.
-    pub lead: &'static str,
-    /// The first name, lower case.
-    pub first: Option<String>,
-    /// How many more there are behind the "…".
-    pub more: usize,
-    /// All of it, for the tooltip.
-    pub all: String,
-}
-
-/// What the card of a point with these links says; `None` when no
-/// diagram says anything of it.
-#[must_use]
-pub fn summary(links: &Links) -> Option<Summary> {
-    let bare = |lead: &'static str, all: &str| Summary {
-        lead,
-        first: None,
-        more: 0,
-        all: all.to_string(),
-    };
-    match links {
-        Links::Output(None) | Links::Input(None) => None,
-        Links::Output(Some(c)) if !c.driven => Some(bare(
-            "nothing sets it",
-            "No statement of the program assigns this output.",
-        )),
-        Links::Output(Some(c)) => {
-            let all = ordered(c);
-            let Some(first) = all.first() else {
-                return Some(bare(
-                    "set from constants",
-                    "No signal, kept value or block is behind it.",
-                ));
-            };
-            let names: Vec<String> = all.iter().map(|s| source_name(s)).collect();
-            Some(Summary {
-                lead: "driven by",
-                first: Some(source_name(first)),
-                more: all.len() - 1,
-                all: format!(
-                    "Everything this output finally depends on, through every statement that sets it: {}.",
-                    names.join(", ")
-                ),
-            })
-        }
-        Links::Input(Some(outs)) => {
-            let Some(first) = outs.first() else {
-                return Some(bare(
-                    "no output depends on it",
-                    "No output of the program depends on this input.",
-                ));
-            };
-            let names: Vec<String> = outs.iter().map(|n| n.to_ascii_lowercase()).collect();
-            Some(Summary {
-                lead: "affects",
-                first: Some(first.to_ascii_lowercase()),
-                more: outs.len() - 1,
-                all: format!("The outputs that depend on this input: {}.", names.join(", ")),
-            })
-        }
-    }
-}
-
 /// What a card shows now.
 #[allow(clippy::struct_excessive_bools)] // independent flags, as `Chrome`'s are
 pub struct Row<'a> {
@@ -203,11 +118,10 @@ pub struct Row<'a> {
     pub designation: Option<Designation>,
     /// It is on the Trend: its trend glyph shows on.
     pub trended: bool,
+    /// The program's diagram has a block that reads or writes it: the
+    /// diagram glyph has something to show (off, and saying why, when not).
+    pub on_diagram: bool,
 }
-
-/// The least width a card's first line keeps beside its glyphs, points;
-/// under it the glyphs go on a row of their own.
-const HEAD_MIN: f32 = 150.0;
 
 /// What was asked of a card this frame.
 #[allow(clippy::struct_excessive_bools)] // independent flags, as `Chrome`'s are
@@ -231,15 +145,28 @@ pub struct Asked {
 /// glyph (a tile has none), and `text` in `color`, cut to the column.
 /// `wrap`: a row's line wraps at the column so a long name shows whole;
 /// a tile's is cut to its narrow width.
-pub fn value(ui: &mut egui::Ui, glyph: Option<&'static str>, color: Color32, text: &str, wrap: bool) {
+pub fn value(ui: &mut egui::Ui, glyph: Option<&'static str>, color: Color32, text: &str, on: Option<bool>) {
     ui.horizontal(|ui| {
         if let Some(glyph) = glyph {
-            crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, color, crate::glyph_lib::tip(glyph));
+            // A BOOL's glyph looks on or off (Nick, 2026-11-27): lit on a
+            // soft disc of its colour when on, dimmed when off.
+            let size = crate::glyphs::ROW * 0.85;
+            let ink = match on {
+                Some(false) => color.gamma_multiply(0.35),
+                _ => color,
+            };
+            let r = crate::glyph_lib::show(ui, glyph, size, ink, crate::glyph_lib::tip(glyph));
+            if on == Some(true) {
+                ui.painter()
+                    .circle_filled(r.rect.center(), size * 0.62, color.gamma_multiply(0.18));
+                crate::glyph_lib::paint(ui.painter(), r.rect, glyph, ink);
+            }
         }
+        // One line, cut at the card's edge with its whole text on hover
+        // (Nick, 2026-11-27: the compact view on one line).
         let label =
             egui::Label::new(RichText::new(text).monospace().size(BODY).color(color)).selectable(false);
-        let label = if wrap { label.wrap() } else { label.truncate() };
-        ui.add(label).tip(text.to_string());
+        ui.add(label.truncate()).tip(text.to_string());
     });
 }
 
@@ -351,46 +278,6 @@ fn links_ui(ui: &mut egui::Ui, links: &Links) {
     }
 }
 
-/// The one line of [`summary`]: the lead, the first name, and "…" when
-/// there are more. True when the "…" was clicked.
-fn summary_ui(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, s: &Summary, width: f32) -> bool {
-    let t = theme(ui);
-    let mut more = false;
-    ui.horizontal(|ui| {
-        let dots = if s.more > 0 { 22.0 } else { 0.0 };
-        let room = (width - dots - ui.spacing().item_spacing.x).max(1.0);
-        let mut job = egui::text::LayoutJob::default();
-        let font = egui::FontId::proportional(BODY);
-        job.append(s.lead, 0.0, egui::TextFormat::simple(font, t.muted));
-        if let Some(first) = &s.first {
-            job.append(
-                first,
-                6.0,
-                egui::TextFormat::simple(egui::FontId::monospace(BODY), t.fg),
-            );
-        }
-        ui.allocate_ui_with_layout(Vec2::new(room, 0.0), Layout::top_down(Align::Min), |ui| {
-            ui.set_max_width(room);
-            ui.add(egui::Label::new(job).wrap().selectable(false))
-                .tip(s.all.clone())
-        });
-        if s.more > 0 {
-            let r = ui
-                .add(
-                    egui::Label::new(RichText::new("…").size(BODY).strong().color(t.accent))
-                        .sense(Sense::click()),
-                )
-                .tip(format!(
-                    "{} more. Click, or double-click the card, for all of them.",
-                    s.more
-                ));
-            chrome.hit(format!("io more {}", key.to_ascii_lowercase()), r.rect);
-            more = r.clicked();
-        }
-    });
-    more
-}
-
 /// Draws the card: `head` draws its first line (the point's control, or
 /// [`value`]) in the width it is given. Returns what was asked, the
 /// card's response for a menu to hang from, and what `head` returned.
@@ -430,7 +317,9 @@ pub fn show<R>(
             designation_line(ui, chrome, row);
             return r;
         }
-        let side = crate::glyphs::ROW;
+        // Glyphs a little under the row's size so name and glyphs share
+        // one line in the narrow right pane too (Nick, 2026-11-27).
+        let side = crate::glyphs::ROW * 0.85;
         let gap = ui.spacing().item_spacing.x;
         let room = (inner - 3.0 * side - 3.0 * gap).max(1.0);
         // The card's three glyphs: find in the code, show on the diagram,
@@ -450,9 +339,13 @@ pub fn show<R>(
                 ui,
                 Icon::Diagram,
                 side,
-                true,
+                row.on_diagram,
                 false,
-                &format!("Shows {name} on the diagram: every block that reads or writes it."),
+                &if row.on_diagram {
+                    format!("Shows {name} on the diagram: every block that reads or writes it. Click again for its next use.")
+                } else {
+                    format!("{name} is not on the diagram: the program never reads or writes it.")
+                },
             );
             chrome.hit(format!("io diagram {name}"), diagram.rect);
             asked.diagram = diagram.clicked();
@@ -473,12 +366,10 @@ pub fn show<R>(
             chrome.hit(format!("io trend {name}"), trend.rect);
             asked.trend = trend.clicked();
         };
-        // Beside the first line while that leaves it room; in a narrow
-        // pane (the right one's 236 pt) on a row of their own under it,
-        // so a push button keeps its glyph and name on one line (the
-        // third glyph squeezed it into a column, 2026-11-26).
-        let r = if room >= HEAD_MIN {
-            ui.horizontal_top(|ui| {
+        // One line: the point (its glyph and name, cut to the room left)
+        // and its three glyphs beside it, in any pane (Nick, 2026-11-27).
+        let r = ui
+            .horizontal_top(|ui| {
                 let r = ui
                     .allocate_ui_with_layout(Vec2::new(room, side), Layout::top_down(Align::Min), |ui| {
                         ui.set_width(room);
@@ -488,26 +379,18 @@ pub fn show<R>(
                 glyph_row(ui);
                 r
             })
-            .inner
-        } else {
-            let r = ui
-                .allocate_ui_with_layout(Vec2::new(inner, side), Layout::top_down(Align::Min), |ui| {
-                    ui.set_width(inner);
-                    head(ui)
-                })
-                .inner;
-            ui.horizontal(|ui| glyph_row(ui));
-            r
-        };
-        if sim {
-            badge(ui, chrome, row);
-        }
-        if let Some((text, tip)) = &row.real {
-            let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted)).wrap();
-            let l = ui.add(label).tip(tip.clone());
-            chrome.hit(format!("wired {}", row.key), l.rect);
-        }
+            .inner;
         if row.open {
+            // The rest is in the details: the SIM badge (the dashed
+            // outline says it on the card), the wiring, the links.
+            if sim {
+                badge(ui, chrome, row);
+            }
+            if let Some((text, tip)) = &row.real {
+                let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted)).wrap();
+                let l = ui.add(label).tip(tip.clone());
+                chrome.hit(format!("wired {}", row.key), l.rect);
+            }
             ui.horizontal_wrapped(|ui| links_ui(ui, &row.links));
             if !row.place.is_empty() {
                 ui.add(egui::Label::new(RichText::new(row.place).size(BODY).color(t.muted)).wrap())
@@ -531,10 +414,6 @@ pub fn show<R>(
                     asked.simulate = b.clicked();
                 }
             });
-        } else if let Some(s) = summary(&row.links)
-            && summary_ui(ui, chrome, row.key, &s, inner)
-        {
-            asked.details = true;
         }
         r
     });
@@ -825,43 +704,6 @@ mod tests {
         // A name that ends inside a multi-byte letter of a source.
         let odd = [card("X", vec![src("ÄB", SourceKind::Input, "")], true)];
         assert_eq!(affects(&odd, "a"), [] as [String; 0]);
-    }
-
-    #[test]
-    fn the_summary_names_the_first_and_counts_the_rest() {
-        let c = card(
-            "LAMP",
-            vec![
-                src("LATCH", SourceKind::Kept, ""),
-                src("T1", SourceKind::Block, "TON"),
-                src("START", SourceKind::Input, ""),
-                src("STOP", SourceKind::Input, ""),
-            ],
-            true,
-        );
-        let s = summary(&Links::Output(Some(&c))).unwrap();
-        assert_eq!(
-            (s.lead, s.first.as_deref(), s.more),
-            ("driven by", Some("start"), 3)
-        );
-        assert!(s.all.contains("start, stop, timer t1, latch"), "{}", s.all);
-        let only_block = card("L", vec![src("C1", SourceKind::Block, "CTU")], true);
-        let s = summary(&Links::Output(Some(&only_block))).unwrap();
-        assert_eq!((s.first.as_deref(), s.more), (Some("counter c1"), 0));
-        let undriven = card("L", vec![], false);
-        let s = summary(&Links::Output(Some(&undriven))).unwrap();
-        assert_eq!((s.lead, s.first, s.more), ("nothing sets it", None, 0));
-        let constant = card("L", vec![], true);
-        assert_eq!(
-            summary(&Links::Output(Some(&constant))).unwrap().lead,
-            "set from constants"
-        );
-        let s = summary(&Links::Input(Some(vec!["LAMP".into(), "HORN".into()]))).unwrap();
-        assert_eq!((s.lead, s.first.as_deref(), s.more), ("affects", Some("lamp"), 1));
-        let s = summary(&Links::Input(Some(vec![]))).unwrap();
-        assert_eq!((s.lead, s.first, s.more), ("no output depends on it", None, 0));
-        assert_eq!(summary(&Links::Input(None)), None);
-        assert_eq!(summary(&Links::Output(None)), None);
     }
 
     #[test]

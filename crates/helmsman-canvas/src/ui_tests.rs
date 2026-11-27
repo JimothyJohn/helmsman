@@ -7630,6 +7630,29 @@ mod glyph_library {
         n
     }
 
+    /// The distinct places the last frame drew a library glyph inside
+    /// `area`: one glyph painted twice over itself counts once.
+    fn glyph_places_in(h: &Harness, area: Rect) -> usize {
+        fn walk(s: &Shape, area: Rect, out: &mut Vec<eframe::egui::Pos2>) {
+            match s {
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+                Shape::Mesh(m) if m.texture_id != TextureId::default() => {
+                    if let Some(v) = m.vertices.first().filter(|v| area.contains(v.pos))
+                        && !out.iter().any(|p| (*p - v.pos).length() < 0.5)
+                    {
+                        out.push(v.pos);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in &h.shapes {
+            walk(&c.shape, area, &mut out);
+        }
+        out.len()
+    }
+
     #[test]
     fn the_traffic_lights_timer_block_carries_the_timer_glyph_in_its_header() {
         let mut h = Harness::new(App::sim());
@@ -7674,8 +7697,10 @@ mod glyph_library {
         let before = h.app.chrome.diagram;
         h.wait(0.3);
         let outputs = h.rect("io outputs");
-        // The traffic light's three lamps.
-        assert_eq!(glyphs_in(&h, outputs), 3);
+        // The traffic light's three lamps: one glyph on each card (a lit
+        // one, on its disc, may be painted more than once in its place;
+        // Nick, 2026-11-27).
+        assert_eq!(glyph_places_in(&h, outputs), 3);
         assert!(
             h.app.chrome.rect("io inputs").is_none(),
             "run is a control on the diagram"
@@ -8087,6 +8112,7 @@ mod help_tab;
 mod hotkeys;
 mod io_cards;
 mod io_names;
+mod io_one_line;
 mod label_overlap;
 mod layouts;
 mod multi_select;

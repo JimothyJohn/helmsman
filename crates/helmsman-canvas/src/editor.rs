@@ -244,6 +244,9 @@ pub struct Chrome {
     /// keyboard the next time it is drawn (Nick, 2026-11-26: A, then type,
     /// then Enter). Not remembered.
     pub focus_describe: bool,
+    /// The Help tab's key was pressed: its question field takes the
+    /// keyboard the next time it is drawn. Not remembered.
+    pub focus_help: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
@@ -318,6 +321,7 @@ impl Default for Chrome {
             scan: false,
             light: false,
             focus_describe: false,
+            focus_help: false,
             line: None,
             jump: None,
             hits: Vec::new(),
