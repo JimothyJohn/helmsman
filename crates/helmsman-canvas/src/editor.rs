@@ -1012,25 +1012,20 @@ const RIBBON: f32 = 20.0;
 /// vertical middle, the very spot the collapsed strip's button takes.
 /// `left`: the pane is the left one (its ribbon is on its right).
 fn ribbon(ui: &mut egui::Ui, full: Rect, left: bool, hover: &str) -> egui::Response {
-    let rib = if left {
-        Rect::from_min_max(Pos2::new(full.right() - RIBBON, full.top()), full.max)
+    let rib_x = if left {
+        full.right() - RIBBON / 2.0
     } else {
-        Rect::from_min_max(full.min, Pos2::new(full.left() + RIBBON, full.bottom()))
+        full.left() + RIBBON / 2.0
     };
-    let btn = Rect::from_center_size(
-        Pos2::new(rib.center().x, full.center().y),
-        Vec2::new(RIBBON, TAP * 0.9),
-    );
+    let btn = Rect::from_center_size(Pos2::new(rib_x, full.center().y), Vec2::new(RIBBON, TAP * 0.9));
     let r = ui
         .interact(btn, ui.scope_id().with(("ribbon", left)), Sense::click())
         .tip(hover);
-    let t = theme(ui);
-    ui.painter()
-        .rect_filled(rib, CornerRadius::ZERO, t.shade.gamma_multiply(0.5));
-    if r.hovered() {
-        let tint = ui.style().interact(&r).bg_fill;
-        ui.painter().rect_filled(btn, CornerRadius::same(4), tint);
-    }
+    // No ground of its own: a full-height grey strip beside the pane read as
+    // a code gutter (Nick, 2026-11-27). The button alone, on the pane.
+    let tint = crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT);
+    ui.painter().rect_filled(btn, CornerRadius::same(4), tint);
+    crate::theme::focus_ring(ui, &r, btn, 4);
     fold_glyph(ui, btn.center(), left, true, r.hovered(), 0.8);
     r
 }
@@ -1151,7 +1146,10 @@ fn side_pane(
             egui::Panel::right("ed-side-strip")
                 .exact_size(STRIP)
                 .resizable(false),
-            egui::Panel::right(RIGHT_ID).resizable(true).default_size(RIGHT_W),
+            egui::Panel::right(RIGHT_ID)
+                .frame(crate::theme::float_frame(ui))
+                .resizable(true)
+                .default_size(RIGHT_W),
         )
     } else {
         (
@@ -1159,6 +1157,7 @@ fn side_pane(
                 .exact_size(STRIP)
                 .resizable(false),
             egui::Panel::left(LEFT_ID)
+                .frame(crate::theme::float_frame(ui))
                 .resizable(true)
                 .default_size(LEFT_W)
                 // Never past the page less 40 pt, every frame: opened at
@@ -1463,6 +1462,7 @@ fn trend_panel(
 ) {
     let mut open = chrome.trend;
     egui::Panel::bottom(BOTTOM_ID)
+        .frame(crate::theme::float_frame(ui))
         .resizable(true)
         .default_size(BOTTOM_H)
         .show_collapsible(ui, &mut open, |ui| {

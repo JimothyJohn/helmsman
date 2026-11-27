@@ -2844,11 +2844,13 @@ fn box_ui(
         out
     };
     if failed {
+        // Inside the field's rect, so its edge is the buttons' and the answer
+        // area's: one left edge and one width down the pane.
         ui.painter().rect_stroke(
-            field.rect.expand(1.0),
+            field.rect,
             4.0,
             egui::Stroke::new(2.0, t.ink(RED)),
-            egui::StrokeKind::Outside,
+            egui::StrokeKind::Inside,
         );
     }
     // What shows of it: past its height the box scrolls inside.
@@ -2863,7 +2865,7 @@ fn box_ui(
     // type and not as a status line (egui outlines it once it has focus).
     if !failed && !field.has_focus() && s.run.is_none() {
         ui.painter().rect_stroke(
-            shown.expand(1.0),
+            shown,
             4.0,
             // In the question's colour while one waits.
             if asked {
@@ -2871,7 +2873,7 @@ fn box_ui(
             } else {
                 egui::Stroke::new(1.0, t.muted)
             },
-            egui::StrokeKind::Outside,
+            egui::StrokeKind::Inside,
         );
     }
     // A question just came: the answer is typed straight away.
@@ -3041,13 +3043,11 @@ fn area_ui(
     v: &View,
     fill: Option<f32>,
 ) -> Option<Act> {
-    let t = crate::theme::theme(ui);
     let mut act = None;
     // The versions' index has a search box of its own to click into.
     let versions = v.versions.is_some() && s.versions_open;
     let frame = egui::Frame::new()
         .fill(ui.visuals().faint_bg_color)
-        .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.4)))
         .corner_radius(4.0)
         .inner_margin(ANSWER_MARGIN);
     let r = frame
@@ -3173,6 +3173,7 @@ fn answer_area(
         progress_ui(ui, chrome, run, v.progress.as_ref());
         return act;
     }
+    let top = ui.cursor().top();
     // Why Send is off, when it is for a reason the engineer cannot see
     // from the box (an empty box needs no words).
     if let Some(why) = &v.blocked {
@@ -3186,7 +3187,7 @@ fn answer_area(
             .add(egui::Label::new(text).wrap())
             .tip("Send stays off until this is put right.");
         chrome.hit("agent blocked", r.rect);
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
     if let Some(io) = &v.io {
         fixes_ui(ui, chrome, s, io);
@@ -3200,6 +3201,10 @@ fn answer_area(
                 None => {}
             }
         }
+    }
+    // Nothing to say yet: one line of what goes here, not a blank box.
+    if ui.cursor().top() - top < 1.0 {
+        ui.add(egui::Label::new(RichText::new("Its answer shows here.").color(t.muted)).wrap());
     }
     act
 }

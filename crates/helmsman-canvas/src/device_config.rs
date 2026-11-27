@@ -806,7 +806,7 @@ impl ConfigUi {
             match kind {
                 Kind::Settings => {
                     let d = &mut m.draft;
-                    ui.checkbox(&mut d.watchdog, "Watchdog on")
+                    crate::theme::check(ui, &mut d.watchdog, "Watchdog on")
                         .tip("On: the outputs go to their safe values when the device stops hearing from this box. Off: they hold their state.");
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Watchdog time").tip("How long the device waits for this box before it acts, as the device counts it.");
@@ -815,14 +815,13 @@ impl ConfigUi {
                         chrome.hit("config watchdog time", r.rect);
                     });
                     for (o, s) in facts.outputs.iter().zip(&mut d.safe) {
-                        let r = ui
-                            .checkbox(s, format!("{} switches on when the watchdog acts", o.name))
+                        let r = crate::theme::check(ui, s, format!("{} switches on when the watchdog acts", o.name))
                             .tip("Ticked: this output goes on when the watchdog acts. Unticked: it goes off.");
                         chrome.hit(format!("config safe {}", o.name), r.rect);
                     }
-                    ui.checkbox(&mut d.ethernet_ip, "EtherNet/IP on")
+                    crate::theme::check(ui, &mut d.ethernet_ip, "EtherNet/IP on")
                         .tip("Whether the device answers EtherNet/IP. This box reads it that way when it can.");
-                    ui.checkbox(&mut d.restful, "RESTful interface on")
+                    crate::theme::check(ui, &mut d.restful, "RESTful interface on")
                         .tip("Whether the device answers its RESTful interface.");
                     ui.add_space(8.0);
                     say(ui, "The change is staged on the device. It takes effect when you apply, which restarts the device.");
