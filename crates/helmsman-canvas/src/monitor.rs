@@ -955,7 +955,7 @@ impl Monitor {
                     ui.label(egui::RichText::new("›").size(size).color(t.muted));
                 }
                 let last = i + 1 == crumbs.len();
-                let rt = egui::RichText::new(text).size(size).monospace();
+                let rt = egui::RichText::new(text).size(size);
                 // The crumb you are on is the accent; at the top, where it
                 // is the only one, it is a plain title and no link.
                 let rt = if last && crumbs.len() > 1 {
@@ -1229,7 +1229,7 @@ pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
     };
     l.wrapped(ui, &title, (FontId::proportional(24.0 * k), ink), 30.0 * k);
     let small = (14.0 * k).max(crate::theme::MIN_TEXT);
-    l.wrapped(ui, &t.sub, (FontId::monospace(small), th.muted), 26.0 * k);
+    l.wrapped(ui, &t.sub, (FontId::proportional(small), th.muted), 26.0 * k);
     match &t.kind {
         TileKind::Status(run) => {
             let (word, color) = match run {

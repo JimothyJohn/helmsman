@@ -3983,9 +3983,10 @@ impl Body for BoxView {
                             let color = match sig.map(|s| s.quality.as_str()) {
                                 _ if is_forced => t.ink(WARN),
                                 Some("missing") => t.ink(RED),
-                                _ if on && !input => t.ink(crate::lamps::colour(name).unwrap_or(GREEN)),
+                                _ if on && !input => t.ink(GREEN),
                                 _ if on => t.ink(GREEN),
                                 _ if off => t.ink(RED),
+                                _ if !input && state == Some(false) => t.muted,
                                 _ => t.fg,
                             };
                             let bool_ty = matches!(value, Some(helmsman_iec::Value::Bool(_)));
@@ -4043,10 +4044,12 @@ impl Body for BoxView {
                             };
                             let sim_input = input && engineer && sig.is_some_and(|s| s.sim);
                             let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
-                                crate::io_cards::value(
+                                // A lamp is green on and red off.
+                                crate::io_cards::value_with(
                                     ui,
                                     (form != Form::Tile).then_some(glyph),
                                     color,
+                                    if input { color } else { t.ink(RED) },
                                     &text,
                                     state,
                                 );

@@ -2923,13 +2923,20 @@ fn buttons_ui(
         } else {
             usize::from(s.undo().is_some())
         };
-    let gap = ui.spacing().item_spacing.x;
+    let mut gap = ui.spacing().item_spacing.x;
+    #[allow(clippy::cast_precision_loss)]
+    if (ui.available_width() - gap * (count as f32 - 1.0)) / (count as f32) < 30.0 {
+        // Five buttons at a tap's least width and the default gap are wider
+        // than the pane: close them up to the grid's 4 pt.
+        gap = 4.0;
+    }
     #[allow(clippy::cast_precision_loss)]
     let wide = ((ui.available_width() - gap * (count as f32 - 1.0)) / count as f32)
         // Five of them (the arrows with their info button) are narrower
         // than a tap target to stay in the pane at its default width.
         .clamp(30.0, crate::glyphs::ACTION_W);
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
         if v.versions.is_some() {
             let on = s.versions_open;
             let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::History, true, on, wide).tip(if on {
