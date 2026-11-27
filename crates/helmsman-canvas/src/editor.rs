@@ -1151,7 +1151,10 @@ fn side_pane(
             egui::Panel::right("ed-side-strip")
                 .exact_size(STRIP)
                 .resizable(false),
-            egui::Panel::right(RIGHT_ID).resizable(true).default_size(RIGHT_W),
+            egui::Panel::right(RIGHT_ID)
+                .frame(crate::theme::float_frame(ui))
+                .resizable(true)
+                .default_size(RIGHT_W),
         )
     } else {
         (
@@ -1159,6 +1162,7 @@ fn side_pane(
                 .exact_size(STRIP)
                 .resizable(false),
             egui::Panel::left(LEFT_ID)
+                .frame(crate::theme::float_frame(ui))
                 .resizable(true)
                 .default_size(LEFT_W)
                 // Never past the page less 40 pt, every frame: opened at
@@ -1463,6 +1467,7 @@ fn trend_panel(
 ) {
     let mut open = chrome.trend;
     egui::Panel::bottom(BOTTOM_ID)
+        .frame(crate::theme::float_frame(ui))
         .resizable(true)
         .default_size(BOTTOM_H)
         .show_collapsible(ui, &mut open, |ui| {

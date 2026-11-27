@@ -13,6 +13,11 @@ use eframe::egui::{self, Color32};
 
 use crate::st_view::brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
 
+/// The dark canvas, the darkest layer: the chrome floats 16 levels above it
+/// (`CHROME_DARK`), a widget at rest 14 above that, so the layers separate.
+const CANVAS_DARK: Color32 = Color32::from_gray(0x0C);
+const CHROME_DARK: Color32 = Color32::from_gray(0x1C);
+
 /// The colours of one theme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -66,16 +71,16 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             dark: true,
-            bg: BLACK,
+            bg: CANVAS_DARK,
             panel: PANEL,
             fg: WHITE,
             muted: STEEL,
             rule: GRAPHITE,
             shade: Color32::from_rgb(0x55, 0x55, 0x55),
-            chart: BLACK,
+            chart: CANVAS_DARK,
             idle: GRAPHITE.gamma_multiply(1.6),
             edge: Color32::from_black_alpha(200),
-            veil: BLACK.gamma_multiply(0.75),
+            veil: CANVAS_DARK.gamma_multiply(0.75),
             code: Color32::from_gray(230),
             bad: Color32::from_rgb(0x4A, 0x16, 0x14),
             accent: YELLOW,
@@ -87,16 +92,16 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             dark: false,
-            bg: Color32::from_rgb(0xF4, 0xF4, 0xF4),
+            bg: Color32::from_rgb(0xEA, 0xEA, 0xEA),
             panel: WHITE,
             fg: BLACK,
             muted: Color32::from_rgb(0x66, 0x66, 0x66),
             rule: Color32::from_rgb(0xD0, 0xD0, 0xD0),
             shade: Color32::from_rgb(0xB8, 0xB8, 0xB8),
-            chart: Color32::from_rgb(0xFA, 0xFA, 0xFA),
+            chart: Color32::from_rgb(0xF6, 0xF6, 0xF6),
             idle: Color32::from_rgb(0xB4, 0xB4, 0xB4),
             edge: Color32::from_black_alpha(70),
-            veil: Color32::from_rgba_unmultiplied(0xF4, 0xF4, 0xF4, 0xC0),
+            veil: Color32::from_rgba_unmultiplied(0xEA, 0xEA, 0xEA, 0xC0),
             code: Color32::from_gray(25),
             bad: Color32::from_rgb(0xFF, 0xD9, 0xD6),
             accent: Color32::from_rgb(0x7A, 0x5A, 0x00),
@@ -233,14 +238,14 @@ struct Tones {
 fn tones(dark: bool) -> Tones {
     if dark {
         Tones {
-            rest: Color32::from_gray(0x26),
-            hover: Color32::from_gray(0x30),
-            press: Color32::from_gray(0x3A),
-            raised: Color32::from_gray(0x20),
-            hairline: Color32::from_gray(0x2C),
+            rest: Color32::from_gray(0x2A),
+            hover: Color32::from_gray(0x37),
+            press: Color32::from_gray(0x44),
+            raised: Color32::from_gray(0x26),
+            hairline: Color32::from_gray(0x30),
             field_edge: Color32::TRANSPARENT,
-            ink: Color32::from_gray(0xE6),
-            shadow: 120,
+            ink: Color32::from_gray(0xEE),
+            shadow: 150,
         }
     } else {
         Tones {
@@ -251,7 +256,7 @@ fn tones(dark: bool) -> Tones {
             hairline: Color32::from_gray(0xE2),
             field_edge: Color32::from_gray(0xDA),
             ink: Color32::from_gray(0x1A),
-            shadow: 30,
+            shadow: 44,
         }
     }
 }
@@ -267,9 +272,9 @@ fn style(s: &mut egui::Style, dark: bool) {
     let none = Stroke::NONE;
     let v = &mut s.visuals;
     v.panel_fill = if dark {
-        Color32::from_gray(0x1A)
+        CHROME_DARK
     } else {
-        Color32::from_gray(0xF7)
+        Color32::from_gray(0xFA)
     };
     v.window_fill = k.raised;
     v.window_stroke = Stroke::new(1.0, k.hairline);
@@ -283,7 +288,7 @@ fn style(s: &mut egui::Style, dark: bool) {
     };
     v.window_shadow = shadow;
     v.popup_shadow = shadow;
-    v.extreme_bg_color = if dark { Color32::from_gray(0x10) } else { WHITE };
+    v.extreme_bg_color = if dark { Color32::from_gray(0x12) } else { WHITE };
     v.faint_bg_color = k.raised;
     v.code_bg_color = k.rest;
     v.hyperlink_color = t.accent;
@@ -324,6 +329,30 @@ fn style(s: &mut egui::Style, dark: bool) {
     sp.menu_spacing = 4.0;
     s.text_styles = text_styles();
 }
+
+/// The frame of floating chrome (a side pane, the bottom pane, the header):
+/// the chrome layer's fill, rounded corners, a shadow, and `FLOAT_INSET` of
+/// the canvas left around it (Nick, 2026-11-27), as the diagram's corner
+/// controls sit.
+#[must_use]
+pub fn float_frame(ui: &egui::Ui) -> egui::Frame {
+    let dark = ui.visuals().dark_mode;
+    egui::Frame::new()
+        .fill(ui.visuals().panel_fill)
+        .corner_radius(egui::CornerRadius::same(RADIUS + 4))
+        .shadow(egui::Shadow {
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
+            color: Color32::from_black_alpha(tones(dark).shadow),
+        })
+        .inner_margin(egui::Margin::same(8))
+        .outer_margin(egui::Margin::same(FLOAT_INSET))
+}
+
+/// How far floating chrome sits in from the window's edges and from its
+/// neighbours, in points (8 to 12 by the decision, on the 4 pt grid).
+pub const FLOAT_INSET: i8 = 8;
 
 /// A tab (or a toggle chip): its label, muted until it is the one on,
 /// which gets a 2 pt accent bar under it. Frameless until the pointer is
@@ -502,7 +531,7 @@ mod tests {
     fn dark_is_the_old_palette_and_light_inverts_the_page() {
         let d = Theme::dark();
         assert!(d.dark);
-        assert_eq!((d.bg, d.fg, d.accent), (BLACK, WHITE, YELLOW));
+        assert_eq!((d.bg, d.fg, d.accent), (super::CANVAS_DARK, WHITE, YELLOW));
         let l = Theme::light();
         assert!(!l.dark);
         assert_eq!((l.panel, l.fg), (WHITE, BLACK));
@@ -520,7 +549,7 @@ mod tests {
         use crate::st_view::brand::{GREEN, RED, WARN};
         let l = Theme::light();
         let rgb = |c: eframe::egui::Color32| [c.r(), c.g(), c.b()];
-        let grounds = [rgb(l.bg), rgb(l.panel), [0xF7; 3], [0xEB; 3]];
+        let grounds = [rgb(l.bg), rgb(l.panel), [0xFA; 3], [0xEB; 3]];
         for (name, c) in [
             ("accent", l.accent),
             ("muted", l.muted),

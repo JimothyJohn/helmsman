@@ -1230,7 +1230,9 @@ impl App {
         // "simulation" tag give way, so the mark's group and the screens'
         // never overlap; the title takes what is left and elides.
         let narrow = ui.ctx().content_rect().width() < NARROW;
-        let panel = egui::Panel::top("header").show(ui, |ui| {
+        let panel = egui::Panel::top("header")
+            .frame(crate::theme::float_frame(ui))
+            .show(ui, |ui| {
             let size = Vec2::new(ui.available_width(), HEADER_H);
             let t = theme(ui);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
