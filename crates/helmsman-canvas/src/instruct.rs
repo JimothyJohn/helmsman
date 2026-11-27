@@ -3112,7 +3112,10 @@ pub fn versions_ui(
         .add(
             egui::TextEdit::singleline(&mut s.versions_find)
                 .hint_text("Search the versions")
-                .desired_width(f32::INFINITY),
+                // Capped, with 12 pt for the scroll bar: a long search
+                // widened the pane by 15 pt (the tester's find).
+                .desired_width((ui.available_width() - 12.0).max(40.0))
+                .clip_text(true),
         )
         .tip("Shows the versions whose description holds these words.");
     chrome.hit("agent versions find", e.rect);

@@ -110,7 +110,7 @@ data is stale); hover it for a fault's text or who stopped it. Under it
 the page starts with the device picker, then a tile of each program's
 outputs, green TRUE, red FALSE, and a tap into each block instance (the
 crumbs above the tiles go back up). A phone opens on the Monitor. The
-Messages and the Trend are along the bottom, the Editor's own panel.
+The Log and the Trend are along the bottom, the Editor's own panel.
 An engineer can turn on
 **Scan detail** (View) to see each program's scan period and counts,
 how long its scan takes, how late each scan starts (jitter) and its
@@ -143,7 +143,7 @@ a function block is not kept yet: the check warns and the program still
 runs (declare the instance RETAIN in the program instead). More than
 65,536 RETAIN values in one program is refused.
 
-![The Monitor: the program and its state in the header, the device picker, a tile of its outputs, and the Messages and Trend below.](img/monitor.png)
+![The Monitor: the program and its state in the header, the device picker, a tile of its outputs, and the Log and Trend below.](img/monitor.png)
 
 ## HTTPS
 
