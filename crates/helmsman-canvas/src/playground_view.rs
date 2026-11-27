@@ -5769,17 +5769,22 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
     };
     let mut out = None;
     let mut anchor: Option<egui::Response> = None;
-    // Wrapped, with a slider that fits: a row wider than the panel grows it.
-    ui.spacing_mut().slider_width = (ui.available_width() - 130.0).clamp(40.0, 100.0);
     let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
-    // What a button gets beside the glyph: any wider and it wraps under it.
-    let beside = (ui.available_width() - crate::glyphs::ROW - ui.spacing().item_spacing.x - 1.0).max(40.0);
+    let gap = ui.spacing().item_spacing.x;
+    // What the control gets beside the glyph, all of it on one line
+    // (Nick, 2026-11-27): nothing wraps and nothing is wider than this.
+    let beside = (ui.available_width() - crate::glyphs::ROW - gap - 1.0).max(40.0);
     // A button is that wide and no wider: its name is cut, never the row.
-    let size = Vec2::new(if tile { beside.min(TAP * 3.0) } else { beside }, TAP * 0.8);
-    // A tile is too narrow for a slider beside the box: the box alone.
-    let slider = ui.available_width() >= 150.0;
-    let boxed = Vec2::new((ui.available_width() - 2.0).clamp(40.0, 84.0), TAP * 0.6);
-    ui.horizontal_wrapped(|ui| {
+    let size = Vec2::new(if tile { beside.min(TAP * 3.0) } else { beside }, TAP * 0.6);
+    // A number: its name, then its box, then a slider only where both
+    // still have their room beside it.
+    let boxed = Vec2::new((beside * 0.45).clamp(40.0, 84.0), TAP * 0.6);
+    let rest = beside - boxed.x - gap;
+    let slider = (!tile && rest >= 2.0 * 60.0 + gap).then(|| (rest - 60.0 - gap).min(100.0));
+    let name_w = (rest - slider.map_or(0.0, |s| s + gap)).max(1.0);
+    ui.spacing_mut().slider_width = slider.unwrap_or(40.0);
+    ui.horizontal(|ui| {
+        ui.set_max_width(ui.available_width());
         crate::glyph_lib::show(
             ui,
             glyph,
@@ -5794,34 +5799,37 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                     egui::Button::new(
                         RichText::new(&label)
                             .strong()
-                            .color(if on { BLACK } else { t.fg }),
+                            .color(if on { BLACK } else { t.muted }),
                     )
-                    .fill(if on { YELLOW } else { t.rule })
+                    .fill(if on { GREEN } else { t.rule })
                     .sense(Sense::click_and_drag());
-                let r = control_button(ui, b, size, tile).tip(format!(
-                    "Push button: on while held. Click the card for its details.\n{place}"
-                ));
+                let rest = format!("A push button: on while held. Click the card for its details.\n{place}");
+                let r = control_button(ui, b, size).on_hover_ui(|ui| named_tip(ui, &label, &rest));
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
                 anchor = Some(r);
             }
             Some(Widget::Toggle) => {
+                // Its name alone: the fill says on or off (Nick, 2026-11-27).
                 let on = p.value == Value::Bool(true);
-                let b = egui::Button::new(
-                    RichText::new(format!("{label}: {}", if on { "ON" } else { "OFF" }))
-                        .strong()
-                        .color(if on { BLACK } else { t.fg }),
-                )
-                .fill(if on { YELLOW } else { t.rule });
-                let r = control_button(ui, b, size, tile).tip(format!(
-                    "Switch: click to flip. Click the card for its details.\n{place}"
-                ));
+                let b =
+                    egui::Button::new(
+                        RichText::new(&label)
+                            .strong()
+                            .color(if on { BLACK } else { t.muted }),
+                    )
+                    .fill(if on { GREEN } else { t.rule });
+                let rest = format!(
+                    "A switch, {}: click to flip it. Click the card for its details.\n{place}",
+                    if on { "on" } else { "off" }
+                );
+                let r = control_button(ui, b, size).on_hover_ui(|ui| named_tip(ui, &label, &rest));
                 if r.clicked() {
                     out = Some(Value::Bool(!on));
                 }
                 anchor = Some(r);
             }
             Some(Widget::Int { min, max }) => {
-                anchor = Some(row_label(ui, &label, place));
+                anchor = Some(row_label(ui, &label, place, name_w));
                 let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
                 let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
                 let (slo, shi) = (lo.max(-1000), hi.min(1000));
@@ -5830,7 +5838,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                     _ => 0,
                 };
                 let before = v;
-                if slider {
+                if slider.is_some() {
                     ui.add(
                         egui::Slider::new(&mut v, slo..=shi)
                             .clamping(egui::SliderClamping::Edits)
@@ -5852,13 +5860,13 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                 }
             }
             Some(Widget::Real) => {
-                anchor = Some(row_label(ui, &label, place));
+                anchor = Some(row_label(ui, &label, place, name_w));
                 let mut v = match p.value {
                     Value::Real(r) => r,
                     _ => 0.0,
                 };
                 let before = v;
-                if slider {
+                if slider.is_some() {
                     ui.add(
                         egui::Slider::new(&mut v, -100.0..=100.0)
                             .clamping(egui::SliderClamping::Edits)
@@ -5878,13 +5886,13 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                 }
             }
             Some(Widget::Time) => {
-                anchor = Some(row_label(ui, &label, place));
+                anchor = Some(row_label(ui, &label, place, name_w));
                 let mut ms = match p.value {
                     Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
                     _ => 0,
                 };
                 let before = ms;
-                if slider {
+                if slider.is_some() {
                     ui.add(
                         egui::Slider::new(&mut ms, 0..=10_000)
                             .clamping(egui::SliderClamping::Edits)
@@ -5892,43 +5900,56 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                     )
                     .tip("Drag to set the time, up to 10 s.");
                 }
-                ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
-                    .tip("The time in ms. Drag, or double-click to type it, up to a day.");
+                ui.add_sized(
+                    boxed,
+                    egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"),
+                )
+                .tip("The time in ms. Drag, or double-click to type it, up to a day.");
                 if ms != before {
                     out = Some(Value::Int(i128::from(ms) * 1_000_000));
                 }
             }
-            None => anchor = Some(row_label(ui, &label, place)),
+            None => anchor = Some(row_label(ui, &label, place, beside)),
         }
     });
-    let anchor = anchor.unwrap_or_else(|| row_label(ui, &label, place));
+    let anchor = anchor.unwrap_or_else(|| row_label(ui, &label, place, beside));
     (out, anchor)
 }
 
-/// An input's button on its card. A tile's is `size`, its name cut; a
-/// row's is at least that and grows to a second line when the name needs
-/// it, so the name shows whole.
-fn control_button(ui: &mut egui::Ui, b: egui::Button<'_>, size: Vec2, tile: bool) -> egui::Response {
-    if tile {
-        ui.add_sized(size, b.wrap_mode(egui::TextWrapMode::Truncate))
-    } else {
-        let w = size.x;
-        ui.allocate_ui_with_layout(
-            Vec2::new(w, 0.0),
-            egui::Layout::top_down(egui::Align::Min),
-            |ui| {
-                ui.set_max_width(w);
-                ui.add(b.wrap_mode(egui::TextWrapMode::Wrap).min_size(size))
-            },
-        )
-        .inner
-    }
+/// An input's button on its card: `size` and no more, on one line, its
+/// name cut to fit (the tooltip has it whole).
+fn control_button(ui: &mut egui::Ui, b: egui::Button<'_>, size: Vec2) -> egui::Response {
+    ui.add_sized(size, b.wrap_mode(egui::TextWrapMode::Truncate))
 }
 
-/// A row's name, where a right-click lands, saying where the point is.
-fn row_label(ui: &mut egui::Ui, label: &str, place: &str) -> egui::Response {
-    ui.add(egui::Label::new(label).sense(Sense::click()))
-        .tip(place.to_string())
+/// A row's name, where a right-click lands, `w` wide and cut to it: its
+/// tooltip has the whole name and where the point is.
+fn row_label(ui: &mut egui::Ui, label: &str, place: &str, w: f32) -> egui::Response {
+    let r = ui
+        .allocate_ui_with_layout(
+            Vec2::new(w, TAP * 0.6),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_width(w);
+                ui.add(
+                    egui::Label::new(label)
+                        .truncate()
+                        .show_tooltip_when_elided(false)
+                        .sense(Sense::click()),
+                )
+            },
+        )
+        .inner;
+    r.on_hover_ui(|ui| named_tip(ui, label, place))
+}
+
+/// A tooltip that is the whole name on its own line, then what it is: a
+/// card's name is cut to its one line, so its hover says it whole.
+fn named_tip(ui: &mut egui::Ui, label: &str, rest: &str) {
+    ui.label(label);
+    if !rest.is_empty() {
+        ui.label(rest);
+    }
 }
 
 /// One output's first line on its card: a lamp (BOOL) or a readout.
