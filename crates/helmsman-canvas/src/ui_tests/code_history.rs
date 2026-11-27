@@ -346,3 +346,48 @@ fn h_opens_the_describe_tab_on_the_newest_exchange() {
     assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "comment it");
     assert_eq!(main_st(&h), first);
 }
+
+/// The Code tab's history (Nick, 2026-11-26): Back, an info glyph and
+/// Forward, as the Agent tab's. A step shows that version's code in place,
+/// read-only, under a bar that names it with a way back to the live file;
+/// the info glyph opens the version window for the one shown.
+#[test]
+fn code_back_shows_a_version_in_place_read_only_with_a_bar_and_a_way_back() {
+    use eframe::egui::Event;
+    let (mut h, first, second) = two_changes("code");
+    h.wait(0.3);
+    {
+        let [back, info, forward] = ["code back", "code info", "code forward"].map(|k| h.rect(k));
+        assert!(
+            back.right() <= info.left() + 1.0 && info.right() <= forward.left() + 1.0,
+            "Back, i, Forward: {back:?} {info:?} {forward:?}"
+        );
+    }
+    assert!(!h.has("code version mark") && !h.has("code live"), "live: no bar");
+    h.press("code back");
+    h.wait(0.3);
+    assert!(h.has("code version mark"), "a bar names the version shown");
+    assert!(h.has("code live"), "with a way back to the live file");
+    assert_eq!(main_st(&h), first, "that version's code");
+    // Read-only: typing changes nothing.
+    let editor = h.editor_id();
+    h.ctx.memory_mut(|m| m.request_focus(editor));
+    h.frame(vec![]);
+    h.frame(vec![Event::Text("qzxj".into())]);
+    h.wait(0.2);
+    assert_eq!(main_st(&h), first, "a version shown is read-only");
+    assert!(!h.drew("qzxj"), "nothing typed shows");
+    // The info glyph: the window for the version shown.
+    h.press("code info");
+    h.wait(0.3);
+    assert!(h.has("revision form"), "the version window");
+    h.press("revision close");
+    h.wait(0.3);
+    assert!(!h.has("revision form"));
+    assert_eq!(main_st(&h), first, "closing it changed nothing");
+    // The way back.
+    h.press("code live");
+    h.wait(0.3);
+    assert_eq!(main_st(&h), second, "the live file again");
+    assert!(!h.has("code version mark") && !h.has("code live"));
+}

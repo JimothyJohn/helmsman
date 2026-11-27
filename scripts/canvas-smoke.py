@@ -158,9 +158,6 @@ VIEW_PROPOSALS_BOX = (396, 198)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
 HEADER_RIGHT = (1150, 8, 200, 36)
-# The Editor half of the Editor | Monitor switch once somebody is signed in
-# on a box's page.
-EDITOR_SIGNED_IN = (1166, 26)
 MOD = "ControlOrMeta"
 
 
@@ -422,11 +419,6 @@ def box(ctx, base, out):
         r.key("Enter")
     # The box hashes the password: the answer takes a few seconds.
     r.step("signed-in", sign_in, HEADER_RIGHT, 6000)
-    # Two runs of three on 2026-11-26 came out of the sign-in on the
-    # Proposals screen (P is a view key, and "alice-engineer-pw" has one):
-    # reported to the coder. The Editor switch puts the page where the
-    # steps below expect it either way.
-    r.click(*EDITOR_SIGNED_IN); r.wait(800)
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT, 800)
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT, 800)
     # The agent proposes a device profile (this page's session posts it, as
