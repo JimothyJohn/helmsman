@@ -170,6 +170,9 @@ pub struct BoxView {
     /// The revision Back and Forward (the Agent tab, the Code tab) last
     /// showed; `None`: the newest.
     history_at: Option<u32>,
+    /// The version the Code tab is stepped to (read-only); `None`: the
+    /// live file.
+    code_at: Option<u32>,
 }
 
 impl Default for BoxView {
@@ -295,6 +298,7 @@ impl BoxView {
         self.agent_pending = false;
         self.projects.deploy = Deploy::Idle;
         self.history_at = None;
+        self.code_at = None;
         self.fresh = Some(name);
     }
 
@@ -448,6 +452,7 @@ impl BoxView {
             agent_pending: false,
             fresh: None,
             history_at: None,
+            code_at: None,
         }
     }
 
@@ -1747,29 +1752,59 @@ impl BoxView {
     /// it to 2 places: agent so that you can easily move anywhere in the
     /// history to see the prompt and output as well as in the code tab so
     /// you can do the same thing but with all of the code"): Back and
-    /// Forward from the revision last shown, the newest at first.
+    /// Forward through the versions, the Code tab showing each one's code
+    /// in place and read-only (Nick, 2026-11-26: the same arrows and i as
+    /// the Agent tab); Forward past the newest is the live file.
     fn revision_steps(&self) -> Option<crate::instruct::Steps> {
         let revs = &self.projects.history;
-        let k = match self.history_at {
-            Some(n) => revs.iter().position(|r| r.n == n)?,
-            None => revs.len().checked_sub(1)?,
+        let last = revs.len().checked_sub(1)?;
+        let at = self.code_at.and_then(|n| revs.iter().position(|r| r.n == n));
+        // From the live file Back goes to the newest version, or the one
+        // before it when the file is as that version left it.
+        let back = match at {
+            Some(k) => k.checked_sub(1),
+            None if self.projects.dirty() => Some(last),
+            None => last.checked_sub(1),
         };
         let tip = |j: usize, way: &str| {
             revs.get(j).map(|r| {
                 (
                     r.n,
                     format!(
-                        "{way}: shows revision {}, {}: its instruction, the answer and the code.",
+                        "{way}: shows the code of version {}, {}. Nothing is changed.",
                         r.n, r.what
                     ),
                 )
             })
         };
+        let forward = at.map(|k| {
+            tip(k + 1, "Forward").unwrap_or_else(|| {
+                (
+                    crate::instruct::LIVE,
+                    "Forward: back to the file as you left it.".to_string(),
+                )
+            })
+        });
         Some(crate::instruct::Steps {
-            back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
-            forward: tip(k + 1, "Forward"),
-            shown: None,
+            back: back.and_then(|j| tip(j, "Back")),
+            forward,
+            shown: at.map(|k| revs[k].n),
         })
+    }
+
+    /// The Code tab at version `n` (read from the box, no window), or at
+    /// the live file for [`crate::instruct::LIVE`].
+    fn code_step(&mut self, n: u32) {
+        if n == crate::instruct::LIVE {
+            self.code_at = None;
+            self.projects.stepped = None;
+            return;
+        }
+        let Some(name) = self.projects.open.as_ref().map(|o| o.name.clone()) else {
+            return;
+        };
+        self.code_at = Some(n);
+        self.projects.peek_revision(&name, n);
     }
 
     /// The Agent tab's arrows: through the revisions that carry an
@@ -1853,7 +1888,8 @@ impl BoxView {
         (!self.projects.history.is_empty()).then(|| crate::instruct::Versions {
             rows: self.projects.history.clone(),
             at: self
-                .history_at
+                .code_at
+                .or(self.history_at)
                 .or_else(|| self.projects.history.last().map(|r| r.n)),
         })
     }
@@ -3566,9 +3602,16 @@ impl Body for BoxView {
                 ui.label(RichText::new("Open a project in Files.").color(t.muted));
                 return;
             };
+            let at = self
+                .code_at
+                .filter(|n| self.projects.history.iter().any(|r| r.n == *n));
             let deploy = write.clone().and_then(|()| {
                 if self.busy() {
                     Err("A save or deploy is under way.".into())
+                } else if let Some(n) = at {
+                    Err(format!(
+                        "Version {n} is on show, read-only. Go Forward to the file first."
+                    ))
                 } else {
                     Ok(())
                 }
@@ -3577,6 +3620,7 @@ impl Body for BoxView {
             let steps = self.revision_steps();
             let versions = self.versions();
             let mut revision = None;
+            let mut info = None;
             // The header is the open file's name (Nick, 2026-11-08), then
             // word wrap, then the → that deploys this version.
             let name = o.current.clone().unwrap_or_else(|| "Program".to_string());
@@ -3618,19 +3662,68 @@ impl Body for BoxView {
                 );
                 go = pressed.deploy;
                 revision = pressed.revision;
+                info = pressed.info;
             });
             if go {
                 self.deploy();
             }
             if let Some(n) = revision {
-                self.show_revision(n);
+                self.code_step(n);
+            }
+            if let Some(n) = info {
+                self.project_act(crate::projects::Act::ShowRevision(n));
             }
             if chrome.history
                 && let Some(v) = &versions
-                && let Some(crate::instruct::Act::Revision(n) | crate::instruct::Act::Details(n)) =
-                    editor::versions_panel(ui, chrome, &mut self.instruct, v)
             {
-                self.show_revision(n);
+                match editor::versions_panel(ui, chrome, &mut self.instruct, v) {
+                    Some(crate::instruct::Act::Revision(n)) => self.code_step(n),
+                    Some(crate::instruct::Act::Details(n)) => {
+                        self.project_act(crate::projects::Act::ShowRevision(n));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(n) = at {
+                let row = self.projects.history.iter().find(|r| r.n == n).cloned();
+                let file = o.current.clone().unwrap_or_default();
+                if crate::history_ui::stepped_mark(ui, chrome, n, row.as_ref(), &file) {
+                    self.code_step(crate::instruct::LIVE);
+                }
+                let then = self
+                    .projects
+                    .stepped
+                    .as_ref()
+                    .filter(|v| v.row.n == n)
+                    .map(|v| v.files.get(&file).cloned());
+                match then {
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                RichText::new(format!("Reading version {n}…"))
+                                    .size(18.0)
+                                    .color(t.muted),
+                            );
+                        });
+                    }
+                    Some(None) => {
+                        ui.label(
+                            RichText::new(format!("{file} was not in this version."))
+                                .size(18.0)
+                                .color(t.muted),
+                        );
+                    }
+                    Some(Some(text)) => {
+                        let size = Vec2::new(ui.available_width(), ui.available_height().max(120.0));
+                        let id = editor::source_id("box-st", &o.name, &file).with(("version", n));
+                        let mut shown: &str = &text;
+                        ui.allocate_ui(size, |ui| {
+                            editor::st_editor(ui, id, &mut shown, &[], &[], usize::MAX, chrome);
+                        });
+                    }
+                }
+                return;
             }
             let Some(file) = o.current.clone() else {
                 ui.label(RichText::new("No files in this project yet.").color(t.muted));
