@@ -236,6 +236,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   answered: 2026-11-25
   decided: 2026-11-25 Nick: the account
 
+- [ ] **Should a design build step that only adds a new file skip Show Changes' size cap?** — Since #670 (2026-11-27) a described change is held and can't be applied above 8 blocks or 30 lines; that cap applies to the steps of "Design a machine…" too ("Build steps 1 to 6 of 19"). A step that adds a whole new module (say a 12-block conveyor) is then refused outright, so the design flow can only build in pieces of 8 blocks. Exempting it would still hold the step, show it (code and diagram, marked) and need Apply; a step that edits logic already there stays capped.
+  options: exempt a new-file step (recommended) — designs build as written; every step is still held and shown | keep the cap — the designer plans steps of 8 blocks or fewer; bigger modules need several steps | raise the cap for design steps only — say a number
+  recommend: exempt a new-file step — a new file changes nothing already running until it is wired in, and it is still seen and applied by hand
+  stakes: low
+  result: design builds of a new module apply in one step, or the design step size is settled
+  id: show-changes-design-cap
+  asked: 2026-11-27
+  by: session e16d1c3b
+
 ## Needs your hands
 
 - [ ] **Film the Skipper and the motor it controls for the benefits reel** — Why: reel v5 (~/Movies/helmsman-benefits-reel-v5.mp4, 34.5 s, PR #646, you said "Way better") shows one device at a time, so a viewer can't tell what controls what. Shots, landscape 1080p or higher, into ~/Movies/helmsman-benefits/footage/: (1) Skipper and motor in one frame, the cable going in, the LED turning green (replaces the H3 plug-in shot); (2) the motor playing the song with the Skipper in view, with sound (step 3, Control devices); (3) optional: an idle shot of both for step 2, Scan (otherwise the current scan take stays, per your answer). Files only, never committed.
@@ -1037,6 +1046,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-26
   by: session e16d1c3b
   status: done
+
+- [ ] **macOS CI flakes: box_tests.rs:285 and devconf moxa_sim.rs:356** — The `box (macos-latest)` job (not required) failed on 2026-11-27 with two different tests, each green on re-run. (1) `crates/helmsman-plc/tests/box_tests.rs:285`: all four failures are the in-process box refusing an events stream with `503 {"error":"too many event streams"}`: the box's event-stream limit, probably streams from earlier tests in the same process not yet released. (2) `crates/helmsman-devconf/tests/moxa_sim.rs:356` `a_dropped_connection_is_never_retried_on_a_write`: `left: Err(Io(InvalidInput)) right: Err(NoResponse)` (run 46078676783): a write to a dropped connection surfaced as EINVAL on macOS instead of no response. The Windows "PLC exited"/10013 flakes were a different cause, fixed in #673.
+  result: each has a root cause and a fix, or is deleted by the tester with the reason written down
+  est: 3h
+  difficulty: high
+  model: opus
+  id: macos-ci-flakes
+  asked: 2026-11-27
+  by: session e16d1c3b
 
 ## Canvas overhaul (interview 2026-11-21)
 
