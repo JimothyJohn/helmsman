@@ -1062,7 +1062,8 @@ impl BoxView {
     /// (Nick, 2026-11-27, Show Changes).
     fn agent_hold(&mut self, apply: crate::instruct::Apply) {
         let Some((_, _, files)) = self.agent_files() else {
-            self.instruct.not_written(&apply.file, "The project is no longer open.");
+            self.instruct
+                .not_written(&apply.file, "The project is no longer open.");
             return self.log_agent();
         };
         let focus = self.instruct.named.clone();
@@ -1078,25 +1079,26 @@ impl BoxView {
             self.shown_change = None;
             return;
         };
-        if self.shown_change.as_ref().is_some_and(|s| s.text == p.apply.text && s.file == p.apply.file) {
+        if self
+            .shown_change
+            .as_ref()
+            .is_some_and(|s| s.text == p.apply.text && s.file == p.apply.file)
+        {
             return;
         }
         let apply = p.apply.clone();
         let built = self
             .agent_files()
             .and_then(|(_, _, files)| crate::change_ui::Shown::build(&files, &apply, self.agent_sizes()));
-        match built {
-            Some(b) => {
-                if let Some(o) = &mut self.projects.open {
-                    o.current = Some(apply.file.clone());
-                }
-                self.shown_change = Some(b);
+        if let Some(b) = built {
+            if let Some(o) = &mut self.projects.open {
+                o.current = Some(apply.file.clone());
             }
-            None => {
-                self.shown_change = None;
-                if let Some(p) = &mut self.instruct.pending {
-                    p.showing = false;
-                }
+            self.shown_change = Some(b);
+        } else {
+            self.shown_change = None;
+            if let Some(p) = &mut self.instruct.pending {
+                p.showing = false;
             }
         }
     }
@@ -1115,7 +1117,12 @@ impl BoxView {
                     .instruct
                     .pending
                     .as_ref()
-                    .and_then(|p| self.projects.open.as_ref().and_then(|o| o.bufs.get(&p.apply.file)))
+                    .and_then(|p| {
+                        self.projects
+                            .open
+                            .as_ref()
+                            .and_then(|o| o.bufs.get(&p.apply.file))
+                    })
                     .map(|b| b.text.clone())
                     .unwrap_or_default();
                 match self.instruct.take_pending(&now) {
@@ -2302,6 +2309,7 @@ impl BoxView {
             self.add_device_line(&line);
         }
         self.revision_ui(&ui.ctx().clone(), chrome);
+        self.sheet_ui(&ui.ctx().clone(), chrome);
         if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }
@@ -3108,6 +3116,50 @@ impl BoxView {
         }
     }
 
+    /// The Deploy sheet, "What changes on the machine", while it is open.
+    fn sheet_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        if self.projects.sheet.is_none() {
+            return;
+        }
+        // The project's text as it is now, to compare with what runs.
+        let files: std::collections::BTreeMap<String, String> = self
+            .projects
+            .open
+            .as_ref()
+            .map(|o| {
+                o.bufs
+                    .iter()
+                    .filter(|(n, b)| b.loaded && !helmsman_project::agent::is_agent_file(n))
+                    .map(|(n, b)| (n.clone(), b.text.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let sizes = self.agent_sizes();
+        let busy = self.projects.deploy.busy();
+        let failed = match &self.projects.deploy {
+            crate::box_projects::Deploy::Failed(why) => Some(why.clone()),
+            _ => None,
+        };
+        let forbidden = self.writable().err();
+        let problems = self.projects.diags.clone();
+        let Some(sheet) = self.projects.sheet.as_mut() else {
+            return;
+        };
+        sheet.compute(&files, sizes);
+        let sheet = sheet.clone();
+        let c = crate::deploy_sheet::Context {
+            busy,
+            failed: failed.as_deref(),
+            forbidden,
+            problems: &problems,
+        };
+        match crate::deploy_sheet::ui(ctx, chrome, &sheet, &c) {
+            Some(crate::deploy_sheet::Act::Deploy) => self.projects.deploy(),
+            Some(crate::deploy_sheet::Act::Cancel) => self.projects.close_sheet(),
+            None => {}
+        }
+    }
+
     /// The revision on view, in the middle of the screen, until Close or
     /// Restore (an engineer's; the box records the restore).
     fn revision_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
@@ -3275,8 +3327,11 @@ impl Workspace for BoxView {
 
     fn deploy(&mut self) {
         if self.writable().is_ok() {
+            // Deploy never goes straight out: the sheet "What changes on
+            // the machine" opens first, and Deploy on it sends it (Nick,
+            // 2026-11-27, Show Changes).
             self.projects.to_node = self.watches_node;
-            self.projects.deploy();
+            self.projects.open_sheet();
         } else if self.module_writable().is_ok() {
             self.projects.deploy_module();
         }
@@ -3782,7 +3837,11 @@ impl Body for BoxView {
             // The change held in the Agent tab, on show: the proposed file,
             // read-only, its lines marked as a diff draws them.
             self.sync_shown();
-            if let Some(sh) = self.shown_change.as_ref().filter(|s| Some(&s.file) == o.current.as_ref()) {
+            if let Some(sh) = self
+                .shown_change
+                .as_ref()
+                .filter(|s| Some(&s.file) == o.current.as_ref())
+            {
                 crate::change_ui::code_note(ui, chrome);
                 chrome.st_marks = Some(sh.marks.clone());
                 let mut shown: &str = &sh.text;

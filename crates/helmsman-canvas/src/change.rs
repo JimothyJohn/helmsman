@@ -19,8 +19,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
-use helmsman_diagram::diff::{self, Line};
 use helmsman_diagram::Module;
+use helmsman_diagram::diff::{self, Line};
 use helmsman_diagram::model::{Diagram, NodeId, NodeKind, RegionId};
 use helmsman_iec::{ImageSizes, PortDir};
 
@@ -60,12 +60,6 @@ impl Summary {
     #[must_use]
     pub const fn lines(&self) -> usize {
         self.lines_added + self.lines_removed
-    }
-
-    /// Whether nothing differs.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.blocks() == 0 && self.lines() == 0
     }
 
     /// Past the cap of one step.
@@ -300,7 +294,9 @@ fn tainted(old: &Module, new: &Module) -> BTreeSet<String> {
         let pous: BTreeSet<&str> = moved.iter().map(|(p, _)| p.as_str()).collect();
         let hit = |k: &Var| {
             [&a, &b].iter().any(|d| {
-                d.reads.get(k).is_some_and(|rs| rs.iter().any(|r| moved.contains(r)))
+                d.reads
+                    .get(k)
+                    .is_some_and(|rs| rs.iter().any(|r| moved.contains(r)))
                     || d.calls
                         .get(k)
                         .is_some_and(|cs| cs.iter().any(|c| pous.contains(c.as_str())))
@@ -395,7 +391,10 @@ pub fn summarize(
     };
     let (added, removed, changed) = drawn.diff.counts();
     (s.blocks_added, s.blocks_removed, s.blocks_changed) = (added, removed, changed);
-    let moved = tainted(drawn.old.as_ref().unwrap_or(&Module { pous: Vec::new() }), &drawn.new);
+    let moved = tainted(
+        drawn.old.as_ref().unwrap_or(&Module { pous: Vec::new() }),
+        &drawn.new,
+    );
     let mut outs = outputs_of(&new_src, sizes);
     for o in outputs_of(&old_src, sizes) {
         if !outs.contains(&o) {
@@ -467,8 +466,8 @@ mod tests {
     #[test]
     fn nothing_differs() {
         let s = change(BASE, &[]);
-        assert!(s.is_empty(), "{s:?}");
-        assert!(s.outputs.is_empty());
+        assert!(s.blocks() == 0 && s.lines() == 0, "{s:?}");
+        assert_eq!(s.outputs.len(), 0);
         assert_eq!(s.refusal(), None);
     }
 
@@ -477,7 +476,7 @@ mod tests {
         let new = BASE.replace("lamp := start;", "lamp := start OR stop;");
         let s = change(&new, &["make the lamp come on with stop too"]);
         assert_eq!(s.outputs, vec!["LAMP".to_string()], "{s:?}");
-        assert!(s.unnamed.is_empty());
+        assert_eq!(s.unnamed.len(), 0);
         assert_eq!(s.refusal(), None);
         assert!(s.blocks() >= 1 && s.lines() == 2, "{s:?}");
     }
@@ -521,9 +520,10 @@ mod tests {
     #[test]
     fn past_the_cap_it_says_so_in_the_specs_words() {
         let mut new = String::from(BASE);
-        let extra: String = (0..12)
-            .map(|k| format!("lamp := start OR stop OR (run AND {k} > 1);\n"))
-            .collect();
+        let mut extra = String::new();
+        for k in 0..12 {
+            let _ = writeln!(extra, "lamp := start OR stop OR (run AND {k} > 1);");
+        }
         new = new.replace("lamp := start;", &extra);
         let s = change(&new, &["lamp"]);
         assert!(s.over_cap(), "{s:?}");

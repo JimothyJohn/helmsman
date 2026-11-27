@@ -3324,13 +3324,16 @@ fn pending_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Pending
 
     let t = crate::theme::theme(ui);
     let mut act = None;
-    let why = p
-        .apply
-        .why
-        .as_deref()
-        .map_or_else(|| "A change is ready.".to_string(), |w| sentence(&clean(w, MAX_REASON)));
+    let why = p.apply.why.as_deref().map_or_else(
+        || "A change is ready.".to_string(),
+        |w| sentence(&clean(w, MAX_REASON)),
+    );
     let r = ui
-        .add(egui::Label::new(RichText::new(why).strong().color(t.fg)).wrap().selectable(true))
+        .add(
+            egui::Label::new(RichText::new(why).strong().color(t.fg))
+                .wrap()
+                .selectable(true),
+        )
         .tip("What the change does on the machine. Nothing is written yet.");
     chrome.hit("agent pending", r.rect);
     let r = ui
@@ -3349,7 +3352,8 @@ fn pending_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Pending
         chrome.hit("agent pending refusal", r.rect);
     }
     ui.add_space(4.0);
-    let wide = ((ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0).clamp(30.0, crate::glyphs::ACTION_W);
+    let wide = ((ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0)
+        .clamp(30.0, crate::glyphs::ACTION_W);
     ui.horizontal(|ui| {
         let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Find, true, p.showing, wide).tip(if p.showing {
             "Show current: puts the running program back on screen."

@@ -77,6 +77,11 @@ pub enum PCall {
         moved_to: Option<String>,
     },
     Check(String),
+    /// `GET /api/running`: the change set the box runs, for the Deploy
+    /// sheet ([`crate::deploy_sheet`]).
+    SheetRunning,
+    /// `GET /api/snapshots/{id}`: what that change set runs, for the sheet.
+    SheetSnapshot(String),
     /// `POST /api/projects/{p}/tests`: its requirement tests, run on the box.
     Tests(String),
     Replay(String),
@@ -456,6 +461,13 @@ pub struct BoxProjects {
     /// The last check's or deploy's compile errors.
     pub diags: Vec<Diag>,
     pub deploy: Deploy,
+    /// The Deploy sheet, "What changes on the machine": Deploy opens it
+    /// and sends nothing ([`Self::open_sheet`]).
+    pub sheet: Option<crate::deploy_sheet::Sheet>,
+    /// The save, check and replay under way are the sheet's own: they end
+    /// with the sheet filled in and deploy nothing, whatever becomes of the
+    /// sheet while they run.
+    preview: bool,
     /// A file whose save the box refused as stale (409).
     pub conflict: Option<String>,
     /// A one-line note: what happened, or why not (`true`: an error).
@@ -1646,9 +1658,46 @@ impl BoxProjects {
     }
 
     /// Saves what is edited, then checks, replays if the policy wants it,
-    /// and deploys the open project.
+    /// and deploys the open project. The page asks through
+    /// [`Self::open_sheet`] first (Nick, 2026-11-27: Deploy shows what
+    /// changes on the machine and never deploys straight away); this is
+    /// what Deploy on the sheet does.
     pub fn deploy(&mut self) {
+        self.sheet = None;
+        self.preview = false;
         self.deploy_with(false);
+    }
+
+    /// Opens the Deploy sheet: the project's edits are saved, checked and,
+    /// where the policy wants a replay, replayed, and what the box runs now
+    /// is read, so the sheet can say what changes. Nothing is deployed.
+    pub fn open_sheet(&mut self) {
+        let Some(o) = &self.open else { return };
+        if self.sheet.is_some() {
+            return;
+        }
+        self.sheet = Some(crate::deploy_sheet::Sheet::new(&o.name));
+        if self.preview && self.deploy.busy() {
+            // The last sheet's checks are still on their way: it takes them.
+            return;
+        }
+        if self.deploy.busy() {
+            self.sheet = None;
+            return;
+        }
+        self.preview = true;
+        self.queue
+            .push(PReq::get(PCall::SheetRunning, "/api/running".into()));
+        self.deploy_with(false);
+    }
+
+    /// Cancel on the sheet: nothing changes, and what is still on its way
+    /// deploys nothing.
+    pub fn close_sheet(&mut self) {
+        self.sheet = None;
+        if !self.deploy.busy() {
+            self.preview = false;
+        }
     }
 
     /// [`Self::deploy`], `scanned` when the network was scanned for it
@@ -2455,6 +2504,21 @@ impl BoxProjects {
                     self.note(format!("{file} was not deleted: {}", error_of(a)), true);
                 }
             }
+            PCall::SheetRunning => {
+                if let Some(sh) = &mut self.sheet {
+                    sh.read_running(a.status, &j);
+                    if let crate::deploy_sheet::Running::Is { id, .. } = &sh.running {
+                        let url = format!("/api/snapshots/{}", segment(id));
+                        self.queue.push(PReq::get(PCall::SheetSnapshot(id.clone()), url));
+                    }
+                }
+            }
+            PCall::SheetSnapshot(_) => {
+                if let Some(sh) = &mut self.sheet {
+                    sh.read_snapshot(a.status, &j);
+                    sh.report = None;
+                }
+            }
             PCall::Check(name) => {
                 if a.status == 422 {
                     self.diags = diags_of(&j);
@@ -2479,13 +2543,39 @@ impl BoxProjects {
                             .collect()
                     })
                     .unwrap_or_default();
-                if self.to_node {
+                if self.preview {
+                    let check = crate::deploy_sheet::Check::parse(&j);
+                    let replay = check.needs_replay;
+                    if let Some(sh) = &mut self.sheet {
+                        sh.check = Some(check);
+                        sh.report = None;
+                        sh.replay = if replay {
+                            crate::deploy_sheet::Replay::Running
+                        } else {
+                            crate::deploy_sheet::Replay::NotNeeded
+                        };
+                    }
+                    if replay {
+                        self.replay(&name);
+                    } else {
+                        self.deploy = Deploy::Idle;
+                        self.preview = false;
+                    }
+                } else if self.to_node {
                     self.after_check_for_node(&name, &j);
                 } else if j["approval"]["needs"]["replay"].as_bool() == Some(true) {
                     self.replay(&name);
                 } else {
                     self.deploy_now(&name, None);
                 }
+            }
+            PCall::Replay(_) if self.preview && a.status == 201 => {
+                if let Some(sh) = &mut self.sheet {
+                    sh.replay = crate::deploy_sheet::Replay::parse(&j);
+                    sh.report = None;
+                }
+                self.deploy = Deploy::Idle;
+                self.preview = false;
             }
             PCall::Replay(name) => match j["replay"].as_u64().filter(|_| a.status == 201) {
                 Some(_) if self.to_node => self.send_to_node(),

@@ -1247,10 +1247,15 @@ impl PlaygroundView {
             self.shown_change = None;
             return;
         };
-        if self.shown_change.as_ref().is_some_and(|s| s.text == p.apply.text && s.file == p.apply.file) {
+        if self
+            .shown_change
+            .as_ref()
+            .is_some_and(|s| s.text == p.apply.text && s.file == p.apply.file)
+        {
             return;
         }
-        self.shown_change = crate::change_ui::Shown::build(&self.proj.files, &p.apply, crate::playground::SIZES);
+        self.shown_change =
+            crate::change_ui::Shown::build(&self.proj.files, &p.apply, crate::playground::SIZES);
         if self.shown_change.is_none() {
             p.showing = false;
         } else {
