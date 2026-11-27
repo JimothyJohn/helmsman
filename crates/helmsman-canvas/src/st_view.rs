@@ -2056,6 +2056,14 @@ impl Viewer {
         self.frame_lit = true;
     }
 
+    /// The point whose reads and writes the diagram shows, and which of
+    /// its uses it framed last: what the tour reads to see that the
+    /// diagram glyph of an I/O card was used.
+    #[must_use]
+    pub fn shown_signal(&self) -> Option<(&str, usize)> {
+        self.xref.as_deref().map(|k| (k, self.xref_at))
+    }
+
     /// The source line that declares the program's variable `name`.
     #[must_use]
     pub fn declared_line(&self, name: &str) -> Option<u32> {

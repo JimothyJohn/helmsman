@@ -5,8 +5,9 @@ inputs you set yourself. It is what the playground is, and what a box's
 page falls back to when no box answers.
 
 New to it? The [guided tour](https://helmsman.advin.io/playground/?tour)
-copies the Blink example, changes it, deploys it and reads its trend,
-with each step pointing at the control it is about.
+copies the Blink example, changes it, deploys it, watches the output,
+reads its trend and describes a change in words, with each step
+pointing at the control it is about.
 
 ## Running
 
