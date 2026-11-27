@@ -344,11 +344,6 @@ pub struct Viewer {
     cards: std::cell::RefCell<Option<(String, Vec<crate::io_cards::OutputCard>)>>,
     /// What the zoom closes ([`zoom_fold`]).
     zoom: zoom_fold::ZoomFolds,
-    /// The zoom ladder's groups for each POU ([`ladder_view`]).
-    ladder: Vec<ladder_view::Groups>,
-    /// Where the corner controls drew the rung's name.
-    #[cfg(test)]
-    pub(crate) ladder_name: Rect,
     /// The hand toggle of the corner controls: a primary drag on empty
     /// space pans instead of selecting. View state, never saved.
     hand: bool,
@@ -656,11 +651,6 @@ impl Viewer {
             })
             .collect();
         let views = vec![None; module.pous.len()];
-        let ladder = module
-            .pous
-            .iter()
-            .map(|p| ladder_view::Groups::of(&p.diagram, src))
-            .collect();
         let mut v = Self {
             src: src.to_string(),
             module,
@@ -703,9 +693,6 @@ impl Viewer {
             cards: std::cell::RefCell::new(None),
             jumped: None,
             zoom: zoom_fold::ZoomFolds::new(),
-            ladder,
-            #[cfg(test)]
-            ladder_name: Rect::NOTHING,
             hand: false,
         };
         v.reshow();
@@ -1812,6 +1799,9 @@ impl Viewer {
 
     /// Program paths the outputs list offers: located outputs and
     /// `VAR_OUTPUT`s of the program, in source order of first assignment.
+    // 2026-11-26: only tests use it since the lamp fixture went; the tester
+    // drops it with them.
+    #[cfg_attr(not(test), allow(dead_code))]
     #[must_use]
     pub fn outputs(&self) -> Vec<String> {
         let Some(p) = self.module.program() else {
@@ -2212,14 +2202,6 @@ impl Viewer {
         }
         let cam = self.cams[self.scope];
         let shown = self.shown();
-        // A card of the zoom ladder that has formed stands for the blocks
-        // under it: no control is put over it.
-        let cards: Vec<Rect> = self
-            .ladder_cards(cam)
-            .into_iter()
-            .filter(ladder_view::Card::solid)
-            .map(|c| c.rect)
-            .collect();
         self.diagram()
             .nodes
             .iter()
@@ -2232,9 +2214,6 @@ impl Viewer {
                         |s| {
                             let mut r = cam.rect(&shown.node(s).rect);
                             r.min.y += HEADER * cam.zoom;
-                            if cards.iter().any(|c| c.contains(r.center())) {
-                                return Rect::NOTHING;
-                            }
                             r
                         },
                     );
@@ -2533,14 +2512,6 @@ impl Viewer {
         // The level follows the zoom the frame ended at; the camera is read
         // again, as a level change keeps the diagram under the pointer.
         let cam = self.follow_zoom(hover.filter(|_| response.hovered()), area);
-        // A card of the zoom ladder that has formed takes the pointer from
-        // the blocks under it: a click flies in, a drag moves the view.
-        let carded = response
-            .interact_pointer_pos()
-            .or(hover.filter(|_| response.hovered()))
-            .filter(|p| !corner.contains(*p))
-            .and_then(|p| self.ladder_at(cam, p));
-        let double = double && carded.is_none();
         // A double click on a block instance opens it; anywhere else it
         // fits the diagram to the view.
         if double
@@ -2610,7 +2581,6 @@ impl Viewer {
                 Some(_) if middle || space => Grab::Pan,
                 Some(p) if corner.contains(p) => Grab::Idle,
                 Some(_) if !primary => Grab::Idle,
-                Some(p) if self.ladder_at(cam, p).is_some() => Grab::Pan,
                 Some(p) => match self.grab_at(cam, p) {
                     Grab::Empty if self.on_pin(cam, p) => Grab::Idle,
                     Grab::Empty if self.hand => Grab::Pan,
@@ -2688,11 +2658,7 @@ impl Viewer {
             .then(|| response.interact_pointer_pos())
             .flatten()
             .and_then(|p| self.chip_at(cam, p));
-        if let Some(card) = carded.as_ref().filter(|_| response.clicked()) {
-            if !additive {
-                self.ladder_click(card, area, now);
-            }
-        } else if let Some((key, arm)) = chip {
+        if let Some((key, arm)) = chip {
             // A tap on a state opens the sequence on that state's arm.
             self.open_arm(&key, arm, area, now);
         } else if response.clicked()
@@ -2741,7 +2707,6 @@ impl Viewer {
             }
         }
         if response.secondary_clicked()
-            && carded.is_none()
             && let Some(p) = response.interact_pointer_pos()
             && let Some(n) = self.hit_at(cam, p)
         {
@@ -2806,14 +2771,7 @@ impl Viewer {
         let tabs = self.opened_tabs(cam);
         let rows = self.state_rows(live.as_ref());
         let tables = self.table_rows(live.as_ref());
-        if let Some(card) = carded
-            .as_ref()
-            .filter(|c| c.rung != helmsman_diagram::fold::ladder::Rung::Code)
-        {
-            response
-                .clone()
-                .on_hover_text_at_pointer(format!("{}\nClick to look inside.", card.title));
-        } else if response.hovered()
+        if response.hovered()
             && let Some(p) = hover
         {
             if let Some(tip) = self.cell_tip(cam, p, &tables) {
@@ -2839,7 +2797,6 @@ impl Viewer {
         // Empty space says nothing (Nick, 2026-11-26: tooltips only over
         // something that does something).
         if response.hovered()
-            && carded.is_none()
             && let Some(p) = hover
             && self.instance_at(cam, p).is_some()
         {
@@ -2879,7 +2836,6 @@ impl Viewer {
                 io: &io,
             },
         );
-        self.ladder_paint(&painter, &t, cam, seen.as_ref());
         for (_, title, around, tab) in &tabs {
             let z = cam.zoom;
             painter.rect_stroke(
@@ -2907,17 +2863,12 @@ impl Viewer {
                 StrokeKind::Inside,
             );
         }
-        // The program's BOOL outputs as lamps in the corner (a traffic
-        // light for a red, a yellow and a green), on the program's own
-        // diagram only: a block instance's outputs are not the machine's.
-        if let Some(f) = self.fixture(scan) {
-            crate::lamps::paint(&painter, area, &f);
-        }
         self.corner_controls(ui, area, corner);
     }
 
-    /// The lamp fixture of the program's BOOL outputs, when there is one
-    /// to draw on the diagram shown.
+    // 2026-11-26: the lamp fixture is no longer drawn; only tests use it,
+    // the tester drops it with them.
+    #[cfg(test)]
     fn fixture(&self, scan: Option<&dyn Scan>) -> Option<crate::lamps::Fixture> {
         let scan = scan.filter(|_| self.scopes[self.scope].prefix.is_empty())?;
         let outs = self.outputs();
@@ -2925,13 +2876,13 @@ impl Viewer {
     }
 
     /// Where the pan, zoom in, zoom out and fit controls sit: the bottom-right
-    /// corner of `area`, left of the lamp fixture when there is one.
-    fn corner_rect(&self, area: Rect, scan: Option<&dyn Scan>) -> Rect {
-        let w = 4.0 * TAP + 4.0 * CORNER_GAP + ladder_view::NAME_W;
-        let mut right = area.right() - CORNER_GAP;
-        if let Some(f) = self.fixture(scan) {
-            right = crate::lamps::rect(area, &f).left() - CORNER_GAP;
-        }
+    /// corner of `area`.
+    // 2026-11-26: nothing but the area places it since the lamp fixture went;
+    // a protected test still calls it with a scan, so the signature stays.
+    #[allow(clippy::unused_self)]
+    fn corner_rect(&self, area: Rect, _scan: Option<&dyn Scan>) -> Rect {
+        let w = 4.0 * TAP + 3.0 * CORNER_GAP;
+        let right = area.right() - CORNER_GAP;
         // A window narrower than the row keeps it inside the area.
         let left = (right - w).max(area.left());
         let top = (area.bottom() - CORNER_GAP - TAP).max(area.top());
@@ -2992,43 +2943,6 @@ impl Viewer {
                 "Fit: the blocks selected, centred and filling the view"
             },
         );
-        // Where the view is on the zoom ladder, and a step to any rung.
-        let on = self.rung();
-        let mut step = None;
-        #[cfg_attr(not(test), allow(unused_variables))]
-        let name = row
-            .scope(|ui| {
-                ui.set_width(ladder_view::NAME_W);
-                ui.menu_button(
-                    egui::RichText::new(on.name()).size(crate::theme::MIN_TEXT),
-                    |ui| {
-                        for rung in helmsman_diagram::fold::ladder::Rung::ALL {
-                            let pick = ui
-                                .selectable_label(
-                                    rung == on,
-                                    egui::RichText::new(rung.name()).size(crate::theme::MIN_TEXT),
-                                )
-                                .tip(ladder_view::rung_tip(rung));
-                            if pick.clicked() {
-                                step = Some(rung);
-                                ui.close();
-                            }
-                        }
-                    },
-                )
-                .response
-            })
-            .inner
-            .tip("How much one block stands for. Zoom in for the code, out for the whole program, or pick a level here.");
-        #[cfg(test)]
-        {
-            self.ladder_name = name.rect;
-        }
-        if let Some(rung) = step {
-            let now = ui.input(|i| i.time);
-            self.ladder_fly(rung, None, area, now);
-            return;
-        }
         if hand.clicked() {
             self.hand = !self.hand;
         }
@@ -4093,9 +4007,6 @@ mod fold_tests;
 
 #[path = "st_zoom.rs"]
 mod zoom_fold;
-
-#[path = "st_ladder.rs"]
-pub mod ladder_view;
 
 #[cfg(test)]
 mod hold_tests {
