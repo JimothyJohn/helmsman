@@ -113,57 +113,66 @@ def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
 # Parts of the 1400x860 layout that hold still while a program runs, in
 # points (x, y, width, height): a step that must change one is checked
 # against it. The clock, the diagram's values and the trend never hold.
+# Re-measured with the native harness at 1400 x 860 on 2026-11-27, when
+# the chrome started to float 8 pt in from the edges under a taller header
+# (docs/UI.md "Look and feel").
 LEFT = (0, 100, 300, 200)
 # Where a right pane's tabs show once one is docked there.
-RIGHT_TABS = (1180, 56, 210, 30)
+RIGHT_TABS = (1180, 96, 210, 42)
 # The trend is the bottom strip from the left pane's edge since 2026-11-24
 # (the left pane has the page's whole height).
-BOTTOM_TABS = (330, 545, 1070, 315)
+BOTTOM_TABS = (323, 585, 1070, 270)
 # The Log (the Messages, renamed 2026-11-26): a tab of the bottom panel, its
-# list to the right of the panel's tab strip (the strip at x 323..356 with
-# the left pane at 307 pt); layout()'s msgs=1 shows it. What a deploy says
+# list to the right of the panel's tab strip (the strip at x 331..364 with
+# the left pane's frame ending near 298 pt); layout()'s msgs=1 shows it. What a deploy says
 # is there, not in a line under the header.
-MESSAGES = (360, 575, 1030, 280)
+MESSAGES = (364, 589, 1020, 250)
 # The diagram.
-DIAGRAM = (330, 60, 1000, 500)
+DIAGRAM = (330, 130, 1000, 440)
+# View › Pane layouts…'s popup, in the middle of the page.
+LAYOUTS_POPUP = (540, 290, 320, 340)
 # The Devices tab's Scan for Device under the (empty) list, the simulated
 # E1213 it finds under it, and the small form's Add (2026-11-26). Measured
 # with the native harness at 1400 x 860 points.
-SCAN_FOR_DEVICE = (85, 181)
-FOUND_DEVICE = (150, 213)
-QUICK_ADD = (36, 437)
+SCAN_FOR_DEVICE = (93, 235)
+FOUND_DEVICE = (151, 269)
+QUICK_ADD = (36, 499)
 # The left pane's hide button on its ribbon, at the pane's vertical middle,
 # and shut, the strip's expand glyph at the same height (2026-11-26).
-RIBBON_LEFT = (288, 456)
-STRIP_LEFT = (28, 456)
-# The simulation's run state in the diagram's header ("running · 2.1s").
-RUN_STATE = (870, 60, 190, 32)
+RIBBON_LEFT = (280, 470)
+STRIP_LEFT = (28, 470)
+# The simulation's run state in the diagram's header ("running", its clock
+# beside it).
+RUN_STATE = (900, 92, 190, 32)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt).
-TAB_AGENT = (23, 70)
-TAB_CODE = (60, 70)
-TAB_IO = (97, 70)
-# One tab docked on the right: after the pane's chevron.
-TAB_RIGHT_FIRST = (1229, 71)
+TAB_AGENT = (32, 118)
+TAB_CODE = (74, 118)
+TAB_IO = (114, 118)
+# One tab docked on the right: the first of its row.
+TAB_RIGHT_FIRST = (1218, 118)
 # The fold arrow of the Code tab's second line, in the gutter.
-FOLD_LINE_2 = (14, 168)
+FOLD_LINE_2 = (24, 245)
 # The one menu (the three-line glyph, 2026-11-23), its four submenus, the
 # View submenu's "Pane layouts…" item and, on a box's page, its Proposals
 # item (the box's View menu has two more rows above Pane layouts:
 # Proposals and Simulate in this browser). The submenus open to the right
 # of the menu. Measured with the native harness, 1400 x 860 points.
-MENU = (182, 26)
-MENU_FILE = (201, 64)
-MENU_EDIT = (202, 92)
-MENU_VIEW = (207, 120)
-MENU_HELP = (206, 148)
-VIEW_PANE_LAYOUTS = (396, 505)
+MENU = (190, 40)
+MENU_FILE = (215, 78)
+MENU_EDIT = (215, 108)
+MENU_VIEW = (215, 138)
+MENU_HELP = (215, 168)
+VIEW_PANE_LAYOUTS = (404, 545)
 # The box's View menu lists the Help tab above Pane layouts (2026-11-26).
 VIEW_PANE_LAYOUTS_BOX = (396, 615)
 VIEW_PROPOSALS_BOX = (396, 198)
-LAYOUT_DEFAULT = (668, 330)
-LAYOUT_PROGRAMMING = (668, 368)
+LAYOUT_DEFAULT = (669, 324)
+LAYOUT_PROGRAMMING = (669, 363)
 HEADER_RIGHT = (1150, 8, 200, 36)
+# The header's Editor | Monitor toggle, each side.
+TOGGLE_EDITOR = (1255, 40)
+TOGGLE_MONITOR = (1312, 40)
 MOD = "ControlOrMeta"
 # The header's Sign in, and the Proposals screen's "Sign in…" on a box
 # signed out, in points (measured from the smoke's screenshots, 2026-11-27).
@@ -273,6 +282,9 @@ def playground(ctx, base, out):
     # This build has no free chat: the tab says so (UNAVAILABLE_TEXT) and a
     # click or typing on it changes nothing. (With a design entry:
     # "Design a machine..." opens its window; text typed into it shows.)
+    # The pointer off the tab first: the tab's hover eases out (docs/UI.md
+    # "Look and feel", finish 10), which would read as the click's change.
+    r.page.mouse.move(*AGENT_DESIGN); r.wait(400)
     r.step("design-window", lambda: r.click(*AGENT_DESIGN), LEFT, stays=True)
     # (Typing here is no longer a no-op: with no field focused a letter is a
     # view's key, so the page switches views; the tests cover the keys.)
@@ -283,9 +295,9 @@ def playground(ctx, base, out):
         r.click(*MENU); r.wait(300); r.click(*sub); r.wait(500); r.shot(name); r.key("Escape"); r.key("Escape")
     # Help > Show hotkeys writes each shortcut over its button; one more
     # click puts the page back as it was.
-    # (One row higher since Help › Front page went, 2026-11-27: measured
-    # from pg-14-help-menu.png.)
-    HELP_HOTKEYS = (322, 274)
+    # (One row higher since Help › Front page went, 2026-11-27; measured
+    # with the native harness under the floating chrome the same day.)
+    HELP_HOTKEYS = (354, 303)
     def hotkeys_menu():
         r.click(*MENU); r.wait(300); r.click(*MENU_HELP); r.wait(500); r.click(*HELP_HOTKEYS)
     r.step("hotkeys-on", hotkeys_menu, LEFT, 700)
@@ -303,7 +315,7 @@ def playground(ctx, base, out):
     r.click(989, 268); r.wait(1000); r.shot("diagram-why")
     # A right click on the GREEN row's AND block opens its menu (Chat about
     # this); Escape shuts it. The diagram never changes the code.
-    r.step("diagram-menu", lambda: r.click(501, 400, "right"), DIAGRAM)
+    r.step("diagram-menu", lambda: r.click(503, 381, "right"), DIAGRAM)
     r.step("diagram-menu-closed", lambda: r.key("Escape"), DIAGRAM, 400)
     # A drag on empty space draws a selection box (the blocks it touches
     # are outlined blue); Escape deselects.
@@ -355,14 +367,17 @@ def playground(ctx, base, out):
         r.click(*MENU); r.wait(500)
         r.click(*MENU_VIEW); r.wait(1500)
         r.click(*VIEW_PANE_LAYOUTS)
-    r.step("pane-layouts", layouts, LEFT, 1500)
+    r.step("pane-layouts", layouts, LAYOUTS_POPUP, 1500)
     r.step("layout-programming", lambda: r.click(*LAYOUT_PROGRAMMING), RIGHT_TABS, 1000)
     layouts(); r.wait(1500)
     r.step("layout-default", lambda: r.click(*LAYOUT_DEFAULT), RIGHT_TABS, 1000)
-    r.click(1313, 26); r.wait(1500); r.shot("monitor")
-    r.click(1243, 26); r.wait(800); r.shot("editor-again")
+    r.click(*TOGGLE_MONITOR); r.wait(1500); r.shot("monitor")
+    r.click(*TOGGLE_EDITOR); r.wait(800); r.shot("editor-again")
     # A program the checker warns of (RETAIN where it is not kept): marked
-    # in the editor and listed under it, and it still compiles.
+    # in the editor and listed under it, and it still compiles. The Code
+    # tab first: the Default layout above leaves the Agent's tab showing,
+    # and the typing went nowhere (seen in pg-42-warned.png, 2026-11-27).
+    r.click(*TAB_CODE); r.wait(400)
     r.click(130, 300); r.key("Control+a")
     r.page.keyboard.type(
         "FUNCTION_BLOCK Latch\nVAR_INPUT set : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\n"
@@ -400,7 +415,7 @@ def playground(ctx, base, out):
     r2 = Run(open_app(ctx, base, "?playground&editor", layout(pane="files", light=1)), out, "pg-light")
     r2.wait(2500); r2.shot("files")
     r2.click(*TAB_AGENT); r2.wait(600); r2.shot("agent-tab")
-    r2.click(1313, 26); r2.wait(1500); r2.shot("monitor")
+    r2.click(*TOGGLE_MONITOR); r2.wait(1500); r2.shot("monitor")
     problems += r2.problems()
     r2.page.close()
     return problems

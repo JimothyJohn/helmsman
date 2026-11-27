@@ -340,6 +340,11 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
             .to_string(),
     );
     chrome.hit("help question", field.rect);
+    // The ? key puts the caret here, as A does in the Describe tab (Nick,
+    // 2026-11-27).
+    if std::mem::take(&mut chrome.focus_help) {
+        field.request_focus();
+    }
     let busy = s.helping.as_ref().is_some_and(Helping::busy);
     let why_not = v.blocked.clone().or_else(|| refusal(&s.draft));
     ui.horizontal_wrapped(|ui| {

@@ -195,7 +195,7 @@ pub const RIGHT_W: f32 = 236.0;
 /// the trend is the whole bottom and taller): the signals' row and the
 /// slider take about 80 pt, which leaves six lanes about 40 pt each, and
 /// at 1280x800 the diagram keeps about 430 pt above it.
-pub const BOTTOM_H: f32 = 320.0;
+pub const BOTTOM_H: f32 = 288.0;
 /// How many trend colour picks a browser keeps.
 pub const MAX_COLORS: usize = 64;
 
@@ -244,6 +244,9 @@ pub struct Chrome {
     /// keyboard the next time it is drawn (Nick, 2026-11-26: A, then type,
     /// then Enter). Not remembered.
     pub focus_describe: bool,
+    /// The Help tab's key was pressed: its question field takes the
+    /// keyboard the next time it is drawn. Not remembered.
+    pub focus_help: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
@@ -253,6 +256,9 @@ pub struct Chrome {
     /// Where the diagram was drawn this frame (the glyph buttons sit in
     /// its top-right corner).
     pub diagram: Rect,
+    /// The strip of run state and glyphs over the diagram's top-right
+    /// corner, as last drawn: the crumb leaves it its room.
+    pub glyph_strip: Rect,
     /// The find box over the ST pane, while open (Ctrl F).
     pub find: Option<crate::find::Find>,
     /// What the Agent's last change added and removed in the open file,
@@ -318,10 +324,12 @@ impl Default for Chrome {
             scan: false,
             light: false,
             focus_describe: false,
+            focus_help: false,
             line: None,
             jump: None,
             hits: Vec::new(),
             diagram: Rect::NOTHING,
+            glyph_strip: Rect::NOTHING,
             find: None,
             st_marks: None,
             wrap: true,
@@ -1012,25 +1020,20 @@ const RIBBON: f32 = 20.0;
 /// vertical middle, the very spot the collapsed strip's button takes.
 /// `left`: the pane is the left one (its ribbon is on its right).
 fn ribbon(ui: &mut egui::Ui, full: Rect, left: bool, hover: &str) -> egui::Response {
-    let rib = if left {
-        Rect::from_min_max(Pos2::new(full.right() - RIBBON, full.top()), full.max)
+    let rib_x = if left {
+        full.right() - RIBBON / 2.0
     } else {
-        Rect::from_min_max(full.min, Pos2::new(full.left() + RIBBON, full.bottom()))
+        full.left() + RIBBON / 2.0
     };
-    let btn = Rect::from_center_size(
-        Pos2::new(rib.center().x, full.center().y),
-        Vec2::new(RIBBON, TAP * 0.9),
-    );
+    let btn = Rect::from_center_size(Pos2::new(rib_x, full.center().y), Vec2::new(RIBBON, TAP * 0.9));
     let r = ui
         .interact(btn, ui.scope_id().with(("ribbon", left)), Sense::click())
         .tip(hover);
-    let t = theme(ui);
-    ui.painter()
-        .rect_filled(rib, CornerRadius::ZERO, t.shade.gamma_multiply(0.5));
-    if r.hovered() {
-        let tint = ui.style().interact(&r).bg_fill;
-        ui.painter().rect_filled(btn, CornerRadius::same(4), tint);
-    }
+    // No ground of its own: a full-height grey strip beside the pane read as
+    // a code gutter (Nick, 2026-11-27). The button alone, on the pane.
+    let tint = crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT);
+    ui.painter().rect_filled(btn, CornerRadius::same(4), tint);
+    crate::theme::focus_ring(ui, &r, btn, 4);
     fold_glyph(ui, btn.center(), left, true, r.hovered(), 0.8);
     r
 }
@@ -1151,7 +1154,10 @@ fn side_pane(
             egui::Panel::right("ed-side-strip")
                 .exact_size(STRIP)
                 .resizable(false),
-            egui::Panel::right(RIGHT_ID).resizable(true).default_size(RIGHT_W),
+            egui::Panel::right(RIGHT_ID)
+                .frame(crate::theme::float_frame(ui))
+                .resizable(true)
+                .default_size(RIGHT_W),
         )
     } else {
         (
@@ -1159,6 +1165,7 @@ fn side_pane(
                 .exact_size(STRIP)
                 .resizable(false),
             egui::Panel::left(LEFT_ID)
+                .frame(crate::theme::float_frame(ui))
                 .resizable(true)
                 .default_size(LEFT_W)
                 // Never past the page less 40 pt, every frame: opened at
@@ -1463,6 +1470,7 @@ fn trend_panel(
 ) {
     let mut open = chrome.trend;
     egui::Panel::bottom(BOTTOM_ID)
+        .frame(crate::theme::float_frame(ui))
         .resizable(true)
         .default_size(BOTTOM_H)
         .show_collapsible(ui, &mut open, |ui| {
@@ -1728,7 +1736,7 @@ pub fn st_editor(
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
                 let wrap = if wrap_on {
-                    (ui.available_width() - gutter_w - arrow_w - 2.0 * ui.spacing().item_spacing.x - 32.0)
+                    (ui.available_width() - gutter_w - arrow_w - 2.0 * ui.spacing().item_spacing.x - 16.0)
                         .max(60.0)
                 } else {
                     f32::INFINITY
@@ -2145,6 +2153,18 @@ pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str
     // count and Deploy stay on the row.
     let room =
         (ui.available_width() - 3.0 * (crate::glyphs::ROW + 6.0) - crate::glyphs::DEPLOY_W - 80.0).max(60.0);
+    file_name(ui, chrome, name, tip, room);
+}
+
+/// The header's left half, in a row whose right end is already placed
+/// (the Code tab): the name takes what is left of `ui`'s width after
+/// `reserve`, the glyphs and notes that follow it.
+pub fn file_header_in(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str, reserve: f32) {
+    let room = (ui.available_width() - reserve).max(40.0);
+    file_name(ui, chrome, name, tip, room);
+}
+
+fn file_name(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str, room: f32) {
     let r = ui
         .scope(|ui| {
             ui.set_max_width(room);
@@ -2277,14 +2297,16 @@ fn fold_marks(
         }
         let Some(end) = end else { continue };
         let at = out.galley_pos + Vec2::new(end.right() + 10.0, end.center().y);
-        let rect = ui.painter().text(
+        let words = if b.hides() == 1 {
+            "… 1 line".to_string()
+        } else {
+            format!("… {} lines", b.hides())
+        };
+        // Clipped to the code column, so it never runs onto the scroll bar.
+        let rect = ui.painter().with_clip_rect(out.response.rect).text(
             at,
             egui::Align2::LEFT_CENTER,
-            if b.hides() == 1 {
-                "… 1 line".to_string()
-            } else {
-                format!("… {} lines", b.hides())
-            },
+            words,
             font.clone(),
             t.muted,
         );

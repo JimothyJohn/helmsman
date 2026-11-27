@@ -3337,24 +3337,26 @@ the end of this section.
   the same in the simulation and on a box. One card per input and per
   output (every `VAR_OUTPUT`, set or not, and located output the program
   sets, in declaration order; on a box, the map's signals too). A card
-  says three things: the point (an input's control in the simulation,
-  else the lamp or value and the name), what it is in the real world
-  (`io_cards::real`: the device the library says is wired to it and the
-  channel it is on; no line for a point that is only simulated), and its
-  part in the control scheme from the diagram alone (`io_cards::summary`:
-  the first signal that drives an output, the first output an input
-  affects by `io_cards::affects`, and "…" when there are more). A
-  double-click on the card or a click on the "…" opens its details in
-  place: every source as chips in three groups (driven by: signals read
-  from outside; timer, counter: block instances; kept: state the program
-  carries), the wiring in full, how often the code names it, and for a
-  simulated input "Simulate…" (the popup a double-click on its diagram
-  block opens). Two glyphs at the card's right go to the point. `< >`
+  is one line (Nick, 2026-11-27): the point (an input's control in the
+  simulation, else its glyph and name, a number with "= value"), cut to
+  the card with the whole name on hover, and its glyphs. A BOOL says its
+  state by colour and glyph alone: lit on a disc when on, dimmed when
+  off. A click on the card opens its details in place: the SIM badge of
+  a simulated point (its closed card says it with a dashed outline),
+  what it is in the real world (`io_cards::real`: the device the library
+  says is wired to it and the channel it is on), every link from the
+  diagram alone as chips (an input's outputs by `io_cards::affects`; an
+  output's sources in three groups, driven by: signals read from
+  outside; timer, counter: block instances; kept: state the program
+  carries), how often the code names it, and for a simulated input
+  "Simulate…" (the popup a double-click on its diagram block opens).
+  Three glyphs at the card's right go to the point. `< >`
   opens the file that declares it with the find box on its name as a
   whole name (`Find::name`, `find::names`: `start` never matches
   `start_button`), the first place selected; pressed again it steps to
   the next, as Ctrl G does, within the open file. The diagram glyph calls
-  `Viewer::show_signal`: every block that reads or writes the point is
+  `Viewer::show_signal`, and is off with a tooltip saying why for a
+  point the program never reads or writes (`Viewer::has_signal`): every block that reads or writes the point is
   lit as Cross references lights them and framed, with no scan needed, so
   it works while the program is stopped. A tap on an output's card still
   calls `Viewer::show_output`: the program's diagram opens, the "because"

@@ -411,13 +411,17 @@ mod glyphs_and_help {
             (state.center().y - run.center().y).abs() < 8.0,
             "{state:?} beside {run:?}"
         );
-        assert!(h.drew("running · "), "the running clock");
+        // The word in the interface's face and the clock beside it a
+        // fixed-width live value (docs/UI.md "Look and feel", finish 5:
+        // "running · 3.00s" was one piece of text until 2026-11-27).
+        let clock = state_says(&h, "running").expect("the running clock");
+        assert!(clock.ends_with('s'), "{clock}");
         assert!(h.app.sim.as_ref().unwrap().session.running);
         // Pause holds the state; Step goes to the next change.
         h.press("run");
         assert!(!h.app.sim.as_ref().unwrap().session.running, "the glyph pauses");
         h.frame(vec![]);
-        assert!(h.drew("paused · "));
+        assert!(state_says(&h, "paused").is_some(), "paused, with its clock");
         let (scans, now) = {
             let s = &h.app.sim.as_ref().unwrap().session;
             (s.scans, s.now_ms)
@@ -452,7 +456,7 @@ mod glyphs_and_help {
             assert_eq!((s.scans, s.now_ms), (0, 0));
         }
         h.frame(vec![]);
-        assert!(h.drew("stopped · 0.00s"));
+        assert_eq!(state_says(&h, "stopped").as_deref(), Some("0.00s"));
         h.press("run");
         assert!(
             h.app.sim.as_ref().unwrap().session.running,
@@ -465,6 +469,50 @@ mod glyphs_and_help {
         h.frame(vec![]);
         assert!(h.has("run") && !h.has("download"));
         assert!(h.has("help"), "? stays in the header");
+    }
+
+    /// The run state's clock when the state reads `word`: the word drawn
+    /// in the proportional face, and the value to its right on its row in
+    /// the code face (fixed width, so it does not jitter as it counts).
+    fn state_says(h: &Harness, word: &str) -> Option<String> {
+        use eframe::egui::{FontFamily, Shape};
+        fn walk(s: &Shape, area: Rect, out: &mut Vec<(String, FontFamily, Rect)>) {
+            match s {
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+                Shape::Text(t) => {
+                    let r = t.galley.rect.translate(t.pos.to_vec2());
+                    if area.contains(r.center()) {
+                        let fam = t
+                            .galley
+                            .job
+                            .sections
+                            .first()
+                            .map(|s| s.format.font_id.family.clone());
+                        out.push((t.galley.text().trim().to_string(), fam.unwrap_or_default(), r));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let area = h.rect("state").expand(2.0);
+        let mut parts = Vec::new();
+        for c in &h.shapes {
+            walk(&c.shape, area, &mut parts);
+        }
+        let (_, fam, at) = parts.iter().find(|(t, ..)| t == word)?;
+        assert_eq!(
+            *fam,
+            FontFamily::Proportional,
+            "{word:?} is in the interface's face"
+        );
+        parts
+            .iter()
+            .find(|(_, f, r)| {
+                *f == FontFamily::Monospace
+                    && r.left() >= at.right()
+                    && (r.center().y - at.center().y).abs() < 4.0
+            })
+            .map(|(t, ..)| t.clone())
     }
 
     /// Nick, 2026-11-01: the toggle flips on a click on either side; the
@@ -678,7 +726,15 @@ mod glyphs_and_help {
             tt.left() >= trend.left() - 1.0 && tm.bottom() <= trend.bottom() + 1.0,
             "the strip is inside the bottom panel: {tt:?} {tm:?} {trend:?}"
         );
-        assert!(trend.right() > h.size.x - 12.0, "to the far right: {trend:?}");
+        // To the far right: the page's edge less the floating inset and
+        // the pane's own margin (docs/UI.md "Look and feel": the chrome
+        // floats 8 to 12 pt in from the edges, 2026-11-27). Under the right
+        // pane's width it stopped some 220 pt short.
+        let inset = 2.0 * f32::from(crate::theme::FLOAT_INSET);
+        assert!(
+            trend.right() > h.size.x - inset - 12.0,
+            "to the far right: {trend:?}"
+        );
         assert!(trend.height() >= 200.0, "taller than it was: {trend:?}");
         assert!(!h.has("messages errors"), "the Messages are not shown beside it");
         // The Messages tab: the list and its filters, in the bottom panel.
@@ -7630,6 +7686,29 @@ mod glyph_library {
         n
     }
 
+    /// The distinct places the last frame drew a library glyph inside
+    /// `area`: one glyph painted twice over itself counts once.
+    fn glyph_places_in(h: &Harness, area: Rect) -> usize {
+        fn walk(s: &Shape, area: Rect, out: &mut Vec<eframe::egui::Pos2>) {
+            match s {
+                Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
+                Shape::Mesh(m) if m.texture_id != TextureId::default() => {
+                    if let Some(v) = m.vertices.first().filter(|v| area.contains(v.pos))
+                        && !out.iter().any(|p| (*p - v.pos).length() < 0.5)
+                    {
+                        out.push(v.pos);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in &h.shapes {
+            walk(&c.shape, area, &mut out);
+        }
+        out.len()
+    }
+
     #[test]
     fn the_traffic_lights_timer_block_carries_the_timer_glyph_in_its_header() {
         let mut h = Harness::new(App::sim());
@@ -7674,8 +7753,10 @@ mod glyph_library {
         let before = h.app.chrome.diagram;
         h.wait(0.3);
         let outputs = h.rect("io outputs");
-        // The traffic light's three lamps.
-        assert_eq!(glyphs_in(&h, outputs), 3);
+        // The traffic light's three lamps: one glyph on each card (a lit
+        // one, on its disc, may be painted more than once in its place;
+        // Nick, 2026-11-27).
+        assert_eq!(glyph_places_in(&h, outputs), 3);
         assert!(
             h.app.chrome.rect("io inputs").is_none(),
             "run is a control on the diagram"
@@ -8085,10 +8166,14 @@ mod find_replace;
 mod first_visit;
 mod help_tab;
 mod hotkeys;
+mod io_card_hover;
 mod io_cards;
 mod io_names;
+mod io_one_line;
 mod label_overlap;
+mod lamp_colours;
 mod layouts;
+mod make_it_stick;
 mod multi_select;
 mod outputs;
 mod proposal;

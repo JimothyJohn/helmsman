@@ -128,35 +128,24 @@ pub fn action_wide(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool, 
     let (rect, r) = ui.allocate_exact_size(size, sense);
     let t = theme(ui);
     let painter = ui.painter();
-    let hot = enabled && r.hovered();
     let (fill, ink) = match (enabled, primary) {
         (false, _) => (t.rule.gamma_multiply(0.5), t.muted.gamma_multiply(0.5)),
         (true, true) => (
-            if hot { YELLOW.gamma_multiply(0.85) } else { YELLOW },
+            crate::theme::mix(
+                YELLOW,
+                Color32::BLACK,
+                0.15 * crate::theme::ease(ui, &r, "hover", r.hovered()),
+            ),
             crate::st_view::brand::BLACK,
         ),
-        (true, false) => (
-            if hot {
-                ui.style().interact(&r).bg_fill
-            } else {
-                t.rule
-            },
-            t.fg,
-        ),
+        (true, false) => (crate::theme::eased_fill(ui, &r, t.rule), t.fg),
     };
     painter.rect_filled(rect, CornerRadius::same(5), fill);
-    let ink = if enabled && icon == Icon::Stop {
-        t.ink(RED)
-    } else {
-        ink
-    };
-    let side = rect.height() * 0.56;
-    draw(
-        painter,
-        Rect::from_center_size(rect.center(), Vec2::splat(side)),
-        icon,
-        ink,
-    );
+    if enabled {
+        crate::theme::focus_ring(ui, &r, rect, 5);
+    }
+    // Stop is neutral like every other action (Nick, 2026-11-27).
+    draw(painter, glyph_box(rect), icon, ink);
     r
 }
 
@@ -191,10 +180,13 @@ pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, r) = ui.allocate_exact_size(size, sense);
     let t = theme(ui);
-    let hot = enabled && r.hovered();
     let (fill, ink) = if enabled {
         (
-            if hot { YELLOW.gamma_multiply(0.85) } else { YELLOW },
+            crate::theme::mix(
+                YELLOW,
+                Color32::BLACK,
+                0.15 * crate::theme::ease(ui, &r, "hover", r.hovered()),
+            ),
             crate::st_view::brand::BLACK,
         )
     } else {
@@ -202,6 +194,9 @@ pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
     };
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(5), fill);
+    if enabled {
+        crate::theme::focus_ring(ui, &r, rect, 5);
+    }
     let side = rect.height() * 0.5;
     draw(
         painter,
@@ -260,22 +255,28 @@ fn button_raw(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, on: bool,
     let t = theme(ui);
     let painter = ui.painter();
     let hot = enabled && r.hovered();
-    if hot || on {
-        let tint = if on {
-            YELLOW.gamma_multiply(0.2)
-        } else {
-            ui.style().interact(&r).bg_fill
-        };
-        painter.rect_filled(rect, CornerRadius::same(5), tint);
+    // Hover and press ease in and out (about 100 ms); the glyph is alone on
+    // its ground, which is nothing at rest.
+    let tint = if on {
+        YELLOW.gamma_multiply(0.2)
+    } else if enabled {
+        crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT)
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, CornerRadius::same(5), tint);
+    if enabled {
+        crate::theme::focus_ring(ui, &r, rect, 5);
     }
+    // Stop is neutral: red is a state, not a button colour (Nick,
+    // 2026-11-27), so it is the glyph alone like the rest.
     let color = match (enabled, icon) {
         (false, _) => t.muted.gamma_multiply(0.5),
         (true, Icon::Run | Icon::Deploy) => crate::theme::theme(ui).ink(GREEN),
-        (true, Icon::Stop) => crate::theme::theme(ui).ink(RED),
         (true, _) if hot => t.accent,
         (true, _) => t.fg,
     };
-    draw(painter, rect.shrink(size * 0.26), icon, color);
+    draw(painter, glyph_box(rect), icon, color);
     r
 }
 
@@ -303,10 +304,11 @@ pub fn tab_sensed(
     let red = t.ink(RED);
     if let Some(a) = alarm {
         painter.rect_filled(rect, CornerRadius::same(5), RED.gamma_multiply(0.15 + 0.55 * a));
-    } else if r.hovered() {
-        let tint = ui.style().interact(&r).bg_fill;
+    } else {
+        let tint = crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT);
         painter.rect_filled(rect, CornerRadius::same(5), tint);
     }
+    crate::theme::focus_ring(ui, &r, rect, 5);
     let color = match alarm {
         // On a strong red ground the page's ink reads; on a faint one, red.
         Some(a) if a > 0.5 => t.fg,
@@ -315,11 +317,11 @@ pub fn tab_sensed(
         None if r.hovered() => t.accent,
         None => t.muted,
     };
-    draw(painter, rect.shrink(size * 0.24), icon, color);
+    draw(painter, glyph_box(rect), icon, color);
     if on {
         painter.hline(
             (rect.left() + 4.0)..=(rect.right() - 4.0),
-            rect.bottom() - 1.0,
+            crate::theme::px(ui, rect.bottom() - 1.0),
             Stroke::new(2.0, if alarm.is_some() { red } else { t.accent }),
         );
     }
@@ -439,8 +441,21 @@ fn head(p: &egui::Painter, tip: Pos2, dir: Vec2, size: f32, stroke: Stroke) {
     ));
 }
 
+/// The one stroke weight of the glyph set, points (a glyph under
+/// [`SMALL_GLYPH`] a side takes 1.5).
+const ICON_STROKE: f32 = 2.0;
+const SMALL_GLYPH: f32 = 14.0;
+/// The side every glyph in a button or a tab is drawn at, centred on the
+/// button: the same size and the same optical middle across the toolbar
+/// and the tabs (a smaller button gets 55% of its side).
+const GLYPH: f32 = 18.0;
+
+fn glyph_box(button: Rect) -> Rect {
+    Rect::from_center_size(button.center(), Vec2::splat((button.width() * 0.55).min(GLYPH)))
+}
+
 fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
-    let w = (b.width() * 0.13).max(1.5);
+    let w = if b.width() < SMALL_GLYPH { 1.5 } else { ICON_STROKE };
     let stroke = Stroke::new(w, color);
     let (l, t, r, bt) = (b.left(), b.top(), b.right(), b.bottom());
     let c = b.center();

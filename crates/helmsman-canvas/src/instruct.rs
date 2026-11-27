@@ -2844,11 +2844,13 @@ fn box_ui(
         out
     };
     if failed {
+        // Inside the field's rect, so its edge is the buttons' and the answer
+        // area's: one left edge and one width down the pane.
         ui.painter().rect_stroke(
-            field.rect.expand(1.0),
+            field.rect,
             4.0,
             egui::Stroke::new(2.0, t.ink(RED)),
-            egui::StrokeKind::Outside,
+            egui::StrokeKind::Inside,
         );
     }
     // What shows of it: past its height the box scrolls inside.
@@ -2863,7 +2865,7 @@ fn box_ui(
     // type and not as a status line (egui outlines it once it has focus).
     if !failed && !field.has_focus() && s.run.is_none() {
         ui.painter().rect_stroke(
-            shown.expand(1.0),
+            shown,
             4.0,
             // In the question's colour while one waits.
             if asked {
@@ -2871,7 +2873,7 @@ fn box_ui(
             } else {
                 egui::Stroke::new(1.0, t.muted)
             },
-            egui::StrokeKind::Outside,
+            egui::StrokeKind::Inside,
         );
     }
     // A question just came: the answer is typed straight away.
@@ -2921,13 +2923,20 @@ fn buttons_ui(
         } else {
             usize::from(s.undo().is_some())
         };
-    let gap = ui.spacing().item_spacing.x;
+    let mut gap = ui.spacing().item_spacing.x;
+    #[allow(clippy::cast_precision_loss)]
+    if (ui.available_width() - gap * (count as f32 - 1.0)) / (count as f32) < 30.0 {
+        // Five buttons at a tap's least width and the default gap are wider
+        // than the pane: close them up to the grid's 4 pt.
+        gap = 4.0;
+    }
     #[allow(clippy::cast_precision_loss)]
     let wide = ((ui.available_width() - gap * (count as f32 - 1.0)) / count as f32)
         // Five of them (the arrows with their info button) are narrower
         // than a tap target to stay in the pane at its default width.
         .clamp(30.0, crate::glyphs::ACTION_W);
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
         if v.versions.is_some() {
             let on = s.versions_open;
             let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::History, true, on, wide).tip(if on {
@@ -3041,13 +3050,11 @@ fn area_ui(
     v: &View,
     fill: Option<f32>,
 ) -> Option<Act> {
-    let t = crate::theme::theme(ui);
     let mut act = None;
     // The versions' index has a search box of its own to click into.
     let versions = v.versions.is_some() && s.versions_open;
     let frame = egui::Frame::new()
         .fill(ui.visuals().faint_bg_color)
-        .stroke(egui::Stroke::new(1.0, t.muted.gamma_multiply(0.4)))
         .corner_radius(4.0)
         .inner_margin(ANSWER_MARGIN);
     let r = frame
@@ -3173,6 +3180,7 @@ fn answer_area(
         progress_ui(ui, chrome, run, v.progress.as_ref());
         return act;
     }
+    let top = ui.cursor().top();
     // Why Send is off, when it is for a reason the engineer cannot see
     // from the box (an empty box needs no words).
     if let Some(why) = &v.blocked {
@@ -3186,7 +3194,7 @@ fn answer_area(
             .add(egui::Label::new(text).wrap())
             .tip("Send stays off until this is put right.");
         chrome.hit("agent blocked", r.rect);
-        ui.add_space(6.0);
+        ui.add_space(8.0);
     }
     if let Some(io) = &v.io {
         fixes_ui(ui, chrome, s, io);
@@ -3200,6 +3208,10 @@ fn answer_area(
                 None => {}
             }
         }
+    }
+    // Nothing to say yet: one line of what goes here, not a blank box.
+    if ui.cursor().top() - top < 1.0 {
+        ui.add(egui::Label::new(RichText::new("Its answer shows here.").color(t.muted)).wrap());
     }
     act
 }

@@ -690,7 +690,12 @@ fn a_sequence_of_many_states_grows_the_block_down_not_across() {
     let (n, rows) = h.states().unwrap();
     assert_eq!(rows.len(), 30);
     let r = h.view.shown().node(n).rect;
-    assert!(r.h > 30.0 * 16.0 && r.w < 300.0, "{r:?}");
+    // A row a state, each at least a port's row high (the layout's
+    // PORT_ROW, 16 until the compact layout of 2026-11-27 made it 14).
+    assert!(
+        r.h > 30.0 * helmsman_diagram::layout::PORT_ROW && r.w < 300.0,
+        "{r:?}"
+    );
     // The last state is as tappable as the first.
     let cam = h.view.cams[h.view.scope];
     assert!(h.view.chip_at(cam, h.chip("29")).is_some());

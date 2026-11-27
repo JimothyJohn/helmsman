@@ -3943,6 +3943,11 @@ impl Body for BoxView {
                 if rows.is_empty() {
                     ui.label(RichText::new("none").color(t.muted)).tip(tip);
                 }
+                // Which points the program's diagram has a block for.
+                let on_diagram: Vec<bool> = rows
+                    .iter()
+                    .map(|(n, _)| self.view.as_ref().is_some_and(|v| v.has_signal(n)))
+                    .collect();
                 let section = ui.vertical(|ui| {
                     crate::io_cards::lay(
                         ui,
@@ -3961,17 +3966,27 @@ impl Body for BoxView {
                                 .map_or(String::new(), |u| format!(" {u}"));
                             let is_forced = sig.is_some_and(|s| s.forced);
                             let forced = if is_forced { "  FORCED" } else { "" };
-                            let text = format!("{name} = {}{unit}{forced}", show(value));
+                            // A BOOL says its state by its colour and its
+                            // glyph, no "= TRUE" (Nick, 2026-11-27).
+                            let text = match value {
+                                Some(helmsman_iec::Value::Bool(_)) => format!("{name}{forced}"),
+                                _ => format!("{name} = {}{unit}{forced}", show(value)),
+                            };
                             let on = value == Some(helmsman_iec::Value::Bool(true));
+                            let state = match value {
+                                Some(helmsman_iec::Value::Bool(b)) => Some(b),
+                                _ => None,
+                            };
                             // An input's BOOL says its state: green on, red
                             // off (Nick, 2026-11-26).
                             let off = input && value == Some(helmsman_iec::Value::Bool(false));
                             let color = match sig.map(|s| s.quality.as_str()) {
                                 _ if is_forced => t.ink(WARN),
                                 Some("missing") => t.ink(RED),
-                                _ if on && !input => t.ink(crate::lamps::colour(name).unwrap_or(GREEN)),
+                                _ if on && !input => t.ink(GREEN),
                                 _ if on => t.ink(GREEN),
                                 _ if off => t.ink(RED),
+                                _ if !input && state == Some(false) => t.muted,
                                 _ => t.fg,
                             };
                             let bool_ty = matches!(value, Some(helmsman_iec::Value::Bool(_)));
@@ -4025,15 +4040,18 @@ impl Body for BoxView {
                                 simulate: false,
                                 designation: crate::assign::designate(&map, name, is_port),
                                 trended: pinned.iter().any(|p| p.eq_ignore_ascii_case(name)),
+                                on_diagram: on_diagram[k],
                             };
                             let sim_input = input && engineer && sig.is_some_and(|s| s.sim);
                             let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
-                                crate::io_cards::value(
+                                // A lamp is green on and red off.
+                                crate::io_cards::value_with(
                                     ui,
                                     (form != Form::Tile).then_some(glyph),
                                     color,
+                                    if input { color } else { t.ink(RED) },
                                     &text,
-                                    form != Form::Tile,
+                                    state,
                                 );
                                 sim_input.then(|| sim_control(ui, value)).flatten()
                             });
@@ -4101,10 +4119,11 @@ impl Body for BoxView {
                     "This box".to_string(),
                     self.state.selected.clone().unwrap_or_default(),
                 ];
-                if v.crumbs_ui(ui, &outer).is_some() {
+                if v.crumbs_ui(ui, &outer, chrome.glyph_strip).is_some() {
                     v.open(0);
                 }
                 area = ui.available_rect_before_wrap();
+                v.flow = scan.is_some();
                 v.canvas(ui, scan);
                 reads = v.reads_on_screen();
                 // The force buttons over the Read blocks take the right-click first.
