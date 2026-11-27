@@ -57,7 +57,11 @@ make ship ARGS=--live-only                    # the live half again
 - **scripts/parity-tabs.py** opens every manifest tab on the playground:
   `--dist` serves a build (the candidate), `--site` the public page (live).
   Each tab must draw, look unlike the other tabs of its panel, and log no
-  error. Screenshots go to `target/parity-tabs/`.
+  error. A tab only a box's page has (Help) is opened on the page a box
+  serves instead: `--box BIN --box-ui DIR` starts that box on loopback with
+  a box's canvas build (`make canvas-web`) and signs in as an engineer.
+  Without `--box` such a tab is listed as `box` and not checked.
+  Screenshots go to `target/parity-tabs/`.
 - **scripts/ship.sh** (`make staging`, `make ship`) runs the steps below.
 
 ## What they do
@@ -115,6 +119,7 @@ put it in that file's `JOURNEYS`. The gate tells you if you forgot either.
 - Edge cases, error paths and security. Those are each crate's own tests.
 - Real devices and the node board: the benches (`scripts/bench-e1213.sh`,
   helmsman-hardware `docs/bringup-test.md`).
-- The box-served page's tabs (the tab pass drives the playground) and the
+- The box-served page's tabs other than the box-only ones (the tab pass
+  drives the playground; `make canvas-smoke BOX=1` drives a box's page), and the
   Pi image, which `box-image.yml` boots under QEMU on its own schedule.
 - A box on site with `--site` (multicast, a fixed port).
