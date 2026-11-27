@@ -1732,7 +1732,7 @@ pub fn st_editor(
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
                 let wrap = if wrap_on {
-                    (ui.available_width() - gutter_w - arrow_w - 2.0 * ui.spacing().item_spacing.x - 32.0)
+                    (ui.available_width() - gutter_w - arrow_w - 2.0 * ui.spacing().item_spacing.x - 16.0)
                         .max(60.0)
                 } else {
                     f32::INFINITY
@@ -2149,6 +2149,18 @@ pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str
     // count and Deploy stay on the row.
     let room =
         (ui.available_width() - 3.0 * (crate::glyphs::ROW + 6.0) - crate::glyphs::DEPLOY_W - 80.0).max(60.0);
+    file_name(ui, chrome, name, tip, room);
+}
+
+/// The header's left half, in a row whose right end is already placed
+/// (the Code tab): the name takes what is left of `ui`'s width after
+/// `reserve`, the glyphs and notes that follow it.
+pub fn file_header_in(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str, reserve: f32) {
+    let room = (ui.available_width() - reserve).max(40.0);
+    file_name(ui, chrome, name, tip, room);
+}
+
+fn file_name(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str, room: f32) {
     let r = ui
         .scope(|ui| {
             ui.set_max_width(room);
@@ -2281,14 +2293,16 @@ fn fold_marks(
         }
         let Some(end) = end else { continue };
         let at = out.galley_pos + Vec2::new(end.right() + 10.0, end.center().y);
-        let rect = ui.painter().text(
+        let words = if b.hides() == 1 {
+            "… 1 line".to_string()
+        } else {
+            format!("… {} lines", b.hides())
+        };
+        // Clipped to the code column, so it never runs onto the scroll bar.
+        let rect = ui.painter().with_clip_rect(out.response.rect).text(
             at,
             egui::Align2::LEFT_CENTER,
-            if b.hides() == 1 {
-                "… 1 line".to_string()
-            } else {
-                format!("… {} lines", b.hides())
-            },
+            words,
             font.clone(),
             t.muted,
         );

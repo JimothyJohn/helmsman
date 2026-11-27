@@ -146,21 +146,45 @@ pub struct Asked {
 /// `wrap`: a row's line wraps at the column so a long name shows whole;
 /// a tile's is cut to its narrow width.
 pub fn value(ui: &mut egui::Ui, glyph: Option<&'static str>, color: Color32, text: &str, on: Option<bool>) {
+    value_with(ui, glyph, color, color, text, on);
+}
+
+/// A BOOL's glyph looks on or off (Nick, 2026-11-27): lit on a soft disc
+/// of `on_color` when on, `off_color` dimmed to 35% when off. A point that
+/// is no BOOL (`on` is `None`) is drawn in `on_color` as it is.
+pub fn state_glyph(
+    ui: &mut egui::Ui,
+    glyph: &'static str,
+    size: f32,
+    on_color: Color32,
+    off_color: Color32,
+    on: Option<bool>,
+) {
+    let ink = match on {
+        Some(false) => off_color.gamma_multiply(0.35),
+        _ => on_color,
+    };
+    let r = crate::glyph_lib::show(ui, glyph, size, ink, crate::glyph_lib::tip(glyph));
+    if on == Some(true) {
+        ui.painter()
+            .circle_filled(r.rect.center(), size * 0.62, on_color.gamma_multiply(0.18));
+        crate::glyph_lib::paint(ui.painter(), r.rect, glyph, ink);
+    }
+}
+
+/// [`value`] with its own colour for the glyph while the point is off: a
+/// lamp is green on and red off (Nick, 2026-11-27), its name muted.
+pub fn value_with(
+    ui: &mut egui::Ui,
+    glyph: Option<&'static str>,
+    color: Color32,
+    glyph_off: Color32,
+    text: &str,
+    on: Option<bool>,
+) {
     ui.horizontal(|ui| {
         if let Some(glyph) = glyph {
-            // A BOOL's glyph looks on or off (Nick, 2026-11-27): lit on a
-            // soft disc of its colour when on, dimmed when off.
-            let size = crate::glyphs::ROW * 0.85;
-            let ink = match on {
-                Some(false) => color.gamma_multiply(0.35),
-                _ => color,
-            };
-            let r = crate::glyph_lib::show(ui, glyph, size, ink, crate::glyph_lib::tip(glyph));
-            if on == Some(true) {
-                ui.painter()
-                    .circle_filled(r.rect.center(), size * 0.62, color.gamma_multiply(0.18));
-                crate::glyph_lib::paint(ui.painter(), r.rect, glyph, ink);
-            }
+            state_glyph(ui, glyph, crate::glyphs::ROW * 0.85, color, glyph_off, on);
         }
         // One line, cut at the card's edge with its whole text on hover
         // (Nick, 2026-11-27: the compact view on one line).
@@ -321,7 +345,23 @@ pub fn show<R>(
         // one line in the narrow right pane too (Nick, 2026-11-27).
         let side = crate::glyphs::ROW * 0.85;
         let gap = ui.spacing().item_spacing.x;
-        let room = (inner - 3.0 * side - 3.0 * gap).max(1.0);
+        // The glyphs show while the pointer is over the card (where it was
+        // drawn last frame, so they do not flicker as they appear), while
+        // its details are open, and while one has keyboard focus (Nick,
+        // 2026-11-27); a closed card at rest is its point alone, using the
+        // room the glyphs would take.
+        let focus_id = id.with("glyph focus");
+        let hovered = was.is_some_and(|w| {
+            ui.input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| w.contains(p) && ui.clip_rect().contains(p))
+        });
+        let focused = ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false);
+        let glyphs = row.open || hovered || focused;
+        let room = if glyphs {
+            (inner - 3.0 * side - 3.0 * gap).max(1.0)
+        } else {
+            inner.max(1.0)
+        };
         // The card's three glyphs: find in the code, show on the diagram,
         // put on the Trend.
         let mut glyph_row = |ui: &mut egui::Ui| {
@@ -365,6 +405,8 @@ pub fn show<R>(
             );
             chrome.hit(format!("io trend {name}"), trend.rect);
             asked.trend = trend.clicked();
+            let has = code.has_focus() || diagram.has_focus() || trend.has_focus();
+            ui.data_mut(|d| d.insert_temp(focus_id, has));
         };
         // One line: the point (its glyph and name, cut to the room left)
         // and its three glyphs beside it, in any pane (Nick, 2026-11-27).
@@ -376,7 +418,9 @@ pub fn show<R>(
                         head(ui)
                     })
                     .inner;
-                glyph_row(ui);
+                if glyphs {
+                    glyph_row(ui);
+                }
                 r
             })
             .inner;

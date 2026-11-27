@@ -630,7 +630,9 @@ pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
         .interactable(true)
         .pivot(egui::Align2::CENTER_TOP)
         .fixed_pos(at + egui::vec2(0.0, 14.0))
-        .constrain(true);
+        .constrain(true)
+        // Inset from the window's edge as the floating chrome is, not flush.
+        .constrain_to(screen.shrink(f32::from(FLOAT_INSET)));
     egui::Modal::new(egui::Id::unique(key)).area(area)
 }
 

@@ -1614,11 +1614,7 @@ impl DevicesUi {
             let r = ui
                 .horizontal(|ui| {
                     ui.label(dot);
-                    ui.add(
-                        egui::Label::new(RichText::new(text))
-                            .truncate()
-                            .sense(Sense::click()),
-                    )
+                    ui.add(egui::Label::new(RichText::new(text)).wrap().sense(Sense::click()))
                 })
                 .inner;
             chrome.hit(format!("network {}", f.address), r.rect);

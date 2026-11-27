@@ -3589,66 +3589,89 @@ impl Body for PlaygroundView {
         let errors = self.session.diags.len();
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
-        let mut go = false;
         let steps = self.steps();
         let versions = self.versions();
-        let mut revision = None;
-        let mut info = None;
         let mut to_error: Option<(String, u32)> = None;
         // The header is the open file's name (Nick, 2026-11-08), the
         // magnifier and word wrap; at its right end Deploy, and before it
         // the errors when there are any.
         let name = self.proj.current.clone();
-        ui.horizontal_wrapped(|ui| {
+        // One row: Deploy and its neighbours are placed first at the pane's
+        // right edge, the name and the glyphs take what is left, so
+        // nothing overlaps (2026-11-27).
+        let mut top = ui.available_rect_before_wrap();
+        top.max.y = top.min.y + ui.spacing().interact_size.y;
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(top)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        // Nothing while the code compiles (Nick, 2026-11-23); a red ✖
+        // with the first error in its popup while it does not.
+        let first = self
+            .diags()
+            .into_iter()
+            .find(|d| d.severity == projects::Severity::Error);
+        let said = first
+            .as_ref()
+            .map(|d| format!("{} line {}: {}", d.file, d.line, d.message));
+        let pressed = editor::header_right(
+            &mut right,
+            chrome,
+            &editor::Status {
+                errors: if self.pending.is_some() { 0 } else { errors },
+                first: said.as_deref(),
+                deploy: &Ok(()),
+                deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
+                busy: None,
+                steps: steps.as_ref(),
+                history: !versions.rows.is_empty(),
+            },
+        );
+        let right_rect = right.min_rect();
+        let left_max = (right_rect.left() - 6.0).max(top.left());
+        let mut left = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(top.with_max_x(left_max))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        {
+            let ui = &mut left;
             ui.spacing_mut().item_spacing.x = 6.0;
-            editor::file_header(
+            let note = if errors > 0 {
+                "The program running is unchanged. Fix the errors, then Deploy."
+            } else {
+                "The program running is unchanged. Deploy runs this version."
+            };
+            let note_w = if undeployed {
+                let font = egui::TextStyle::Body.resolve(ui.style());
+                ui.fonts_mut(|f| f.layout_no_wrap("· not deployed".into(), font, t.muted).size().x) + 6.0
+            } else {
+                0.0
+            };
+            // Find and wrap follow the name; the note follows them.
+            editor::file_header_in(
                 ui,
                 chrome,
                 &name,
                 "The open file. It is checked as you type; Deploy runs it.",
+                2.0 * (crate::glyphs::ROW + 8.0) + note_w.min(60.0) + 12.0,
             );
             editor::find_toggle(ui, chrome);
             editor::wrap_toggle(ui, chrome);
             if undeployed {
-                let note = if errors > 0 {
-                    "The program running is unchanged. Fix the errors, then Deploy."
-                } else {
-                    "The program running is unchanged. Deploy runs this version."
-                };
-                ui.add(crate::theme::whole(RichText::new("· not deployed").color(t.muted)))
+                // Cut at the row's room, never run under Deploy.
+                ui.add(egui::Label::new(RichText::new("· not deployed").color(t.muted)).truncate())
                     .tip(note);
             }
-            // Nothing while the code compiles (Nick, 2026-11-23); a red ✖
-            // with the first error in its popup while it does not.
-            let first = self
-                .diags()
-                .into_iter()
-                .find(|d| d.severity == projects::Severity::Error);
-            let said = first
-                .as_ref()
-                .map(|d| format!("{} line {}: {}", d.file, d.line, d.message));
-            let pressed = editor::header_right(
-                ui,
-                chrome,
-                &editor::Status {
-                    errors: if self.pending.is_some() { 0 } else { errors },
-                    first: said.as_deref(),
-                    deploy: &Ok(()),
-                    deploy_tip: "Ctrl Shift Enter: deploy this version.\nCompiles the open project and runs it in the page.",
-                    busy: None,
-                    steps: steps.as_ref(),
-                    history: !versions.rows.is_empty(),
-                },
-            );
-            go = pressed.deploy;
-            revision = pressed.revision;
-            info = pressed.info;
-            if pressed.errors
-                && let Some(d) = first
-            {
-                to_error = Some((d.file, d.line));
-            }
-        });
+        }
+        ui.advance_cursor_after_rect(right_rect | left.min_rect());
+        let (go, revision, info) = (pressed.deploy, pressed.revision, pressed.info);
+        if pressed.errors
+            && let Some(d) = first
+        {
+            to_error = Some((d.file, d.line));
+        }
         if let Some(n) = revision {
             self.show_revision(n);
         }
@@ -4439,8 +4462,10 @@ impl PlaygroundView {
                 });
             });
         chrome.hit("trend signals", legend.inner_rect);
+        // The slider's row sits 4 pt under the legend, not the page's 8, so
+        // the plot keeps its share of the panel (2026-11-27).
+        ui.add_space(-4.0);
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
-        ui.add_space(6.0);
         if self.session.trend.flashes.tick(ui.input(|i| i.time)) {
             ui.ctx().request_repaint();
         }
@@ -5052,15 +5077,32 @@ pub fn scale_labels(
     kind: crate::ekg::Kind,
 ) {
     let x = rect.right() - 4.0;
-    for (v, y, align) in [
-        (hi, top + 3.0, egui::Align2::RIGHT_TOP),
-        (lo, top + lane - 3.0, egui::Align2::RIGHT_BOTTOM),
+    let font = FontId::monospace(crate::theme::MIN_TEXT);
+    // Both labels while the lane holds them apart; the top one alone while
+    // it holds one; none on a lane shorter than that, rather than two
+    // overprinting each other.
+    let h = painter
+        .layout_no_wrap(
+            crate::ekg::axis_text(kind, hi, (lo, hi, step)),
+            font.clone(),
+            t.muted,
+        )
+        .size()
+        .y;
+    let both = lane >= 2.0 * h + 8.0;
+    let one = lane >= h + 6.0;
+    for (v, y, align, shown) in [
+        (hi, top + 3.0, egui::Align2::RIGHT_TOP, one),
+        (lo, top + lane - 3.0, egui::Align2::RIGHT_BOTTOM, both),
     ] {
+        if !shown {
+            continue;
+        }
         painter.text(
             Pos2::new(x, y),
             align,
             crate::ekg::axis_text(kind, v, (lo, hi, step)),
-            FontId::monospace(crate::theme::MIN_TEXT),
+            font.clone(),
             t.muted,
         );
     }
@@ -5821,13 +5863,11 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
     ui.spacing_mut().slider_width = slider.unwrap_or(40.0);
     ui.horizontal(|ui| {
         ui.set_max_width(ui.available_width());
-        crate::glyph_lib::show(
-            ui,
-            glyph,
-            crate::glyphs::ROW,
-            state_ink(&t, p.value),
-            crate::glyph_lib::tip(glyph),
-        );
+        let state = match p.value {
+            Value::Bool(b) => Some(b),
+            _ => None,
+        };
+        crate::io_cards::state_glyph(ui, glyph, crate::glyphs::ROW, state_ink(&t, p.value), t.fg, state);
         match p.widget {
             Some(Widget::Push) => {
                 let on = p.value == Value::Bool(true);
@@ -6002,18 +6042,13 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     } else {
         format!("{name} = {}", show(p.ty, p.value))
     };
-    // On is the lamp's own colour when its name has one (red, yellow,
-    // green...; `lamps`), else green, as a TRUE value in the diagram and
-    // a lamp on the Monitor are. Its glyph takes the same colour.
-    let color = if on {
-        t.ink(crate::lamps::colour(&p.name).unwrap_or(GREEN))
-    } else {
-        t.muted
-    };
+    // A lamp is green on and red off whatever its name says (Nick,
+    // 2026-11-27); its name is muted while it is off.
+    let color = if on { t.ink(GREEN) } else { t.muted };
     // A tile has the lamp and the name; the glyph would take half of it.
     let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
     let state = (p.ty == Ty::Bool).then_some(on);
-    crate::io_cards::value(ui, glyph, color, &text, state);
+    crate::io_cards::value_with(ui, glyph, color, t.ink(crate::st_view::brand::RED), &text, state);
 }
 
 /// A value for a readout (TIME in ms).
