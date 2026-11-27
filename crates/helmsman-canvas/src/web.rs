@@ -1372,11 +1372,20 @@ title=\"Your password. Enter signs in. Your browser can remember it.\" aria-labe
 /// Removes the sign-in form (after a sign-in, or when it is closed): the
 /// browser then offers to save the password it saw submitted.
 pub fn hide_login_form() {
-    if let Some(root) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id(LOGIN_ID))
-    {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Some(root) = doc.get_element_by_id(LOGIN_ID) {
         root.remove();
+        // The keyboard back to the page's canvas: left on the bare page
+        // after Esc, Cancel or a sign-in, no key reached the app until a
+        // click on it (the tester's find, 2026-11-27).
+        if let Some(canvas) = doc
+            .get_element_by_id("canvas")
+            .and_then(|c| c.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = canvas.focus();
+        }
     }
 }
 
