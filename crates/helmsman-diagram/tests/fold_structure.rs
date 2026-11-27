@@ -8,7 +8,7 @@
 mod common;
 
 use common::{build, check, prog, shape};
-use helmsman_diagram::fold::structure::{TITLE, arms, sections};
+use helmsman_diagram::fold::structure::{SHOWN, TITLE, arms, sections};
 use helmsman_diagram::fold::{Fold, FoldKind, View, view};
 use helmsman_diagram::{Diagram, Module};
 use proptest::prelude::*;
@@ -225,9 +225,10 @@ fn non_ascii_text_in_a_comment_is_kept_and_cut_on_characters() {
         section_titles("(* Pumpe é — Förderung *)\nn := 1;\nm := 2;"),
         ["Pumpe é — Förderung"]
     );
-    let long = "é".repeat(TITLE + 10);
+    // The tab shows SHOWN characters (90 since 2026-11-27, was TITLE's 40).
+    let long = "é".repeat(SHOWN + 10);
     let t = section_titles(&format!("(* {long} *)\nn := 1;\nm := 2;"));
-    assert_eq!(t[0].chars().count(), TITLE);
+    assert_eq!(t[0].chars().count(), SHOWN);
     assert!(t[0].ends_with('…'));
     // Non-ASCII before a comment shifts bytes, not columns' meaning.
     let t = section_titles("(* ü *) n := 1; (* ö *)\n// Real\nm := 2;\ny := a;");
@@ -236,11 +237,35 @@ fn non_ascii_text_in_a_comment_is_kept_and_cut_on_characters() {
 
 #[test]
 fn a_title_at_the_limit_is_kept_and_one_over_is_cut() {
-    let at = "x".repeat(TITLE);
+    // The tab: SHOWN characters (2026-11-27; it was TITLE's 40).
+    let at = "x".repeat(SHOWN);
     assert_eq!(section_titles(&format!("// {at}\nn := 1;\nm := 2;")), [at]);
-    let over = "x".repeat(TITLE + 1);
+    let over = "x".repeat(SHOWN + 1);
     let t = section_titles(&format!("// {over}\nn := 1;\nm := 2;"));
-    assert_eq!(t[0], format!("{}…", "x".repeat(TITLE - 1)));
+    assert_eq!(t[0], format!("{}…", "x".repeat(SHOWN - 1)));
+}
+
+/// The key a fold is kept "folded" or "open" by still takes the first
+/// TITLE characters, as before the tab showed more: a browser's saved
+/// folds of a long comment still match (module docs, "Key").
+#[test]
+fn a_long_titles_key_is_still_cut_at_the_old_limit() {
+    for n in [TITLE - 1, TITLE, TITLE + 1, SHOWN, SHOWN + 1] {
+        let text = "x".repeat(n);
+        let (d, src) = diagram(&format!("// {text}\nn := 1;\nm := 2;"));
+        let f = sections(&d, &src);
+        assert_eq!(f.len(), 1, "{n}: one section");
+        let kept = if n > TITLE {
+            format!("{}…", "x".repeat(TITLE - 1))
+        } else {
+            text.clone()
+        };
+        assert!(
+            f[0].key.starts_with("section:") && f[0].key.ends_with(&format!(":{kept}")),
+            "{n}: the key {:?} names the first {TITLE}",
+            f[0].key
+        );
+    }
 }
 
 #[test]

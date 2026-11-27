@@ -639,7 +639,24 @@ fn cross_references_light_every_wire_of_a_variable_and_every_use_it_feeds() {
     h.app.chrome.show(Pane::Code);
     h.wait(0.3);
     let read = |k: &helmsman_diagram::NodeKind| matches!(k, helmsman_diagram::NodeKind::Read { path } if path == "START");
-    let (at, _) = super::node(super::sim_view(&h), read);
+    // A click on the read's header, its name: since the compact blocks of
+    // 2026-11-27 a read's middle is its input switch's top edge, and a
+    // click there flips the input instead of picking the block.
+    let at = {
+        let v = super::sim_view(&h);
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| read(&n.kind))
+            .expect("the read");
+        let r = v.block_on_screen(n.id).expect("drawn");
+        let zoom = v.cams[v.scope].zoom;
+        eframe::egui::pos2(
+            r.center().x,
+            r.top() + helmsman_diagram::layout::HEADER * zoom / 2.0,
+        )
+    };
     h.click(at);
     h.frame(vec![]);
     assert_eq!(
@@ -806,9 +823,12 @@ fn colours_in(h: &Harness, r: eframe::egui::Rect) -> Vec<eframe::egui::Color32> 
     out
 }
 
+/// docs/UI.md, "TRUE glows, FALSE is flat, everywhere" (Nick, 2026-11-27):
+/// FALSE is a flat muted grey on every surface, an I/O card's too; it was
+/// red until then.
 #[test]
-fn an_inputs_bool_is_green_when_on_and_red_when_off() {
-    use crate::st_view::brand::{GREEN, RED};
+fn an_inputs_bool_is_green_when_on_and_grey_when_off() {
+    use crate::st_view::brand::{GREEN, OFF_RED, RED};
     use helmsman_iec::Value::Bool;
     let mut h = sim_with(DRIVE);
     let card = h.rect("io card enable");
@@ -818,8 +838,8 @@ fn an_inputs_bool_is_green_when_on_and_red_when_off() {
     let has = |h: &Harness, w| colours_in(h, card).iter().any(|c| near(c, w));
     assert_eq!(value(&h, "enable"), Some(Bool(false)));
     assert!(
-        has(&h, RED) && !has(&h, GREEN),
-        "enable is off: red {:?}",
+        !has(&h, RED) && !has(&h, OFF_RED) && !has(&h, GREEN),
+        "enable is off: flat grey, no red and no green {:?}",
         colours_in(&h, card)
     );
     let at = control(&h, "enable");
@@ -827,7 +847,7 @@ fn an_inputs_bool_is_green_when_on_and_red_when_off() {
     h.wait(0.3);
     assert_eq!(value(&h, "enable"), Some(Bool(true)), "the switch turned it on");
     assert!(
-        has(&h, GREEN) && !has(&h, RED),
+        has(&h, GREEN) && !has(&h, RED) && !has(&h, OFF_RED),
         "enable is on: green {:?}",
         colours_in(&h, card)
     );

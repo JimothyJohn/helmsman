@@ -31,6 +31,30 @@ fn glyph_bounds(h: &Harness, area: Rect) -> Rect {
     out
 }
 
+/// The painted ground of the pane `button` is on: the smallest filled
+/// rect at least a pane tall that holds it.
+fn pane_frame(h: &Harness, button: Rect) -> Rect {
+    fn walk(s: &Shape, button: Rect, out: &mut Option<Rect>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, button, out)),
+            Shape::Rect(r)
+                if r.fill.a() > 0
+                    && r.rect.contains_rect(button)
+                    && r.rect.height() > 300.0
+                    && out.is_none_or(|o| r.rect.area() < o.area()) =>
+            {
+                *out = Some(r.rect);
+            }
+            _ => {}
+        }
+    }
+    let mut out = None;
+    for c in &h.shapes {
+        walk(&c.shape, button, &mut out);
+    }
+    out.unwrap_or_else(|| panic!("no pane ground under {button:?}"))
+}
+
 /// The simulation with the I/O tab docked right: a pane on each side.
 fn both() -> Harness {
     let mut h = Harness::new(App::sim());
@@ -51,10 +75,17 @@ fn the_left_panes_hide_button_is_on_a_thin_ribbon_at_its_inner_edge_and_vertical
         (button.center().y - middle).abs() <= 2.0,
         "at the pane's middle {middle}: {button:?}"
     );
-    let edge = h.app.chrome.diagram.left();
+    // Along the pane's inner edge: the right edge of the pane's own
+    // floating frame (docs/UI.md "Look and feel", 2026-11-27: the pane is
+    // inset from the diagram, so the diagram's edge is a gap further on).
+    let edge = pane_frame(&h, button).right();
     assert!(
         button.right() <= edge && edge - button.right() <= 12.0,
         "along the inner edge {edge}: {button:?}"
+    );
+    assert!(
+        edge <= h.app.chrome.diagram.left(),
+        "the pane ends before the diagram: {edge}"
     );
     let open_glyph = glyph_bounds(&h, button.shrink(0.5));
     assert!(open_glyph.is_positive(), "a glyph on the button");
