@@ -16,8 +16,11 @@ With --box it also starts target/debug/helmsman-plc on another free port
 serving the same dist, with projects on, HTTPS and OPC UA off and the CIP
 ports ephemeral so it cannot collide with a bench box, under a fresh state
 directory with an engineer account (alice / alice-engineer-pw), and drives
-the box-served page signed out, then signed in. Everything is stopped at
-the end.
+the box-served page signed out, then signed in through the sign-in form
+(#helmsman-login, a real HTML form the browser's password manager can
+save: its fields, Esc, Cancel, letters typed in it, the Proposals screen's
+Sign in…, a wrong password, and the password nowhere in storage, a URL or
+the console). Everything is stopped at the end.
 
 --browser picks the engine (default chromium; all runs the three, WebKit
 standing in for Safari). With all, each engine runs twice: as the engine
@@ -65,6 +68,7 @@ import threading
 import time
 import urllib.request
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 PLC = None  # set in main: target/debug/helmsman-plc
@@ -159,19 +163,31 @@ LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
 HEADER_RIGHT = (1150, 8, 200, 36)
 MOD = "ControlOrMeta"
+# The header's Sign in, and the Proposals screen's "Sign in…" on a box
+# signed out, in points (measured from the smoke's screenshots, 2026-11-27).
+HEADER_SIGN_IN = (1309, 17)
+PROPOSALS_SIGN_IN = (55, 143)
+# The box sign-in in the browser build is a real HTML form, so the
+# browser's password manager can fill and save it (Nick, 2026-11-26).
+LOGIN = "#helmsman-login"
+WRONG_PASSWORD = "not-alices-pw-4821"
 
 
 class Run:
     """One page: its console log and numbered screenshots."""
 
-    def __init__(self, page, out, prefix):
+    def __init__(self, page, out, prefix, expect=()):
         self.page = page
         self.out = out
         self.prefix = prefix
+        # Console lines this page's own steps cause, beside EXPECTED.
+        self.expect = tuple(expect)
         self.n = 0
         self.console = []
         self.same = []
+        self.urls = []
         page.on("console", lambda m: self.console.append((m.type, m.text)))
+        page.on("request", lambda q: self.urls.append(q.url))
         page.on("pageerror", lambda e: self.console.append(("pageerror", str(e))))
 
     def shot(self, name):
@@ -211,7 +227,7 @@ class Run:
         return self.same + [
             f"[{t}] {x[:300]}"
             for (t, x) in self.console
-            if t in ("error", "pageerror") and not any(e in x for e in EXPECTED)
+            if t in ("error", "pageerror") and not any(e in x for e in EXPECTED + self.expect)
         ]
 
 
@@ -401,24 +417,80 @@ def playground(ctx, base, out):
     return problems
 
 
+def login_form(r, open_with=HEADER_SIGN_IN):
+    """The sign-in form, opened with a click at `open_with` when it is not
+    up; None when no click brings it."""
+    form = r.page.locator(LOGIN)
+    if not form.count():
+        r.click(*open_with)
+        try:
+            form.wait_for(state="visible", timeout=3000)
+        except PlaywrightTimeout:
+            return None
+    return form
+
+
+def said(r):
+    """What the sign-in form's problem line says, or None with no form."""
+    line = r.page.locator(LOGIN + " p.problem")
+    return line.inner_text() if line.count() else None
+
+
+def dom_sign_in(r, user, password):
+    """Sign in through the header's form, as a person (or the browser's
+    password manager) fills it: the problems seen."""
+    form = login_form(r)
+    if form is None:
+        return [f"[smoke] {r.prefix}: no sign-in form ({LOGIN}) to sign in with"]
+    form.locator("input[name=username]").fill(user)
+    pw = form.locator("input[name=password]")
+    pw.fill(password)
+    pw.press("Enter")
+    # The box hashes the password: the answer takes a few seconds. On
+    # success the form leaves the page (the cue a browser offers to save on).
+    try:
+        r.page.locator(LOGIN).wait_for(state="detached", timeout=15000)
+    except PlaywrightTimeout:
+        return [f"[smoke] {r.prefix}: the sign-in form stayed after the right password (it says {said(r)!r})"]
+    return []
+
+
+# Everything a page keeps or shows outside its canvas: storage and its URL.
+KEPT = "() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage), location.href, document.title])"
+
+
+def leaks(r, *secrets):
+    """A password in the page's storage, its URL, a request URL or the console."""
+    kept = r.page.evaluate(KEPT)
+    found = []
+    for i, x in enumerate(secrets):
+        where = [
+            name
+            for name, hit in (
+                ("localStorage, sessionStorage or the URL", x in kept),
+                ("a request URL", any(x in u for u in r.urls)),
+                ("the console", any(x in m for _, m in r.console)),
+            )
+            if hit
+        ]
+        if where:
+            found.append(f"[smoke] {r.prefix}: password {i + 1} is in " + " and ".join(where))
+    return found
+
+
 def box(ctx, base, out):
     """The box-served page, signed out, then signed in as the engineer."""
     r = Run(open_app(ctx, base, "", layout()), out, "box")
     r.wait(4000)
     r.shot("signed-out")
-    # The sign-in popup is open on a signed-out page: its two fields.
-    # Each field is given a moment to take the keyboard after its click:
-    # since 2026-11-26 a plain letter with no field focused is a view key
-    # (a run whose click landed early typed "alice-engineer-pw" as keys and
-    # P opened the Proposals screen).
-    def sign_in():
-        r.click(1230, 100); r.wait(600)
-        r.page.keyboard.type(USER)
-        r.click(1230, 136); r.wait(600)
-        r.page.keyboard.type(PASSWORD)
-        r.key("Enter")
-    # The box hashes the password: the answer takes a few seconds.
-    r.step("signed-in", sign_in, HEADER_RIGHT, 6000)
+    extra = []
+    # The page asks for a sign-in the moment it opens (docs/help/box.md):
+    # the header's form, filled and sent as a person would.
+    r.step("signed-in", lambda: extra.extend(dom_sign_in(r, USER, PASSWORD)), HEADER_RIGHT, 1500)
+    extra += leaks(r, PASSWORD)
+    # The keys work at once after the form goes (docs/help/keyboard.md: a
+    # view's key works whenever you are not typing in a field): no click
+    # on the canvas first.
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT, 800)
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT, 800)
     # The agent proposes a device profile (this page's session posts it, as
@@ -431,7 +503,8 @@ def box(ctx, base, out):
         data=json.dumps({"name": "moxa-copy", "text": profile, "summary": "Read from the unit's manual: eight inputs, four outputs and four that follow a jumper."}),
         headers={"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base},
     )
-    extra = [] if posted.status == 201 else [f"the proposal was refused: {posted.status} {posted.text()[:200]}"]
+    if posted.status != 201:
+        extra.append(f"the proposal was refused: {posted.status} {posted.text()[:200]}")
     r.wait(4500); r.shot("devices-proposal")
     r.click(*TAB_AGENT); r.wait(800); r.shot("agent-tab")
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
@@ -473,6 +546,141 @@ def box(ctx, base, out):
     m.page.close()
     return problems
 
+
+
+# The form's parts, each of which must be there once: a browser's password
+# manager finds the fields by these attributes inside a <form>.
+LOGIN_PARTS = (
+    ("a <form>", "form"),
+    ("the user field", "form input[name=username][autocomplete=username]"),
+    ("the password field", "form input[type=password][name=password][autocomplete=current-password]"),
+    ("a submit button", "form button[type=submit], form input[type=submit]"),
+    ("a Cancel button", "form button[type=button]:has-text('Cancel'), form input[type=button][value=Cancel]"),
+)
+
+
+def box_sign_in_form(browser, base, out):
+    """The box's sign-in form in the browser, signed out, each check on a
+    fresh page: its fields, Esc, Cancel, letters typed in it, the Proposals
+    screen's Sign in…, a refusal, then the right password, and no password
+    anywhere the page keeps or logs."""
+    problems = []
+
+    def fresh(prefix, expect=()):
+        ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+        r = Run(open_app(ctx, base, "", layout()), out, prefix, expect)
+        r.wait(4000)
+        return ctx, r
+
+    def gone(r, how):
+        try:
+            r.page.locator(LOGIN).wait_for(state="detached", timeout=3000)
+        except PlaywrightTimeout:
+            problems.append(f"[smoke] {r.prefix}: {how} left the sign-in form on the page")
+
+    # Up at load, with every part a password manager needs.
+    ctx, r = fresh("box-form")
+    r.shot("form")
+    if not r.page.locator(LOGIN).is_visible():
+        problems.append(f"[smoke] {r.prefix}: no sign-in form ({LOGIN}) on a signed-out box page")
+    for what, sel in LOGIN_PARTS:
+        n = r.page.locator(LOGIN).locator(sel).count()
+        if n != 1:
+            problems.append(f"[smoke] {r.prefix}: {what} ({sel}) found {n} times in {LOGIN}")
+    url = r.page.url
+    # Letters typed into the form are text, never the canvas's view keys:
+    # P (Proposals) leaves the screen as it was.
+    form = r.page.locator(LOGIN)
+    if form.count():
+        r.step("p-in-password", lambda: form.locator("input[name=password]").press_sequentially("p"), LEFT, 1200, stays=True)
+        r.step("p-in-user", lambda: form.locator("input[name=username]").press_sequentially("pe"), LEFT, 1200, stays=True)
+        if form.locator("input[name=password]").input_value() != "p":
+            problems.append(f"[smoke] {r.prefix}: the password field does not hold the p typed into it")
+        # Esc in the form closes it ...
+        form.locator("input[name=username]").press("Escape")
+        gone(r, "Esc")
+        r.shot("esc")
+    if r.page.url != url:
+        problems.append(f"[smoke] {r.prefix}: typing in the form changed the URL to {r.page.url}")
+    # ... and the view keys are back at once: P opens the Proposals screen.
+    r.step("p-after-esc", lambda: r.key("p"), LEFT, 1500)
+    problems += r.problems()
+    ctx.close()
+
+    # Cancel closes it, and the keys are back.
+    ctx, r = fresh("box-cancel")
+    if r.page.locator(LOGIN).count():
+        r.page.locator(LOGIN + " button:has-text('Cancel')").click()
+        gone(r, "Cancel")
+    r.shot("cancel")
+    r.step("p-after-cancel", lambda: r.key("p"), LEFT, 1500)
+    # The header's Sign in brings it back.
+    r.step("header-sign-in", lambda: r.click(*HEADER_SIGN_IN), HEADER_RIGHT, 800)
+    if not r.page.locator(LOGIN).is_visible():
+        problems.append(f"[smoke] {r.prefix}: the header's Sign in did not open the form after Cancel")
+    problems += r.problems()
+    ctx.close()
+
+    # The Proposals screen's "Sign in…" opens the same form.
+    ctx, r = fresh("box-proposals")
+    if r.page.locator(LOGIN).count():
+        r.page.locator(LOGIN + " button:has-text('Cancel')").click()
+        gone(r, "Cancel")
+    # The canvas gets the keys from a click on an empty part of it.
+    r.click(1000, 400); r.wait(300)
+    r.step("proposals", lambda: r.key("p"), LEFT, 1500)
+    r.click(*PROPOSALS_SIGN_IN)
+    try:
+        r.page.locator(LOGIN).wait_for(state="visible", timeout=3000)
+    except PlaywrightTimeout:
+        problems.append(f"[smoke] {r.prefix}: the Proposals screen's Sign in… did not open {LOGIN}")
+    r.shot("proposals-sign-in")
+    problems += r.problems()
+    ctx.close()
+
+    # A wrong password: the form stays and shows the box's own words; the
+    # right one then signs in and the form goes.
+    ctx, r = fresh("box-refused")
+    form = login_form(r)
+    if form is None:
+        problems.append(f"[smoke] {r.prefix}: no sign-in form to refuse")
+    else:
+        form.locator("input[name=username]").fill(USER)
+        form.locator("input[name=password]").fill(WRONG_PASSWORD)
+        with r.page.expect_response(lambda q: q.url.endswith("/api/login") and q.request.method == "POST", timeout=15000) as answer:
+            form.locator("button[type=submit]").click()
+        a = answer.value
+        r.expect += (f"status of {a.status}",)
+        try:
+            words = json.loads(a.text()).get("error") or a.text()
+        except ValueError:
+            words = a.text()
+        line = r.page.locator(LOGIN + " p.problem[role=alert]")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (line.count() and line.inner_text().strip()):
+            r.wait(100)
+        r.shot("wrong-password")
+        if a.status < 400:
+            problems.append(f"[smoke] {r.prefix}: the box took a wrong password ({a.status})")
+        elif not r.page.locator(LOGIN).is_visible():
+            problems.append(f"[smoke] {r.prefix}: a refused sign-in closed the form")
+        elif not line.count():
+            problems.append(f"[smoke] {r.prefix}: a refused sign-in shows no p.problem[role=alert] (the form says {r.page.locator(LOGIN).inner_text()!r})")
+        elif words.strip() not in line.inner_text():
+            problems.append(f"[smoke] {r.prefix}: the form says {line.inner_text()!r}, the box said {words!r}")
+        problems += dom_sign_in(r, USER, PASSWORD)
+        r.wait(1500)
+        r.shot("signed-in")
+        problems += leaks(r, PASSWORD, WRONG_PASSWORD)
+        # Signed in, a reload shows no form: the session holds.
+        r.page.reload(wait_until="load"); r.wait(4000)
+        if r.page.locator(LOGIN).count():
+            problems.append(f"[smoke] {r.prefix}: a signed-in page shows the sign-in form after a reload")
+        r.shot("reloaded")
+        problems += leaks(r, PASSWORD, WRONG_PASSWORD)
+    problems += r.problems()
+    ctx.close()
+    return problems
 
 # ---- the marketplace install and the Agent's review --------------------------
 
@@ -620,13 +828,7 @@ def market(browser, dist, out):
                 base = f"http://127.0.0.1:{port}"
                 r = Run(open_app(ctx, base, "", layout()), out, f"market-{label}")
                 r.wait(4000)
-                def sign_in():
-                    r.click(1230, 100); r.wait(600)
-                    r.page.keyboard.type(USER)
-                    r.click(1230, 136); r.wait(600)
-                    r.page.keyboard.type(PASSWORD)
-                    r.key("Enter")
-                sign_in(); r.wait(6000)
+                problems += dom_sign_in(r, USER, PASSWORD); r.wait(1500)
                 r.click(*MENU); r.wait(500)
                 r.click(*MENU_VIEW); r.wait(1500)
                 r.click(*VIEW_PROPOSALS_BOX); r.wait(1500)
@@ -832,6 +1034,7 @@ def run_engine(browser, base, out, a, proc, box_port):
         ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
         problems += box(ctx, bbase, out)
         ctx.close()
+        problems += box_sign_in_form(browser, bbase, out)
         problems += phone(browser, bbase, "", out, "box")
         problems += market(browser, a.dist, out)
     return problems

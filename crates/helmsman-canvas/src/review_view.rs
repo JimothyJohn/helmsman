@@ -69,6 +69,9 @@ pub struct ReviewView {
     /// sends it.
     pub user_input: String,
     pub password_input: String,
+    /// In the browser, the Proposals screen's "Sign in…" asked for the
+    /// header's sign-in form (the one a browser saves the password of).
+    pub open_login: bool,
     /// The role picked to sign in with its PIN (boxes without accounts).
     pub role_input: String,
     pub pin_input: String,
@@ -130,6 +133,7 @@ impl ReviewView {
             state: Review::new(),
             user_input: String::new(),
             password_input: String::new(),
+            open_login: false,
             role_input: ROLES[0].to_string(),
             pin_input: String::new(),
             token_input: String::new(),
@@ -379,6 +383,19 @@ impl ReviewView {
 
     /// A user name and masked password; whether "Sign in" was asked for.
     fn account_fields(&mut self, ui: &mut egui::Ui) -> bool {
+        // In the browser the sign-in is the header's real form, so the
+        // browser can save the password (Nick, 2026-11-26): here, a
+        // button that opens it.
+        if cfg!(target_arch = "wasm32") {
+            let b = ui
+                .button("Sign in…")
+                .tip("Opens the sign-in form at the top right. Your browser can save the password from it.");
+            self.rects.push(("open sign in".into(), b.rect));
+            if b.clicked() {
+                self.open_login = true;
+            }
+            return false;
+        }
         let user = ui
             .add(
                 egui::TextEdit::singleline(&mut self.user_input)
