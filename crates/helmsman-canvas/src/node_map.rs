@@ -741,7 +741,7 @@ impl NodeMapUi {
         }
         for d in &r.devices {
             let (dot, color) = match &d.verdict {
-                Verdict::Answered(_) => ("●", t.accent),
+                Verdict::Answered(_) => ("●", t.ink(crate::st_view::brand::GREEN)),
                 Verdict::Failed(_) => ("●", t.ink(RED)),
                 Verdict::Waiting => ("○", t.muted),
             };
