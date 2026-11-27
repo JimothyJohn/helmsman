@@ -1676,7 +1676,10 @@ impl BoxProjects {
         if self.sheet.is_some() {
             return;
         }
-        self.sheet = Some(crate::deploy_sheet::Sheet::new(&o.name));
+        let mut sheet = crate::deploy_sheet::Sheet::new(&o.name);
+        // `deploy_with` saves what the page holds first.
+        sheet.saved = self.dirty();
+        self.sheet = Some(sheet);
         if self.preview && self.deploy.busy() {
             // The last sheet's checks are still on their way: it takes them.
             return;

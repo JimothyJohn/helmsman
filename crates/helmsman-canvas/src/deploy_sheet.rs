@@ -315,6 +315,9 @@ pub struct Sheet {
     pub replay: Replay,
     /// What the project changes, once everything it needs is in.
     pub report: Option<Report>,
+    /// Opening it saved edits the page held (the check reads the saved
+    /// project): its first line says so only then.
+    pub saved: bool,
 }
 
 impl Sheet {
@@ -448,7 +451,12 @@ pub fn ui(ctx: &egui::Context, chrome: &mut Chrome, sheet: &Sheet, c: &mut Conte
         chrome.hit("deploy sheet", r.rect);
         let r = ui.add(
             egui::Label::new(
-                RichText::new("Your edits were saved; nothing has been sent to the machine.").color(t.fg),
+                RichText::new(if sheet.saved {
+                    "Your edits were saved; nothing has been sent to the machine."
+                } else {
+                    "Nothing has been sent to the machine."
+                })
+                .color(t.fg),
             )
             .wrap(),
         );
