@@ -346,7 +346,7 @@ fn help_answers_are_rendered_as_markdown() {
             match s {
                 eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, out)),
                 eframe::egui::Shape::Text(t) if area.expand(4.0).contains(t.pos) => {
-                    out.push(t.galley.job.text.clone())
+                    out.push(t.galley.job.text.clone());
                 }
                 _ => {}
             }

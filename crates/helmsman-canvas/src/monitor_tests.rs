@@ -737,7 +737,7 @@ fn text_in(h: &Harness, r: Rect) -> Vec<String> {
         match s {
             egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
             egui::Shape::Text(t) if r.expand(2.0).contains(t.pos) => {
-                out.push(t.galley.job.text.trim().to_string())
+                out.push(t.galley.job.text.trim().to_string());
             }
             _ => {}
         }
