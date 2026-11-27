@@ -204,9 +204,15 @@ fn start(state: &Path, extra: &[&str]) -> Plc {
         .unwrap();
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let (mut api, mut cert) = (None, String::new());
+    let mut said = String::new();
     while api.is_none() {
         let mut line = String::new();
-        assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
+        assert!(
+            stderr.read_line(&mut line).unwrap() > 0,
+            "PLC exited ({:?}) before it said where its API is:\n{said}",
+            child.wait()
+        );
+        said.push_str(&line);
         if line.starts_with("helmsman-plc: TLS certificate") || line.contains("--https off") {
             cert = line.trim_end().to_string();
         }

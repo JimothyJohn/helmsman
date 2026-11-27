@@ -776,6 +776,15 @@ fn a_calendar_change_flips_in_shift_in_the_reload_step_and_then_on_its_own_times
             }
         })
     };
+    // The watcher samples on a thread the OS schedules as it likes (a
+    // Windows runner let a whole apply and both clock steps pass before
+    // it looked once, 2026-11-25..27): each state is held until the
+    // watcher has seen it, so `seen` is every state in order.
+    let last_seen =
+        |want: &Option<Value>| seen.lock().unwrap_or_else(PoisonError::into_inner).last() == Some(want);
+    let f = Some(Value::Bool(false));
+    let t = Some(Value::Bool(true));
+    wait("the watcher's first look", || last_seen(&f));
     let r = post(
         bench.addr,
         &format!("{path}/apply"),
@@ -784,17 +793,17 @@ fn a_calendar_change_flips_in_shift_in_the_reload_step_and_then_on_its_own_times
     assert_eq!(r.status, 200, "{r:?}");
     assert_eq!(r.json()["tier"], "logic", "the calendar drives the same outputs");
     assert_eq!(bench.value("in_shift"), Some(Value::Bool(true)));
+    wait("the watcher to see in_shift on", || last_seen(&t));
     bench.clock.store(MONDAY + 16 * 3600 - 1, Ordering::SeqCst);
     bench.settle();
     assert_eq!(bench.value("in_shift"), Some(Value::Bool(true)));
     bench.clock.store(MONDAY + 16 * 3600, Ordering::SeqCst);
     bench.settle();
     assert_eq!(bench.value("in_shift"), Some(Value::Bool(false)));
+    wait("the watcher to see in_shift off", || last_seen(&f));
     stop.store(true, Ordering::Relaxed);
     watcher.join().unwrap();
     let seen = seen.lock().unwrap_or_else(PoisonError::into_inner).clone();
-    let f = Some(Value::Bool(false));
-    let t = Some(Value::Bool(true));
     assert_eq!(seen, [f, t, f], "in_shift never missing, flipped once each way");
 }
 

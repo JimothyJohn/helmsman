@@ -1045,9 +1045,15 @@ fn spawn_api(state: &Path) -> (Running, std::net::SocketAddr, String) {
         .unwrap();
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let (mut api, mut token) = (None, None);
+    let mut said = String::new();
     while api.is_none() || token.is_none() {
         let mut line = String::new();
-        assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
+        assert!(
+            stderr.read_line(&mut line).unwrap() > 0,
+            "PLC exited ({:?}) before it said where its API is:\n{said}",
+            child.wait()
+        );
+        said.push_str(&line);
         if let Some(rest) = line
             .strip_prefix("helmsman-plc: API on https://")
             .or_else(|| line.strip_prefix("helmsman-plc: API on http://"))
@@ -1649,6 +1655,9 @@ fn the_agents_reads_answer_on_a_projects_box_with_accounts_and_nothing_deployed(
     let mut child = plc()
         .args(["--projects", "--https", "off", "--state-dir"])
         .arg(&dir)
+        // Free CIP ports: the defaults are on every interface and shared
+        // by every copy of this suite and every other box on the machine.
+        .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
         .env(EXIT_WITH_STDIN, "1")
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1656,9 +1665,15 @@ fn the_agents_reads_answer_on_a_projects_box_with_accounts_and_nothing_deployed(
         .unwrap();
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let mut api = None;
+    let mut said = String::new();
     while api.is_none() {
         let mut line = String::new();
-        assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
+        assert!(
+            stderr.read_line(&mut line).unwrap() > 0,
+            "PLC exited ({:?}) before it said where its API is:\n{said}",
+            child.wait()
+        );
+        said.push_str(&line);
         api = line
             .strip_prefix("helmsman-plc: API on http://")
             .and_then(|r| r.split('/').next())
