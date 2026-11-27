@@ -198,24 +198,6 @@ pub fn wants_tour(query: &str) -> bool {
     has(query, "tour")
 }
 
-/// Whether a page with this query string opens on the front door
-/// (`crate::front`): `?front` always; never with a link that asks for
-/// something else (`?editor`, `?tour`, `?monitor`, a box to watch);
-/// otherwise until this browser has gone on to the editor once (`seen`).
-#[must_use]
-pub fn wants_front(query: &str, seen: bool) -> bool {
-    if has(query, "front") {
-        return true;
-    }
-    !seen
-        && !["editor", "tour", "monitor", "andon", "box"]
-            .iter()
-            .any(|k| has(query, k))
-}
-
-/// Where the browser keeps that the visitor went on from the front door.
-pub const FRONT_KEY: &str = "helmsman-canvas/front";
-
 // Independent UI flags (menu open, served by a box, first frame routed,
 // …), not a state machine in disguise.
 #[allow(clippy::struct_excessive_bools)]
@@ -275,12 +257,6 @@ pub struct App {
     confirm: Option<(bool, Vec<String>)>,
     /// The guided tour, while it runs (`?tour`, Help › Take the tour).
     pub tour: Option<crate::tour::Tour>,
-    /// The front door, while it is what the page shows (`crate::front`):
-    /// a first visit to the simulation, `?front`, Help › Front page.
-    pub front: Option<crate::front::Front>,
-    /// The visitor went on to the editor: kept, so the next visit opens
-    /// there.
-    front_seen: bool,
 }
 
 /// A click this frame that lets the diagram's selection go (Nick,
@@ -352,15 +328,6 @@ impl App {
         if app.source == Source::Sim && crate::web::wants_tour() {
             app.tour = Some(crate::tour::Tour::new());
         }
-        // A first visit to the simulation opens on the front door.
-        app.front_seen = cc.storage.is_some_and(|s| s.get_string(FRONT_KEY).is_some());
-        #[cfg(target_arch = "wasm32")]
-        let query = crate::web::query();
-        #[cfg(not(target_arch = "wasm32"))]
-        let query = String::new();
-        if app.source == Source::Sim && !app.served_by_box && wants_front(&query, app.front_seen) {
-            app.front = Some(crate::front::Front::new());
-        }
         app
     }
 
@@ -394,8 +361,6 @@ impl App {
             space: None,
             confirm: None,
             tour: None,
-            front: None,
-            front_seen: false,
         }
     }
 
@@ -533,16 +498,6 @@ impl App {
         }
     }
 
-    /// From the front door to the editor, on the front door's project.
-    pub fn leave_front(&mut self) {
-        self.front = None;
-        self.front_seen = true;
-        self.screen = Screen::Editor;
-        self.sim
-            .get_or_insert_with(PlaygroundView::new)
-            .open_project(crate::front::PROJECT);
-    }
-
     /// One frame of the whole window. Split from [`eframe::App::ui`] so tests
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -557,16 +512,6 @@ impl App {
         glyphs::set_hotkeys(&ctx, self.chrome.hotkeys);
         let now = ctx.input(|i| i.time);
         theme::apply(&ctx, self.chrome.light);
-        // The front door is the whole page until the visitor goes on.
-        if self.source == Source::Sim
-            && let Some(f) = &mut self.front
-        {
-            self.chrome.hits.clear();
-            if crate::front::ui(ui, &mut self.chrome, f) == Some(crate::front::Act::OpenEditor) {
-                self.leave_front();
-            }
-            return;
-        }
         if self.source == Source::Sim && self.screen == Screen::Proposals {
             self.screen = Screen::Editor;
         }
@@ -833,7 +778,10 @@ impl App {
                 }
             }
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
-            Action::HelpTab => self.chrome.show(crate::editor::Pane::Help),
+            Action::HelpTab => {
+                self.chrome.show(crate::editor::Pane::Help);
+                self.chrome.focus_help = true;
+            }
             Action::Messages => self.chrome.toggle_messages(),
             Action::Trend => self.chrome.toggle_trend(),
             Action::Fit => {
@@ -1230,75 +1178,76 @@ impl App {
         // "simulation" tag give way, so the mark's group and the screens'
         // never overlap; the title takes what is left and elides.
         let narrow = ui.ctx().content_rect().width() < NARROW;
-        let panel = egui::Panel::top("header").show(ui, |ui| {
-            let size = Vec2::new(ui.available_width(), HEADER_H);
-            let t = theme(ui);
-            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // The wordmark is the way to the site (the About window links
-                // it, on a phone).
-                if !narrow {
-                    let mark = Self::wordmark(ui, t.accent).tip(format!("Opens {SITE_URL} in a new tab."));
-                    hits.push(("mark".to_string(), mark.rect));
-                    if mark.clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
-                    }
-                }
-                self.menus(ui, engineer, waiting, &mut hits);
-                if !narrow {
-                    ui.separator();
-                    self.actions(ui, &mut hits);
-                }
-                // The right-hand group, laid out from the window's edge
-                // leftwards (the order below is right to left).
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // ? keeps the very corner (Nick, 2026-11-01: in place
-                    // of the ⋯, whose items are the View menu's and About's).
-                    let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
-                    hits.push(("help".to_string(), m.rect));
-                    if m.clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
-                    }
-                    self.login_button(ui, &mut hits);
-                    self.screen_toggle(ui, &mut hits);
-                    if let Some(n) = waiting.filter(|n| *n > 0) {
-                        let b =
-                            egui::Button::new(RichText::new(format!("{n} waiting")).strong().color(BLACK))
-                                .fill(YELLOW);
-                        let r = ui
-                            .add(b)
-                            .tip("Proposals waiting for an approver. Click to review them.");
-                        hits.push(("proposals waiting".to_string(), r.rect));
-                        if r.clicked() {
-                            self.screen = Screen::Proposals;
+        let panel = egui::Panel::top("header")
+            .frame(crate::theme::float_frame(ui))
+            .show(ui, |ui| {
+                let size = Vec2::new(ui.available_width(), HEADER_H);
+                let t = theme(ui);
+                ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // The wordmark is the way to the site (the About window links
+                    // it, on a phone).
+                    if !narrow {
+                        let mark =
+                            Self::wordmark(ui, t.accent).tip(format!("Opens {SITE_URL} in a new tab."));
+                        hits.push(("mark".to_string(), mark.rect));
+                        if mark.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
                         }
                     }
-                    ui.separator();
-                    self.dirty_mark(ui, &mut hits);
-                    if self.source == Source::Sim && !narrow {
-                        ui.label(RichText::new("simulation").color(t.muted))
-                            .tip("The program runs in this page. Nothing reaches a controller.");
+                    self.menus(ui, engineer, waiting, &mut hits);
+                    if !narrow {
+                        ui.separator();
+                        self.actions(ui, &mut hits);
                     }
-                    // A phone signed out has a letter's room left here:
-                    // "T…" says nothing, so the title waits for room.
-                    if narrow && self.screen == Screen::Monitor {
-                        // Where the title would be: the programs' lamps and
-                        // names, elided to what is left of the row.
-                        self.monitor_status(ui, &mut hits, true);
-                    } else if !narrow || ui.available_width() >= TITLE_ROOM {
-                        let r = ui
-                            .add(
-                                egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
-                                    .truncate(),
+                    // The right-hand group, laid out from the window's edge
+                    // leftwards (the order below is right to left).
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // ? keeps the very corner (Nick, 2026-11-01: in place
+                        // of the ⋯, whose items are the View menu's and About's).
+                        let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
+                        hits.push(("help".to_string(), m.rect));
+                        if m.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
+                        }
+                        self.login_button(ui, &mut hits);
+                        self.screen_toggle(ui, &mut hits);
+                        if let Some(n) = waiting.filter(|n| *n > 0) {
+                            let b = egui::Button::new(
+                                RichText::new(format!("{n} waiting")).strong().color(BLACK),
                             )
-                            .tip("The open project.");
-                        hits.push(("title".to_string(), r.rect));
-                    }
-                    m.rect
+                            .fill(YELLOW);
+                            let r = ui
+                                .add(b)
+                                .tip("Proposals waiting for an approver. Click to review them.");
+                            hits.push(("proposals waiting".to_string(), r.rect));
+                            if r.clicked() {
+                                self.screen = Screen::Proposals;
+                            }
+                        }
+                        ui.separator();
+                        self.dirty_mark(ui, &mut hits);
+                        if self.source == Source::Sim && !narrow {
+                            ui.label(RichText::new("simulation").color(t.muted))
+                                .tip("The program runs in this page. Nothing reaches a controller.");
+                        }
+                        // A phone signed out has a letter's room left here:
+                        // "T…" says nothing, so the title waits for room.
+                        if narrow && self.screen == Screen::Monitor {
+                            // Where the title would be: the programs' lamps and
+                            // names, elided to what is left of the row.
+                            self.monitor_status(ui, &mut hits, true);
+                        } else if !narrow || ui.available_width() >= TITLE_ROOM {
+                            let r = ui
+                                .add(egui::Label::new(RichText::new(&title).strong().color(t.fg)).truncate())
+                                .tip("The open project.");
+                            hits.push(("title".to_string(), r.rect));
+                        }
+                        m.rect
+                    })
+                    .inner
                 })
                 .inner
-            })
-            .inner
-        });
+            });
         hits.push(("header".to_string(), panel.response.rect));
         let menu_at = panel.inner;
         if let Some(r) = &mut self.review
@@ -1513,7 +1462,7 @@ impl App {
             });
 
         let mut save_at = None;
-        egui::Area::new(egui::Id::unique("glyphs"))
+        let strip = egui::Area::new(egui::Id::unique("glyphs"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at)
@@ -1525,10 +1474,18 @@ impl App {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             if let Some((text, color, tip)) = &status {
-                                let r = ui
-                                    .label(RichText::new(text).monospace().strong().color(*color))
-                                    .tip(tip);
-                                hits.push(("state".to_string(), r.rect));
+                                // The state in words is Inter; its clock is a
+                                // live value, mono at a fixed width.
+                                let (word, clock) = text.split_once(" · ").unwrap_or((text.as_str(), ""));
+                                let w = ui.label(RichText::new(word).strong().color(*color));
+                                let mut rect = w.rect;
+                                if !clock.is_empty() {
+                                    let c = crate::theme::live(ui, clock, *color, 8);
+                                    rect = rect.union(c.rect);
+                                    c.tip(tip);
+                                }
+                                w.tip(tip);
+                                hits.push(("state".to_string(), rect));
                             }
                             let mut g =
                                 |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
@@ -1652,6 +1609,7 @@ impl App {
                         });
                     });
             });
+        self.chrome.glyph_strip = strip.response.rect;
         let ctx = ui.ctx().clone();
         if let Some(at) = save_at {
             self.save_flash(&ctx, at, &mut hits);
@@ -2226,18 +2184,6 @@ impl App {
                     self.tour = Some(crate::tour::Tour::new());
                     self.screen = Screen::Editor;
                 }
-                if self.source == Source::Sim
-                    && menu_item(
-                        ui,
-                        &mut chrome,
-                        "help front",
-                        "Front page",
-                        false,
-                        "The page a first visit opens on: a tank, its program and the proofs that it holds safe.",
-                    )
-                {
-                    self.front = Some(crate::front::Front::new());
-                }
                 ui.separator();
                 let shown = chrome.hotkeys;
                 if menu_item(
@@ -2353,7 +2299,8 @@ impl App {
         };
         if compact {
             // A phone: the lamp and the name, the word in the tooltip.
-            let font = egui::FontId::monospace(crate::theme::BODY);
+            // Inter: a name and a state are not code or a live value.
+            let font = egui::FontId::proportional(crate::theme::BODY);
             let mut job = egui::text::LayoutJob::default();
             for (i, b) in banners.iter().enumerate() {
                 let dot = egui::TextFormat::simple(font.clone(), lamp(b));
@@ -2372,13 +2319,9 @@ impl App {
             for (i, b) in banners.iter().enumerate() {
                 let color = lamp(b);
                 ui.label(RichText::new("●").color(color)).tip(&b.tip);
-                let r = ui
-                    .label(RichText::new(&b.name).strong().monospace().color(t.fg))
-                    .tip(&b.tip);
+                let r = ui.label(RichText::new(&b.name).strong().color(t.fg)).tip(&b.tip);
                 hits.push((format!("monitor program {i}"), r.rect));
-                let w = ui
-                    .label(RichText::new(b.word).monospace().color(color))
-                    .tip(&b.tip);
+                let w = ui.label(RichText::new(b.word).color(color)).tip(&b.tip);
                 hits.push((format!("monitor state {i}"), w.rect));
             }
         });
@@ -2508,9 +2451,6 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
         storage.set_string(crate::pane_layout::LAYOUTS_KEY, self.layouts.saved());
-        if self.front_seen {
-            storage.set_string(FRONT_KEY, "seen".into());
-        }
     }
 
     /// The layout string above is all that is kept per browser. egui's

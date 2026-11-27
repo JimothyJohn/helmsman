@@ -3337,24 +3337,26 @@ the end of this section.
   the same in the simulation and on a box. One card per input and per
   output (every `VAR_OUTPUT`, set or not, and located output the program
   sets, in declaration order; on a box, the map's signals too). A card
-  says three things: the point (an input's control in the simulation,
-  else the lamp or value and the name), what it is in the real world
-  (`io_cards::real`: the device the library says is wired to it and the
-  channel it is on; no line for a point that is only simulated), and its
-  part in the control scheme from the diagram alone (`io_cards::summary`:
-  the first signal that drives an output, the first output an input
-  affects by `io_cards::affects`, and "…" when there are more). A
-  double-click on the card or a click on the "…" opens its details in
-  place: every source as chips in three groups (driven by: signals read
-  from outside; timer, counter: block instances; kept: state the program
-  carries), the wiring in full, how often the code names it, and for a
-  simulated input "Simulate…" (the popup a double-click on its diagram
-  block opens). Two glyphs at the card's right go to the point. `< >`
+  is one line (Nick, 2026-11-27): the point (an input's control in the
+  simulation, else its glyph and name, a number with "= value"), cut to
+  the card with the whole name on hover, and its glyphs. A BOOL says its
+  state by colour and glyph alone: lit on a disc when on, dimmed when
+  off. A click on the card opens its details in place: the SIM badge of
+  a simulated point (its closed card says it with a dashed outline),
+  what it is in the real world (`io_cards::real`: the device the library
+  says is wired to it and the channel it is on), every link from the
+  diagram alone as chips (an input's outputs by `io_cards::affects`; an
+  output's sources in three groups, driven by: signals read from
+  outside; timer, counter: block instances; kept: state the program
+  carries), how often the code names it, and for a simulated input
+  "Simulate…" (the popup a double-click on its diagram block opens).
+  Three glyphs at the card's right go to the point. `< >`
   opens the file that declares it with the find box on its name as a
   whole name (`Find::name`, `find::names`: `start` never matches
   `start_button`), the first place selected; pressed again it steps to
   the next, as Ctrl G does, within the open file. The diagram glyph calls
-  `Viewer::show_signal`: every block that reads or writes the point is
+  `Viewer::show_signal`, and is off with a tooltip saying why for a
+  point the program never reads or writes (`Viewer::has_signal`): every block that reads or writes the point is
   lit as Cross references lights them and framed, with no scan needed, so
   it works while the program is stopped. A tap on an output's card still
   calls `Viewer::show_output`: the program's diagram opens, the "because"
@@ -3800,32 +3802,21 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   value outside its type's range never reaches the program. The Trend
   tab: up to six pinned signals over the last 10 s.
 - **The live diagram** is the box's (`st_view::Viewer`).
-- **The front door** (`front.rs`; a first visit to the simulation,
-  `?front`, Help › Front page; Nick, 2026-11-14): the whole page until the
-  visitor goes on. Three cards: what was asked in plain words, a tank
-  running its program against its plant (`assets/front/`: `main.st`,
-  `plant.sim`), and the proofs, one row a requirement test, each of which
-  throws a fault at the machine (`helmsman_sim::iec`). `main.st` is the
-  Agent's own answer to `front::instruction()` (the I/O by name, then the
-  four lines shown), kept as it landed: the ignored test
-  `front_door_recording` (agent_ladder_tests.rs) asks the live free chat,
-  keeps the program only if every proof is green on it, and writes
-  `recorded.txt` (date, requests, seconds), which the page quotes. The
-  first run is played back: the request line by line, the writing, the
-  proofs one by one (`Front::asked_shown`, `writing`, `shown`). The visitor throws
-  the same faults by hand (`front::Fault`, set on the running
-  `helmsman_sim::Plant`) and reads what the program did. `front::Front`
-  is the state, with its own `Session`; `App::front` holds it and
-  `App::show` draws nothing else while it is there. "Open the editor"
-  (`App::leave_front`) opens the built-in project `tank`, the same files,
-  and the browser remembers it (`app::FRONT_KEY`), so the next visit
-  opens on the editor; a link for something else (`?editor`, `?tour`,
-  `?monitor`, `?box=`) never sees it (`app::wants_front`). Stacked below
-  `front::STACK_BELOW` points, the machine first. Contracts in
-  `front_tests.rs` (the proofs are green and a program without the
-  safeguards fails them; each fault does what its words say) and
-  `ui_tests/front.rs` (nothing of the editor is drawn; the layout at a
-  laptop's, a tablet's and a phone's width).
+- **The tank example** (`front.rs`, `assets/front/`: `main.st`,
+  `plant.sim` and five requirement tests): a built-in project of the
+  simulation, `tank`, listed with the examples (`sim_projects`). It was
+  the front door's machine (Nick, 2026-11-14) until the front door went
+  (Nick, 2026-11-27: a visit to the playground opens on the editor at
+  once, on the default project; no `?front`, no Help › Front page, and a
+  browser's old `helmsman-canvas/front` key is ignored). `main.st` is the
+  Agent's own answer to `front::instruction()` (the I/O by name, then four
+  lines), kept as it landed: the ignored test `front_door_recording`
+  (agent_ladder_tests.rs) asks the live free chat and keeps the program
+  only if every proof is green on it (`front::prove`). Contracts in
+  `sim_projects_tests.rs` (the proofs are green and a program without the
+  safeguards fails them), `ui_tests/tank_example.rs` (it opens running
+  against its plant with its tests green) and `ui_tests/first_visit.rs`
+  (a first visit opens on the editor).
 - **Name the I/O first** (`io_names.rs`; Nick, 2026-11-14): while an
   instruction makes a new project (`Scope::NewProject`), the Describe tab
   carries a fold where the engineer lists the program's points: a name,
@@ -3833,7 +3824,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   (`PlaygroundView::new_io`). `send_instruction` puts the list ahead of
   what was typed (`IoList::instruction`: the names to use exactly, no
   other input or output), and a name that cannot be a variable's, or one
-  used twice, stops the send and says why. The front door's tank was
+  used twice, stops the send and says why. The tank example was
   written from such a list. Contracts in `io_names.rs`'s tests and
   `ui_tests/io_names.rs` (the pane keeps its width with long names).
 - **Documents in the design window** (`documents.rs`; Nick, 2026-11-15, folded

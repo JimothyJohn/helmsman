@@ -49,6 +49,8 @@ mod box_tests;
 mod box_trend;
 mod box_view;
 mod by_hand;
+mod change;
+mod change_ui;
 mod chat_about;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod chat_about_tests;
@@ -56,6 +58,7 @@ mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
+mod deploy_sheet;
 mod design;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod design_page_tests;
@@ -81,8 +84,6 @@ mod ekg;
 mod features_tests;
 mod find;
 mod front;
-#[cfg(test)]
-mod front_tests;
 mod glyph_lib;
 mod glyphs;
 mod help;

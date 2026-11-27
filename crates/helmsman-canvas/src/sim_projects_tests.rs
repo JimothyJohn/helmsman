@@ -136,7 +136,7 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
     assert_eq!(
         rows.len(),
         crate::playground::EXAMPLES.len() + 1,
-        "the textbook examples and the front door's tank"
+        "the textbook examples and the tank"
     );
     assert!(rows.iter().any(|r| r.name == "traffic" && r.running));
     // Edited and saved: a copy under a free name, opened; the example
@@ -1066,4 +1066,83 @@ fn a_described_change_pins_what_it_added_at_the_bottom_and_the_engineers_pins_st
         Some("C"),
         "the newest at the bottom"
     );
+}
+
+// The tank (`crate::front`): once the front door's machine, a built-in
+// example since the front door went (Nick, 2026-11-27). Its proofs are
+// green and have teeth (in the editor: ui_tests/tank_example.rs).
+
+#[test]
+fn the_tank_example_proves_each_requirement_in_words() {
+    use crate::front::{MAIN, TESTS, prove};
+    use crate::requirements::State;
+    let rows = prove(MAIN);
+    assert_eq!(rows.len(), TESTS.len());
+    for (r, (file, _)) in rows.iter().zip(TESTS) {
+        assert_eq!(r.file, file, "in the order shown");
+        assert_eq!(r.state, State::Passed, "{}: {}", r.file, r.why);
+        assert!(
+            !r.requirement.is_empty() && !r.requirement.starts_with("test_"),
+            "{}: a requirement in words, not a file name: {:?}",
+            r.file,
+            r.requirement
+        );
+    }
+}
+
+/// The proofs are not decoration: a program without the fill timer and
+/// the cross-check passes the normal run and fails the fault proofs.
+#[test]
+fn the_tank_proofs_catch_a_program_without_the_safeguards() {
+    use crate::front::prove;
+    use crate::requirements::State;
+    let naive = "PROGRAM tank
+VAR_INPUT
+  level_low  : BOOL;
+  level_high : BOOL;
+  level      : REAL;
+  reset      : BOOL;
+END_VAR
+VAR_OUTPUT
+  fill      : BOOL;
+  alarm     : BOOL;
+  level_pct : REAL;
+END_VAR
+IF level_low THEN
+  fill := TRUE;
+ELSIF level_high THEN
+  fill := FALSE;
+END_IF;
+END_PROGRAM
+";
+    let rows = prove(naive);
+    let state = |file: &str| {
+        rows.iter()
+            .find(|r| r.file == file)
+            .unwrap_or_else(|| panic!("no proof {file}: {rows:?}"))
+            .state
+    };
+    assert_eq!(state("test_fills_and_stops.st"), State::Passed);
+    assert_eq!(state("test_high_switch_fails.st"), State::Failed);
+    assert_eq!(state("test_both_switches_on.st"), State::Failed);
+    assert_eq!(state("test_alarm_needs_reset.st"), State::Failed);
+}
+
+/// The request the tank's program was recorded from (the ignored
+/// `front_door_recording`) names every I/O point, and the program uses the
+/// names it was given.
+#[test]
+fn the_tank_program_uses_the_names_its_request_gave() {
+    use crate::front::{ASKED, IO, MAIN, instruction};
+    let asked = instruction();
+    for line in ASKED {
+        assert!(asked.contains(line), "{line}");
+    }
+    for (name, _) in IO {
+        assert!(asked.contains(name), "{name}");
+        assert!(
+            MAIN.to_ascii_lowercase().contains(name),
+            "the program uses the name it was given: {name}"
+        );
+    }
 }

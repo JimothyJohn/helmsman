@@ -1,5 +1,5 @@
 //! The ST lints (`helmsman_iec::lint`) over every program the page ships:
-//! the playground's examples, the front-door machine and the pump-station
+//! the playground's examples, the tank example and the pump-station
 //! fixture. A shipped program holds no blocking finding (`st-lints`): one
 //! that has to would carry an override pragma with its reason.
 
@@ -13,7 +13,7 @@ fn shipped() -> Vec<(String, &'static str)> {
         .iter()
         .map(|e| (format!("example {}", e.name), e.src))
         .collect();
-    all.push(("front-door main.st".into(), crate::front::MAIN));
+    all.push(("tank main.st".into(), crate::front::MAIN));
     for (name, text) in PUMP_STATION {
         if std::path::Path::new(name)
             .extension()

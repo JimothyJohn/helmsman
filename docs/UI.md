@@ -43,6 +43,84 @@ explanation belongs in Help. `tips_tests` counts the tips over the limit
 (110 characters, or more than one line break) and holds the count: it may
 only go down.
 
+## Look and feel (Nick, 2026-11-27)
+
+The canvas must feel alive and professionally built. The theme basics stay
+(Inter and Plex Mono, tonal fills, no outlines, radius 6, shadows in
+`theme.rs`); what changes is contrast, motion, colour meaning and finish.
+
+- **Contrast.** The canvas is the darkest layer; each layer of chrome above
+  it is clearly lighter (about 10 to 16 levels a step, not 4 to 6). The
+  chrome floats: the side panes, the Signals (bottom) pane and the toolbar
+  sit 8 to 12 px in from the edges with rounded corners and a shadow, as the
+  diagram's corner controls do. Primary text is near white, muted text is
+  clearly muted, and body text, labels and port names each have a level of
+  their own. Light mode is the same in reverse; the `ink()` contrast tests
+  hold.
+- **TRUE glows, FALSE is flat, everywhere.** One look for each on every
+  surface: wires, block chips, I/O cards, lamps, Signals traces, status
+  text (a lamp's FALSE is red: below). TRUE is green at full brightness with a glow (two wide faint
+  under-strokes, about 5x width at 8% and 2.5x at 18%, under the core) and
+  slow even dots flowing source to sink along a live TRUE wire. FALSE is a
+  thin flat muted grey: no glow, no motion. A chip eases or flashes briefly
+  when its value flips. On the light page a glow does not read: TRUE is a
+  heavier stroke in saturated green, the dots stay. Motion runs only while
+  the program runs and the page is visible (repaints gated on both);
+  off-screen wires are culled before the glow is drawn.
+- **TRUE is green, never yellow.** Yellow is brand, selection and focus
+  only (the wordmark, the active tab, Deploy, a selected item), never a
+  signal state. Green is also "running" and a lamp on. TRUE and FALSE are
+  told apart by glow, weight and motion as well as hue; a fault on a wire,
+  if ever shown, is dashed as well as red.
+- **Lamps are green on, red off** (Nick, 2026-11-27): a lamp (an output's
+  card in the I/O tab, a lamp on the Monitor) is green when TRUE and red
+  when FALSE, whatever its name says (a lamp named `yellow` is green when
+  on). Lit on a soft disc when on, dimmed when off. Everything else that is
+  FALSE stays flat grey.
+- **An I/O card at rest is its point** (Nick, 2026-11-27): icon, name and
+  value on one line. Its three glyphs (code, diagram, Trend) show while the
+  pointer is over the card or it is open, drawn over the right end of the
+  first line on a backdrop of the card's fill (a soft fade at its left
+  edge). The head's layout never depends on hover: a switch or a number box
+  keeps its width as the pointer enters, and a click on a glyph goes to the
+  glyph, not to the control under it. A simulated input's
+  icon is lit when on and dimmed when off, as an output's is.
+- **A dot grid** on the canvas, panned and zoomed with the diagram, one or
+  two levels above the ground, fading out as the zoom gets small.
+- **Signals pane.** Thin lane separators and gridlines; a gradient under
+  each trace (alpha about 0.25 to 0). A BOOL lane is the TRUE/FALSE look
+  (a green filled step when TRUE, a flat grey line when FALSE), its axis
+  TRUE/FALSE or unlabelled, not 1.0/0.0. The pane is no taller than it
+  needs to be.
+- **Restraint.** Motion on live TRUE wires and value flips only: no ambient
+  animation, no animated chrome.
+- **Finish.**
+  1. Nothing is clipped: blocks size to their content, the Signals label
+     column sizes to its longest name, and anything that must be cut shows
+     its whole text on hover.
+  2. Nothing collides: value badges clear of wires, no stacked ghost
+     outlines behind blocks, and Fit leaves room for the floating controls.
+  3. A counter is coloured only when it is not zero (no red ⊗ 0).
+  4. No stock egui widgets show through: the collapsing triangle, the
+     slider thumb and the checkbox are painted to match the glyphs.
+  5. One voice per role: mono for code and live values only, Inter for
+     everything else; live numbers have a fixed width.
+  6. Numbers: decimals chosen per signal, units where known, numeric
+     columns right-aligned.
+  7. Alignment: spacing on a 4/8 pt grid; hairlines and rect edges snapped
+     to physical pixels; a pane's controls share one left edge and width.
+  8. Port labels read clearly or are not drawn.
+  9. Icons share one stroke weight, size and baseline; Stop is neutral
+     with its glyph alone (red is a state, not a button colour).
+  10. Hover and press ease over about 80 to 120 ms; keyboard focus shows a
+      visible ring.
+  11. No empty space that reads as broken: an empty area collapses or says
+      in one line what goes there.
+- **Held by tests, not taste** (`ui_tests`): no glyph clipped by its widget
+  or block; no text rect overlapping another block or label on the canvas;
+  no error or warning colour on a zero count; no YELLOW on a signal-state
+  draw path.
+
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
 - **One header row (48 pt):** on the left the brand wordmark (the
@@ -485,6 +563,54 @@ only go down.
   or presses it, or takes a typed number (written on Enter). On a Pi, the same click **forces** the input, for an
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
+
+## Show Changes (Nick, 2026-11-27)
+
+"When a change is deployed things can go absolutely haywire … We really
+need to ensure the user knows EXACTLY what they're doing before making
+changes and that the changes aren't supposed to be huge." Progress is
+incremental: one small, understood step at a time, the start of written,
+staged and slowly implemented specs.
+
+- **A described change is held, never written on arrival.** A green answer
+  (checked by `verify::check` as before) becomes the pending change:
+  nothing is written, saved, run or deployed. The Agent tab shows its
+  reason, its size ("3 blocks, 12 lines") and every output whose logic it
+  changes by name ("switches MOTOR, LAMP"), then Show Changes, Apply and
+  Discard. Send is off while a change is pending ("Apply or Discard the
+  change first"). A pending change lives in the page; a reload drops it.
+- **Show Changes** puts the proposed version on screen without running it:
+  the Code tab shows the proposed file read-only with its lines marked as a
+  diff draws (`+` green tint, `−` red tint), and the canvas shows the
+  proposed diagram with blocks marked as Proposals marks them (added,
+  changed, removed), with no live values, since it is not running. A
+  banner over the canvas says "Proposed change, not applied: the machine
+  runs the current program", with Show current, Apply and Discard. The
+  machine (the simulation or the box) keeps running the current program
+  the whole time.
+- **One step is small.** The Agent is told to make the smallest change that
+  does the one thing asked. A change can't be applied when it adds,
+  changes or removes more than 8 blocks or 30 lines, or when it changes
+  the logic of an output the instruction does not name (by its name, any
+  case, `_` or space, or by the block in focus). Apply is off and the tab
+  says why: "Too big for one step: 12 blocks, 48 lines (one step is at most
+  8 blocks or 30 lines). Ask for part of it." or "It changes VALVE, which
+  the instruction does not name. Name it, or ask for less."
+- **Apply** writes it as before: in the simulation one revision that runs
+  at once; on a box the project's file (a PUT), which runs only once
+  deployed. Apply refuses if the file changed since Send. Discard drops it
+  and changes nothing. Undo after Apply stays as it is.
+- **Deploy on a box opens "What changes on the machine"** and never deploys
+  straight from the button or Ctrl Shift Enter. The sheet compares the
+  project with the program the box runs now: each file's diff, the
+  diagram diff with its counts, every output whose logic changes by name,
+  the checks and, where the policy needs one, the replay's result (run
+  before the sheet shows), the tier and who may apply it. Deploy on the
+  sheet sends it; Cancel sends nothing to the machine. When nothing differs it says
+  the box already runs this program and Deploy is off. Deploy in the
+  simulation (the page's own program) is unchanged.
+- **Later, not now:** running the proposed program in a trial simulation
+  beside the live one before it is applied.
 
 ## Projects
 

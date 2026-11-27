@@ -48,40 +48,58 @@ fn click_card(h: &mut Harness, key: &str) {
     h.wait(0.2);
 }
 
+/// The pointer on card `name`'s name, left of where its glyphs come up
+/// (docs/UI.md "An I/O card at rest is its point": they show only while
+/// the pointer is over the card or it is open).
+pub(super) fn hover_card(h: &mut Harness, name: &str) {
+    let card = h.rect(&format!("io card {name}"));
+    let at = eframe::egui::pos2(card.left() + card.width() * 0.3, card.top() + 12.0);
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.frame(vec![]);
+}
+
+/// A press of card `name`'s glyph `glyph` (`code`, `diagram` or `trend`)
+/// the way a user reaches it: onto the card, then onto the glyph.
+pub(super) fn press_glyph(h: &mut Harness, glyph: &str, name: &str) {
+    hover_card(h, name);
+    h.press(&format!("io {glyph} {name}"));
+}
+
+/// Nick, 2026-11-27: a compact card is one line, the point alone; what
+/// drives an output and what an input affects are in its details.
 #[test]
-fn a_card_says_the_first_link_and_its_details_say_them_all() {
+fn a_card_is_its_point_alone_and_its_details_say_every_link() {
     let mut h = sim_with(MIXER);
-    assert!(h.drew("affects"), "an input says what it affects");
-    assert!(h.drew("driven by"), "an output says what drives it");
-    // The last output's card is under the fold of the inputs.
-    h.press("io head inputs");
-    h.wait(0.2);
-    assert!(h.drew("nothing sets it"), "spare is never assigned");
-    h.press("io head inputs");
-    h.wait(0.2);
-    assert!(
-        h.has("io more start"),
-        "start affects three outputs: the first and …"
-    );
-    assert!(!h.has("io more stop"), "stop affects one: no …");
-    assert!(!h.drew("named"), "no details until asked");
-    assert!(!h.drew("kept"), "the groups are in the details");
-    // The details open below the fold of the inputs unless they are folded.
-    h.press("io head inputs");
-    h.wait(0.2);
+    for word in [
+        "affects",
+        "driven by",
+        "nothing sets it",
+        "kept",
+        "named",
+        "times in the code",
+    ] {
+        assert!(!h.drew(word), "no {word:?} until a card is opened");
+    }
+    assert!(!h.has("io more start"), "no summary line, so no …");
     click_card(&mut h, "io card motor");
+    assert!(h.drew("driven by"), "an output's details say what drives it");
     assert!(h.drew("kept"), "motor latches on itself");
     assert!(h.drew("times in the code"), "and how often it is named");
-    assert!(!h.has("io more motor"), "all of them are shown");
     click_card(&mut h, "io card motor");
-    assert!(!h.drew("times in the code"), "a second click closes them");
-    h.press("io head inputs");
-    h.wait(0.2);
-    h.press("io more start");
-    h.wait(0.2);
+    assert!(
+        !h.drew("driven by") && !h.drew("times in the code"),
+        "a second click closes them"
+    );
+    // spare is never assigned: said in its details.
+    click_card(&mut h, "io card spare");
+    assert!(h.drew("nothing sets it"), "spare is never assigned");
+    click_card(&mut h, "io card spare");
+    assert!(!h.drew("nothing sets it"));
+    click_card(&mut h, "io card start");
+    assert!(h.drew("affects"), "an input's details say what it affects");
     assert!(
         h.drew("named 5 times in the code"),
-        "the … opens them: start as a whole name"
+        "start as a whole name, not start_button"
     );
     assert!(
         h.has("io simulate start"),
@@ -95,7 +113,7 @@ fn a_card_says_the_first_link_and_its_details_say_them_all() {
 #[test]
 fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
     let mut h = sim_with(MIXER);
-    h.press("io code start");
+    press_glyph(&mut h, "code", "start");
     h.wait(0.3);
     assert!(h.app.chrome.showing(Pane::Code), "the Code tab is showing");
     let f = h.app.chrome.find.clone().expect("the find box is open");
@@ -103,7 +121,7 @@ fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
     let src = h.app.sim.as_ref().unwrap().proj.build_src();
     assert_eq!(f.all(&src).len(), 5, "not start_button; the comment counts");
     for want in [1, 2, 3, 4, 0] {
-        h.press("io code start");
+        press_glyph(&mut h, "code", "start");
         h.wait(0.3);
         assert_eq!(
             h.app.chrome.find.as_ref().unwrap().current,
@@ -111,7 +129,7 @@ fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
             "the next use, round again"
         );
     }
-    h.press("io code stop");
+    press_glyph(&mut h, "code", "stop");
     h.wait(0.3);
     let f = h.app.chrome.find.clone().unwrap();
     assert_eq!(
@@ -125,7 +143,7 @@ fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
 fn the_diagram_glyph_lights_a_points_blocks_with_nothing_running() {
     let mut h = sim_with(MIXER);
     assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "stopped");
-    h.press("io diagram start");
+    press_glyph(&mut h, "diagram", "start");
     h.wait(0.6);
     let v = h.app.sim.as_ref().unwrap().viewer.as_ref().unwrap();
     let on = v.highlighted().expect("lit without a scan");
@@ -261,21 +279,14 @@ fn a_push_button_held_in_the_tab_stays_on_while_its_block_is_on_the_diagram() {
         "its block is on the diagram too: {:?}",
         v.on_map()
     );
-    // Of the two controls drawn under its name, the one on the card.
+    // The input's icon is its control (2026-11-27): held, the button is on.
     let card = h.rect("io card jog_button");
-    let control = h
-        .app
-        .chrome
-        .hits
-        .iter()
-        .find(|(k, r)| k == "input jog_button" && card.contains_rect(*r))
-        .map(|(_, r)| *r)
-        .expect("the control on the card");
+    let icon = icon(&h, "jog_button");
     assert!(
-        control.height() < 90.0,
-        "the button sits beside its glyph, a name that needs it on a second line: {control:?}"
+        card.contains_rect(icon) && icon.top() - card.top() < 16.0,
+        "the icon is on the card's first line: {icon:?} in {card:?}"
     );
-    let at = eframe::egui::pos2(control.right() - 30.0, control.center().y);
+    let at = icon.center();
     h.frame(vec![Event::PointerMoved(at)]);
     h.frame(vec![Harness::button(at, true)]);
     for _ in 0..10 {
@@ -321,17 +332,36 @@ fn a_right_click_on_a_card_chats_about_its_point_and_sends_nothing() {
 
 const DRIVE: &str = "PROGRAM p\nVAR_INPUT enable : BOOL; jog_button : BOOL; END_VAR\nVAR_OUTPUT motor : BOOL; END_VAR\nmotor := enable OR jog_button;\nEND_PROGRAM\n";
 
-/// Of the controls drawn under an input's name, the one on its card.
-fn control(h: &Harness, name: &str) -> eframe::egui::Rect {
+/// The point's icon on card `name`, which is an input's control since
+/// 2026-11-27 (a switch flips on a click of it, a push button is on while
+/// it is held): the picture at the card's left edge (the library glyphs
+/// are meshes on a texture other than the font's).
+pub(super) fn icon(h: &Harness, name: &str) -> eframe::egui::Rect {
+    use eframe::egui::{Rect, Shape, TextureId};
+    fn walk(s: &Shape, card: Rect, out: &mut Vec<Rect>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, card, out)),
+            Shape::Mesh(m) if m.texture_id != TextureId::default() => {
+                let mut r = Rect::NOTHING;
+                for v in &m.vertices {
+                    r.extend_with(v.pos);
+                }
+                if card.contains_rect(r) {
+                    out.push(r);
+                }
+            }
+            _ => {}
+        }
+    }
     let card = h.rect(&format!("io card {name}"));
-    let key = format!("input {name}");
-    h.app
-        .chrome
-        .hits
-        .iter()
-        .find(|(k, r)| *k == key && card.contains_rect(*r))
-        .map(|(_, r)| *r)
-        .expect("the control on the card")
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, card, &mut out);
+    }
+    out.into_iter()
+        .filter(|r| r.left() - card.left() <= 12.0)
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .unwrap_or_else(|| panic!("{name}: no icon at the card's left edge {card:?}"))
 }
 
 fn value(h: &Harness, name: &str) -> Option<helmsman_iec::Value> {
@@ -344,8 +374,8 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
     use helmsman_iec::Value::Bool;
     let mut h = sim_with(DRIVE);
     assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Stopped);
-    let at = control(&h, "enable");
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    let at = icon(&h, "enable");
+    h.click(at.center());
     h.wait(0.2);
     assert_eq!(
         value(&h, "enable"),
@@ -373,9 +403,9 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
     assert!(!h.has("idle note"));
     assert_eq!(value(&h, "motor"), Some(Bool(true)), "it started with enable on");
     // Running: a click is just a click.
-    let at = control(&h, "enable");
+    let at = icon(&h, "enable");
     h.wait(1.0);
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    h.click(at.center());
     h.wait(0.2);
     assert_eq!(value(&h, "enable"), Some(Bool(false)));
     assert_eq!(h.app.sim.as_ref().unwrap().notice, None, "no line while it runs");
@@ -383,8 +413,8 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
     h.app.sim.as_mut().unwrap().session.set_running(false);
     h.wait(1.0);
     assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Paused);
-    let at = control(&h, "enable");
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    let at = icon(&h, "enable");
+    h.click(at.center());
     h.wait(0.2);
     let note = h.app.sim.as_ref().unwrap().notice.clone().expect("a quiet line");
     assert!(
@@ -406,8 +436,7 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
 #[test]
 fn a_push_button_pressed_while_stopped_says_it_is_on_only_while_held() {
     let mut h = sim_with(DRIVE);
-    let at = control(&h, "jog_button");
-    let at = eframe::egui::pos2(at.right() - 30.0, at.center().y);
+    let at = icon(&h, "jog_button").center();
     h.frame(vec![Event::PointerMoved(at)]);
     h.frame(vec![Harness::button(at, true)]);
     h.wait(0.2);
@@ -430,29 +459,79 @@ feeder_belt_motor_contactor_closed := feeder_belt_run_request;
 END_PROGRAM
 ";
 
+/// The pieces of text the last frame drew inside `area` whose text
+/// contains `needle`: (rows, cut short with an ellipsis).
+fn text_in(h: &Harness, area: eframe::egui::Rect, needle: &str) -> Vec<(usize, bool)> {
+    use eframe::egui::Shape;
+    fn walk(s: &Shape, area: eframe::egui::Rect, needle: &str, out: &mut Vec<(usize, bool)>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, needle, out)),
+            Shape::Text(t) if area.contains(t.pos) && t.galley.job.text.contains(needle) => {
+                out.push((t.galley.rows.len(), t.galley.elided));
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, area, needle, &mut out);
+    }
+    out
+}
+
+/// How many pieces of text the last frame drew that are `name` exactly
+/// and whole (not cut short).
+fn whole(h: &Harness, name: &str) -> usize {
+    use eframe::egui::Shape;
+    fn walk(s: &Shape, name: &str) -> usize {
+        match s {
+            Shape::Vec(v) => v.iter().map(|s| walk(s, name)).sum(),
+            Shape::Text(t) => usize::from(t.galley.job.text == name && !t.galley.elided),
+            _ => 0,
+        }
+    }
+    h.shapes.iter().map(|c| walk(&c.shape, name)).sum()
+}
+
+/// Nick, 2026-11-27: a long name is cut to the room on the card's one
+/// line, and the whole of it is in its tooltip.
 #[test]
-fn a_row_gives_its_long_names_the_room_they_need_inside_the_default_width() {
+fn a_long_name_is_cut_to_the_cards_one_line_and_shown_whole_on_hover() {
     let mut h = sim_with(LONG);
     let right = h.rect("right");
-    // What was cut to an ellipsis before shows whole, wrapped on the card.
-    for name in ["feeder_belt_run_request", "feeder_belt_motor_contactor_closed"] {
-        assert!(h.drew(name), "{name}");
-        assert!(!h.elided(name), "{name} is not cut");
+    for name in ["feeder_belt_motor_contactor_closed", "feeder_belt_run_request"] {
         let card = h.rect(&format!("io card {name}"));
         assert!(
             card.left() >= h.size.x - RIGHT_W - 8.0 && card.right() <= h.size.x,
             "{name}: {card:?} stays in the {RIGHT_W} pt panel"
         );
+        let drawn = text_in(&h, card, name);
+        assert!(!drawn.is_empty(), "{name} is on its card");
+        assert!(
+            drawn.iter().all(|&(rows, _)| rows == 1),
+            "{name} is on one line, not wrapped: {drawn:?} in {card:?}"
+        );
+        assert!(
+            drawn.iter().any(|&(_, cut)| cut),
+            "{name} is cut to the room: {drawn:?}"
+        );
+        // The whole name on hover.
+        let before = whole(&h, name);
+        let at = eframe::egui::pos2(card.left() + 50.0, card.top() + 15.0);
+        h.frame(vec![Event::PointerMoved(at)]);
+        h.wait(1.5);
+        assert!(
+            whole(&h, name) > before,
+            "{name}: hovering its card shows the whole name"
+        );
+        h.frame(vec![Event::PointerMoved(eframe::egui::pos2(700.0, 600.0))]);
+        h.wait(0.5);
     }
-    assert!(
-        !h.elided("driven by") && !h.elided("affects"),
-        "the summary lines too"
-    );
     assert!(
         (h.rect("right").left() - right.left()).abs() <= 8.0,
         "the panel kept its width"
     );
-    // A tile has no room for it: there the name is still cut to the tile.
+    // A tile has no room for it either: cut to the tile.
     h.press("io grid");
     h.wait(0.3);
     assert!(h.elided("feeder_belt_motor_contactor_closed"));
@@ -564,7 +643,7 @@ fn fan_lit(h: &Harness) -> FanLit {
 #[test]
 fn the_diagram_glyph_lights_every_wire_of_a_point_and_every_use_it_feeds() {
     let mut h = sim_with(FAN);
-    h.press("io diagram start");
+    press_glyph(&mut h, "diagram", "start");
     h.wait(0.6);
     let (reads, wires, others, other_wires) = fan_lit(&h);
     assert!(reads.iter().all(|&l| l), "the read of start is lit: {reads:?}");
@@ -588,7 +667,24 @@ fn cross_references_light_every_wire_of_a_variable_and_every_use_it_feeds() {
     h.app.chrome.show(Pane::Code);
     h.wait(0.3);
     let read = |k: &helmsman_diagram::NodeKind| matches!(k, helmsman_diagram::NodeKind::Read { path } if path == "START");
-    let (at, _) = super::node(super::sim_view(&h), read);
+    // A click on the read's header, its name: since the compact blocks of
+    // 2026-11-27 a read's middle is its input switch's top edge, and a
+    // click there flips the input instead of picking the block.
+    let at = {
+        let v = super::sim_view(&h);
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| read(&n.kind))
+            .expect("the read");
+        let r = v.block_on_screen(n.id).expect("drawn");
+        let zoom = v.cams[v.scope].zoom;
+        eframe::egui::pos2(
+            r.center().x,
+            r.top() + helmsman_diagram::layout::HEADER * zoom / 2.0,
+        )
+    };
     h.click(at);
     h.frame(vec![]);
     assert_eq!(
@@ -621,10 +717,11 @@ fn the_trend_glyph_pins_the_point_and_opens_the_trend_and_again_takes_it_off() {
     let mut h = sim_with(MIXER);
     h.app.chrome.trend = false;
     h.wait(0.2);
+    hover_card(&mut h, "level");
     assert!(h.has("io trend level"), "a graph glyph on the card");
     let src = h.app.sim.as_ref().unwrap().proj.build_src();
     let dirty = h.app.sim.as_ref().unwrap().proj.dirty();
-    h.press("io trend level");
+    press_glyph(&mut h, "trend", "level");
     h.wait(0.3);
     assert!(
         h.app.chrome.trend && !h.app.chrome.msgs,
@@ -635,7 +732,7 @@ fn the_trend_glyph_pins_the_point_and_opens_the_trend_and_again_takes_it_off() {
         "level is on the Trend: {:?}",
         h.app.chrome.hits
     );
-    h.press("io trend level");
+    press_glyph(&mut h, "trend", "level");
     h.wait(0.3);
     assert!(!h.has("trend lane level"), "again takes it off");
     // Nothing of it is an edit of the program.
@@ -707,7 +804,7 @@ fn the_diagram_glyph_pressed_again_frames_the_next_use_and_comes_round() {
     let mut seen = Vec::new();
     for _ in 0..4 {
         h.wait(1.0);
-        h.press("io diagram start");
+        press_glyph(&mut h, "diagram", "start");
         h.wait(1.0);
         seen.push(cam(&h));
     }
@@ -755,9 +852,12 @@ fn colours_in(h: &Harness, r: eframe::egui::Rect) -> Vec<eframe::egui::Color32> 
     out
 }
 
+/// docs/UI.md, "TRUE glows, FALSE is flat, everywhere" (Nick, 2026-11-27):
+/// FALSE is a flat muted grey on every surface, an I/O card's too; it was
+/// red until then.
 #[test]
-fn an_inputs_bool_is_green_when_on_and_red_when_off() {
-    use crate::st_view::brand::{GREEN, RED};
+fn an_inputs_bool_is_green_when_on_and_grey_when_off() {
+    use crate::st_view::brand::{GREEN, OFF_RED, RED};
     use helmsman_iec::Value::Bool;
     let mut h = sim_with(DRIVE);
     let card = h.rect("io card enable");
@@ -767,16 +867,16 @@ fn an_inputs_bool_is_green_when_on_and_red_when_off() {
     let has = |h: &Harness, w| colours_in(h, card).iter().any(|c| near(c, w));
     assert_eq!(value(&h, "enable"), Some(Bool(false)));
     assert!(
-        has(&h, RED) && !has(&h, GREEN),
-        "enable is off: red {:?}",
+        !has(&h, RED) && !has(&h, OFF_RED) && !has(&h, GREEN),
+        "enable is off: flat grey, no red and no green {:?}",
         colours_in(&h, card)
     );
-    let at = control(&h, "enable");
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    let at = icon(&h, "enable");
+    h.click(at.center());
     h.wait(0.3);
     assert_eq!(value(&h, "enable"), Some(Bool(true)), "the switch turned it on");
     assert!(
-        has(&h, GREEN) && !has(&h, RED),
+        has(&h, GREEN) && !has(&h, RED) && !has(&h, OFF_RED),
         "enable is on: green {:?}",
         colours_in(&h, card)
     );

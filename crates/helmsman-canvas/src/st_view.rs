@@ -347,6 +347,8 @@ pub struct Viewer {
     /// The hand toggle of the corner controls: a primary drag on empty
     /// space pans instead of selecting. View state, never saved.
     hand: bool,
+    /// The program is running: live TRUE wires carry dots.
+    pub flow: bool,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
@@ -694,6 +696,7 @@ impl Viewer {
             jumped: None,
             zoom: zoom_fold::ZoomFolds::new(),
             hand: false,
+            flow: false,
         };
         v.reshow();
         v
@@ -1310,18 +1313,7 @@ impl Viewer {
     /// alone: no wires.
     fn named(&self, head: &str) -> Drivers {
         let d = self.diagram();
-        let of = |n: &helmsman_diagram::Node| match &n.kind {
-            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
-                // An address (`%IX0.0`) is one name, dots and all.
-                path.eq_ignore_ascii_case(head)
-                    || path
-                        .split(['.', '['])
-                        .next()
-                        .is_some_and(|h| h.eq_ignore_ascii_case(head))
-            }
-            NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
-            _ => false,
-        };
+        let of = |n: &helmsman_diagram::Node| names_point(n, head);
         Drivers {
             nodes: d.nodes.iter().map(of).collect(),
             wires: vec![false; d.wires.len()],
@@ -1966,51 +1958,80 @@ impl Viewer {
     /// "site › box › module" (from the host, `outer`), then the program
     /// and each instance down to the one shown, every part a link, and ↑
     /// for one level up. Returns the outer part clicked.
-    pub fn crumbs_ui(&mut self, ui: &mut egui::Ui, outer: &[String]) -> Option<usize> {
+    pub fn crumbs_ui(&mut self, ui: &mut egui::Ui, outer: &[String], strip: Rect) -> Option<usize> {
         let mut hit = None;
         let mut go = None;
         let t = theme(ui);
-        ui.horizontal_wrapped(|ui| {
-            let up = self.parent();
-            if ui
-                .add_enabled(up.is_some(), egui::Button::new("↑"))
-                .tip(if up.is_some() {
-                    "Up one level (Alt+↑)."
-                } else {
-                    "Up one level (Alt+↑): this is the program, the top."
-                })
-                .clicked()
-            {
-                go = up;
-            }
-            for (i, o) in outer.iter().enumerate() {
+        // The run state and controls are laid out first (`strip`, as last
+        // drawn); the crumb takes the room left of them, its last part cut
+        // with its whole text on hover (Nick, 2026-11-27).
+        let top = ui.cursor().top();
+        let room = if strip != Rect::NOTHING && strip.bottom() > top {
+            (strip.left() - 8.0 - ui.cursor().left()).min(ui.available_width())
+        } else {
+            ui.available_width()
+        }
+        .max(60.0);
+        ui.allocate_ui_with_layout(
+            Vec2::new(room, ui.spacing().interact_size.y),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                // Cut at the room's sides only: the row is taller than
+                // `interact_size`, and a clip to its height cut the crumb's
+                // lower half off.
+                let (mut clip, room) = (ui.clip_rect(), ui.max_rect());
+                clip.min.x = clip.min.x.max(room.min.x);
+                clip.max.x = clip.max.x.min(room.max.x);
+                ui.set_clip_rect(clip);
+                let up = self.parent();
                 if ui
-                    .link(RichText::new(o).color(t.muted))
-                    .tip(format!("Goes to {o}."))
+                    .add_enabled(up.is_some(), egui::Button::new("↑"))
+                    .tip(if up.is_some() {
+                        "Up one level (Alt+↑)."
+                    } else {
+                        "Up one level (Alt+↑): this is the program, the top."
+                    })
                     .clicked()
                 {
-                    hit = Some(i);
+                    go = up;
                 }
-                ui.label(RichText::new("›").color(t.muted));
-            }
-            let trail = self.trail();
-            for (j, &k) in trail.iter().enumerate() {
-                if j > 0 {
+                for (i, o) in outer.iter().enumerate() {
+                    if ui
+                        .link(RichText::new(o).color(t.muted))
+                        .tip(format!("Goes to {o}."))
+                        .clicked()
+                    {
+                        hit = Some(i);
+                    }
                     ui.label(RichText::new("›").color(t.muted));
                 }
-                let last = j + 1 == trail.len();
-                let text = RichText::new(&self.scopes[k].label).monospace();
-                let text = if last { text.strong().color(t.accent) } else { text };
-                let tip = if last {
-                    "The diagram shown now."
-                } else {
-                    "Shows this level's diagram."
-                };
-                if ui.link(text).tip(tip).clicked() {
-                    go = Some(k);
+                let trail = self.trail();
+                for (j, &k) in trail.iter().enumerate() {
+                    if j > 0 {
+                        ui.label(RichText::new("›").color(t.muted));
+                    }
+                    let last = j + 1 == trail.len();
+                    let label = &self.scopes[k].label;
+                    let text = RichText::new(label);
+                    let text = if last { text.strong().color(t.accent) } else { text };
+                    let tip = if last {
+                        format!("{label}\nThe diagram shown now.")
+                    } else {
+                        "Shows this level's diagram.".to_string()
+                    };
+                    let r = ui.add(
+                        egui::Label::new(text)
+                            .truncate()
+                            .show_tooltip_when_elided(false)
+                            .sense(Sense::click()),
+                    );
+                    let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).tip(tip);
+                    if r.clicked() {
+                        go = Some(k);
+                    }
                 }
-            }
-        });
+            },
+        );
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp)) {
             go = go.or_else(|| self.parent());
         }
@@ -2062,6 +2083,21 @@ impl Viewer {
     #[must_use]
     pub fn shown_signal(&self) -> Option<(&str, usize)> {
         self.xref.as_deref().map(|k| (k, self.xref_at))
+    }
+
+    /// Whether the program's diagram has a block that reads or writes
+    /// `name`: what an I/O card's diagram glyph needs to show anything
+    /// (2026-11-27: a point the program declares and never reads showed
+    /// nothing, so its glyph is off and says why).
+    #[must_use]
+    pub fn has_signal(&self, name: &str) -> bool {
+        let head = name.split(['.', '[']).next().unwrap_or(name);
+        let head = if name.starts_with('%') { name } else { head };
+        let pou = self.scopes.first().map_or(0, |s| s.pou);
+        self.module
+            .pous
+            .get(pou)
+            .is_some_and(|p| p.diagram.nodes.iter().any(|n| names_point(n, head)))
     }
 
     /// The source line that declares the program's variable `name`.
@@ -2409,9 +2445,15 @@ impl Viewer {
         }
         cam.area = area.size();
         if !cam.fitted {
-            // Fit under the glyph strip along the top, so no block opens
-            // under it.
-            let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+            // Fit under the glyph strip along the top and above the corner
+            // controls along the bottom, so no block opens under either.
+            let below = Rect::from_min_max(
+                area.min + Vec2::new(0.0, GLYPH_BAND),
+                Pos2::new(
+                    area.max.x,
+                    (area.max.y - TAP - 2.0 * CORNER_GAP).max(area.min.y + 2.0 * GLYPH_BAND),
+                ),
+            );
             cam.fit(below, size);
             cam.offset.y += GLYPH_BAND;
         }
@@ -2758,6 +2800,7 @@ impl Viewer {
                 .map(|n| n.id),
         );
         let tabs = self.opened_tabs(cam);
+        let titles: Vec<Rect> = tabs.iter().map(|(.., tab)| *tab).collect();
         let rows = self.state_rows(live.as_ref());
         let tables = self.table_rows(live.as_ref());
         if response.hovered()
@@ -2793,7 +2836,34 @@ impl Viewer {
                 "This block has a diagram of its own. Double-click opens it (Alt ] with it picked).",
             );
         }
+        // A variable's block says what it is on hover: its whole value (the
+        // block shows a REAL at three figures) and, for an I/O point, where
+        // it is, which the dashed outline of a simulated one does not say.
         let io = self.io_marks();
+        if response.hovered()
+            && let Some(p) = hover
+            && let (x, y) = cam.to_world(p)
+            && let Some(n) = self.shown().node_at(x, y)
+            && let NodeKind::Read { path } | NodeKind::Write { path } = &self.shown().node(n).kind
+        {
+            let mut tip = Vec::new();
+            if let Some(Some(Value::Real(r))) = seen
+                .as_ref()
+                .map(|l| l.values[n.0 as usize].first().copied().flatten())
+            {
+                tip.push(format!("{path} = {}", Value::Real(r)));
+            }
+            if let Some((_, d)) = io.iter().find(|(id, _)| *id == n) {
+                tip.push(if d.is_simulated() {
+                    "Simulated: not assigned to a device yet".to_string()
+                } else {
+                    format!("On {}", d.label())
+                });
+            }
+            if !tip.is_empty() {
+                response.clone().on_hover_text_at_pointer(tip.join("\n"));
+            }
+        }
         let pou = &self.module.pous[self.scopes[self.scope].pou].name;
         let old = self
             .baseline
@@ -2808,6 +2878,7 @@ impl Viewer {
             self.shown(),
             seen.as_ref(),
             Marks {
+                flow: (self.flow && page_visible()).then(|| ui.input(|i| i.time)),
                 pick,
                 lines: &self.highlight,
                 lit: lit.as_ref(),
@@ -2823,6 +2894,7 @@ impl Viewer {
                 tables: &tables,
                 far: self.zoom_far(),
                 io: &io,
+                titles: &titles,
             },
         );
         for (_, title, around, tab) in &tabs {
@@ -2987,15 +3059,57 @@ fn font(size: f32) -> FontId {
     FontId::monospace(size)
 }
 
-/// A wire's colour and width: TRUE in the brand yellow on either page,
-/// FALSE muted, a value in the page's ink, no scan faint.
+/// A wire's colour and width: TRUE green (a darker green on the light
+/// page, and heavier), FALSE a thin flat muted grey, a value in the page's
+/// ink, no scan faint. Yellow is never a signal state (Nick, 2026-11-27).
 fn wire_color(t: &Theme, v: Option<Value>) -> (Color32, f32) {
     match v {
-        Some(Value::Bool(true)) => (YELLOW, 2.5),
-        Some(Value::Bool(false)) => (t.muted, 1.5),
+        Some(Value::Bool(true)) => (t.ink(brand::GREEN), if t.dark { 2.5 } else { 3.0 }),
+        Some(Value::Bool(false)) => (t.muted, 1.0),
         Some(_) => (t.fg, 1.5),
         None => (t.idle, 1.2),
     }
+}
+
+/// The width a tunnel's tag has from `at` (rightwards if `right`, else
+/// leftwards) before it would run under a block.
+fn tag_room(d: &Diagram, cam: Cam, at: Pos2, size: f32, right: bool) -> f32 {
+    let band = (at.y - size * 0.6)..(at.y + size * 0.6);
+    let mut room = f32::INFINITY;
+    for n in &d.nodes {
+        let r = cam.rect(&n.rect);
+        if r.max.y < band.start || r.min.y > band.end {
+            continue;
+        }
+        if right && r.min.x >= at.x - 1.0 {
+            room = room.min(r.min.x - at.x - 2.0);
+        } else if !right && r.max.x <= at.x + 1.0 {
+            room = room.min(at.x - r.max.x - 2.0);
+        } else if r.min.x < at.x && r.max.x > at.x {
+            return 0.0;
+        }
+    }
+    room
+}
+
+/// A tunnel's tag, cut with an ellipsis to `room`, or not drawn when
+/// hardly any of it would show: it never lies over a block.
+fn tag_text(
+    painter: &egui::Painter,
+    at: Pos2,
+    align: Align2,
+    text: &str,
+    size: f32,
+    room: f32,
+    color: Color32,
+) {
+    let g = fitted(painter, text, font(size), color, f32::INFINITY);
+    // Whole or not at all: a tag cut to an ellipsis names nothing.
+    if g.size().x > room {
+        return;
+    }
+    let top_left = align.anchor_size(at, g.size()).min;
+    painter.galley(top_left, g, color);
 }
 
 fn bezier(painter: &egui::Painter, a: Pos2, b: Pos2, z: f32, color: Color32, width: f32) {
@@ -3009,6 +3123,147 @@ fn bezier(painter: &egui::Painter, a: Pos2, b: Pos2, z: f32, color: Color32, wid
 }
 
 /// The scope that calls scope `k` (`m.t.` → `m.`, `m.` → the program).
+/// How a TRUE wire is told from a FALSE one: glow, weight and motion as
+/// well as hue (Nick, 2026-11-27). `flow` is the page time while the
+/// program runs and the page is visible; `None` stills the dots.
+#[derive(Clone, Copy)]
+struct Flow {
+    time: Option<f64>,
+    /// The visible part of the diagram: off-screen wires are not glowed.
+    area: Rect,
+}
+
+/// The wire's four control points, as [`bezier`] draws it.
+fn wire_points(a: Pos2, b: Pos2, z: f32) -> [Pos2; 4] {
+    let dx = ((b.x - a.x).abs() * 0.5).max(30.0 * z);
+    [a, a + Vec2::new(dx, 0.0), b - Vec2::new(dx, 0.0), b]
+}
+
+/// A TRUE wire's glow (dark page: two wide faint under-strokes) and its
+/// slow even dots source to sink (both pages); the core stroke is drawn by
+/// the caller. A wire off the screen draws nothing.
+fn true_wire_extras(
+    painter: &egui::Painter,
+    t: &Theme,
+    pts: [Pos2; 4],
+    z: f32,
+    core: (Color32, f32),
+    f: f32,
+    flow: Flow,
+) {
+    let bounds = Rect::from_points(&pts).expand(8.0);
+    if !flow.area.intersects(bounds) {
+        return;
+    }
+    let (color, width) = core;
+    let w = width * z.max(0.5);
+    if t.dark {
+        for (k, alpha) in [(5.0, 0.08), (2.5, 0.18)] {
+            painter.add(CubicBezierShape::from_points_stroke(
+                pts,
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(w * k, color.gamma_multiply(alpha * f)),
+            ));
+        }
+    }
+    let Some(time) = flow.time else { return };
+    if z <= 0.35 {
+        return;
+    }
+    let shape = CubicBezierShape::from_points_stroke(pts, false, Color32::TRANSPARENT, Stroke::NONE);
+    let len = (pts[3] - pts[0]).length().max(1.0);
+    // One dot every 36 points of diagram, drifting 14 points a second.
+    let gap = 36.0 * z;
+    let n = (len / gap).ceil().max(1.0);
+    #[allow(clippy::cast_possible_truncation)]
+    let drift = ((time * f64::from(14.0 * z / gap)).fract()) as f32;
+    let dot = Color32::WHITE;
+    for i in 0..n as u32 {
+        let u = (i as f32 + drift) / n;
+        painter.circle_filled(shape.sample(u), (2.0 * z).max(1.6), dot.gamma_multiply(0.85 * f));
+    }
+    painter
+        .ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
+}
+
+/// Whether the page is on screen: a hidden tab animates nothing. Always
+/// true off the web.
+fn page_visible() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|w| w.document())
+            .is_none_or(|d| !d.hidden())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        true
+    }
+}
+
+/// A block's brief wash when its BOOL flips: green to TRUE, grey to
+/// FALSE, easing out over [`FLIP_S`]. The first value seen is no flip.
+fn flip_flash(
+    painter: &egui::Painter,
+    key: (u32, u32, u32),
+    on: bool,
+    r: Rect,
+    radius: CornerRadius,
+    t: &Theme,
+) {
+    const FLIP_S: f64 = 0.45;
+    let ctx = painter.ctx();
+    let now = ctx.input(|i| i.time);
+    let id = egui::Id::NULL.with(("flip", key));
+    let (_, at) = ctx.data_mut(|d| {
+        let e = d.get_temp_mut_or_insert_with(id, || (on, f64::NEG_INFINITY));
+        if e.0 != on {
+            *e = (on, now);
+        }
+        *e
+    });
+    let age = now - at;
+    if (0.0..FLIP_S).contains(&age) {
+        #[allow(clippy::cast_possible_truncation)]
+        let k = (1.0 - age / FLIP_S) as f32;
+        let c = if on { t.ink(brand::GREEN) } else { t.muted };
+        painter.rect_filled(r, radius, c.gamma_multiply(0.35 * k));
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+}
+
+/// Diagram units between the grid's dots.
+const GRID: f32 = 24.0;
+
+/// A faint dot grid on the ground, a step or two off it, panned and zoomed
+/// with the diagram and gone as the zoom gets small.
+fn dot_grid(painter: &egui::Painter, t: &Theme, area: Rect, cam: Cam) {
+    let z = cam.zoom;
+    let fade = ((z - 0.3) / 0.35).clamp(0.0, 1.0);
+    if fade <= 0.0 {
+        return;
+    }
+    let mut step = GRID * z;
+    while step < 14.0 {
+        step *= 2.0;
+    }
+    let color = t.bg.lerp_to_gamma(t.fg, 0.14 * fade);
+    let origin = cam.to_screen(0.0, 0.0);
+    let first = |o: f32, lo: f32| o + ((lo - o) / step).ceil() * step;
+    let radius = (0.9 * z).clamp(0.7, 1.4);
+    let mut y = first(origin.y, area.top());
+    while y <= area.bottom() {
+        let mut x = first(origin.x, area.left());
+        while x <= area.right() {
+            painter.circle_filled(Pos2::new(x, y), radius, color);
+            x += step;
+        }
+        y += step;
+    }
+}
+
 fn parent_of(scopes: &[Scope], k: usize) -> Option<usize> {
     let prefix = scopes.get(k)?.prefix.strip_suffix('.')?;
     let up = prefix
@@ -3239,6 +3494,8 @@ fn elide(painter: &egui::Painter, text: &str, size: f32, max_w: f32) -> String {
 /// What [`draw`] marks on the diagram beside the scan.
 #[derive(Clone, Copy)]
 struct Marks<'a> {
+    /// The page time while the program runs and the page is visible.
+    flow: Option<f64>,
     pick: Option<Pick>,
     /// Source lines the explanation cites.
     lines: &'a [u32],
@@ -3273,6 +3530,9 @@ struct Marks<'a> {
     /// The I/O blocks that are simulated (dashed, a SIM badge) or on a
     /// device (solid, naming it) ([`Viewer::io_marks`]).
     io: &'a [(NodeId, crate::assign::Designation)],
+    /// The tabs that title the sections drawn, on screen: an I/O line is
+    /// not drawn over one.
+    titles: &'a [Rect],
 }
 
 /// One row of a table block, as [`draw`] paints it.
@@ -3327,7 +3587,7 @@ fn draw_table_row(
         let (fill, ink, edge) = if cell.stops {
             (brand::OFF_RED, t.ink(brand::RED), brand::RED)
         } else if lit {
-            (YELLOW, BLACK, YELLOW)
+            (brand::GREEN, BLACK, brand::GREEN)
         } else {
             (t.shade, t.fg, t.edge)
         };
@@ -3479,7 +3739,7 @@ fn paused_outline(painter: &egui::Painter, r: Rect, z: f32) {
 }
 
 /// An I/O block's designation: a simulated one is outlined with dashes
-/// and says SIM above its corner; one on a device keeps its solid outline
+/// and, where there is room over it, says SIM; one on a device keeps its solid outline
 /// and names the device and channel there.
 fn io_mark(
     painter: &egui::Painter,
@@ -3496,6 +3756,8 @@ fn io_mark(
     }
     if let Some((line, color)) = line {
         // One line over the block's top edge, cut to the block's width.
+        // The caller offers it only where nothing sits above to be
+        // overprinted ([`io_line_clear`]).
         let size = 9.0 * z;
         painter.text(
             r.left_top() - Vec2::new(0.0, 2.0 * z),
@@ -3505,6 +3767,26 @@ fn io_mark(
             color,
         );
     }
+}
+
+/// Whether the strip over block `n`'s top edge, where an I/O line is
+/// drawn, is clear of every other block and of the region titles. With the
+/// rows close together it often is not, and the line is left to the hover.
+fn io_line_clear(d: &Diagram, cam: Cam, titles: &[Rect], n: &helmsman_diagram::Node) -> bool {
+    let r = cam.rect(&n.rect);
+    let z = cam.zoom;
+    let strip = Rect::from_min_max(
+        Pos2::new(r.left(), r.top() - 13.0 * z),
+        Pos2::new(r.right(), r.top()),
+    );
+    !d.nodes
+        .iter()
+        .any(|o| o.id != n.id && cam.rect(&o.rect).intersects(strip))
+        && !titles.iter().any(|t| t.intersects(strip))
+        && !d.regions.iter().any(|g| {
+            let band = helmsman_diagram::Rect { h: LABEL_H, ..g.rect };
+            cam.rect(&band).intersects(strip)
+        })
 }
 
 fn draw(
@@ -3517,6 +3799,7 @@ fn draw(
     marks: Marks<'_>,
 ) {
     let Marks {
+        flow,
         pick,
         lines,
         lit,
@@ -3532,6 +3815,7 @@ fn draw(
         tables,
         far,
         io,
+        titles,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -3551,6 +3835,7 @@ fn draw(
         .map(|w| (w.to, w.inp))
         .collect();
     painter.rect_filled(area, CornerRadius::ZERO, t.bg);
+    dot_grid(painter, t, area, cam);
     let text = z > 0.35;
     let ghost_texts = ghosts.map_or_else(Vec::new, |(old, removed)| ghost_tags(old, removed, d, added));
     // Regions, outermost first.
@@ -3559,7 +3844,11 @@ fn draw(
         let f = strength(lit.is_some_and(|l| l.region(r.id)));
         let rect = cam.rect(&r.rect);
         let (stroke, fill, state) = match gate {
-            Some(Gate::Open(n)) => (YELLOW, YELLOW.gamma_multiply(0.06), format!("taken ×{n}")),
+            Some(Gate::Open(n)) => (
+                t.ink(brand::GREEN),
+                brand::GREEN.gamma_multiply(0.06),
+                format!("taken ×{n}"),
+            ),
             Some(Gate::Closed) => (
                 t.muted.gamma_multiply(0.7),
                 Color32::TRANSPARENT,
@@ -3639,22 +3928,36 @@ fn draw(
             let stub = 14.0 * z;
             let stroke = Stroke::new(width * z.max(0.5), c.gamma_multiply(f));
             painter.line_segment([pa, pa + Vec2::new(stub, 0.0)], stroke);
-            painter.text(
-                pa + Vec2::new(stub + 3.0 * z, 0.0),
+            let size = 9.5 * z;
+            let at = pa + Vec2::new(stub + 3.0 * z, 0.0);
+            let room = tag_room(d, cam, at, size, true);
+            tag_text(
+                painter,
+                at,
                 Align2::LEFT_CENTER,
-                format!("{name} ▸"),
-                font(9.5 * z),
+                &format!("{name} ▸"),
+                size,
+                room,
                 c.gamma_multiply(f),
             );
             painter.line_segment([end - Vec2::new(stub, 0.0), end], stroke);
-            painter.text(
-                end - Vec2::new(stub + 3.0 * z, 0.0),
+            let size = 9.5 * z;
+            let at = end - Vec2::new(stub + 3.0 * z, 0.0);
+            let room = tag_room(d, cam, at, size, false);
+            tag_text(
+                painter,
+                at,
                 Align2::RIGHT_CENTER,
-                format!("▸ {name}"),
-                font(9.5 * z),
+                &format!("▸ {name}"),
+                size,
+                room,
                 c.gamma_multiply(f),
             );
         } else {
+            if v == Some(Value::Bool(true)) && live.is_some() {
+                let area_flow = Flow { time: flow, area };
+                true_wire_extras(painter, t, wire_points(pa, end, z), z, (c, width), f, area_flow);
+            }
             bezier(painter, pa, end, z, c.gamma_multiply(f), width);
         }
         if w.negated {
@@ -3671,8 +3974,35 @@ fn draw(
             // At most the wire's own length (and a block's width) wide.
             let room = (end.x - pa.x - 8.0 * z).clamp(48.0 * z, 120.0 * z);
             let g = fitted(painter, &label, font(10.0 * z), t.fg.gamma_multiply(f), room);
-            let at = pa + Vec2::new(4.0, -7.0) * z;
-            painter.galley(at - Vec2::new(0.0, g.size().y / 2.0), g, t.fg);
+            // Where it overlaps no block: above the wire's start, below
+            // it, then along the wire; none clear and the badge is
+            // dropped, since the block at the end shows the value.
+            let mid = Pos2::new(f32::midpoint(pa.x, end.x), f32::midpoint(pa.y, end.y));
+            let candidates = [
+                pa + Vec2::new(4.0, -9.0) * z,
+                pa + Vec2::new(4.0, 9.0) * z,
+                mid + Vec2::new(-g.size().x / 2.0, -9.0 * z),
+                mid + Vec2::new(-g.size().x / 2.0, 9.0 * z),
+            ];
+            let clear = |top_left: Pos2| {
+                let badge = Rect::from_min_size(top_left, g.size()).expand2(Vec2::new(2.0, 1.0) * z);
+                !d.nodes.iter().any(|n| cam.rect(&n.rect).intersects(badge))
+            };
+            let Some(top_left) = candidates
+                .into_iter()
+                .map(|at| at - Vec2::new(0.0, g.size().y / 2.0))
+                .find(|&tl| clear(tl))
+            else {
+                continue;
+            };
+            // A ground of the page's own, so a wire passing under the
+            // number does not strike through it.
+            painter.rect_filled(
+                Rect::from_min_size(top_left, g.size()).expand2(Vec2::new(2.0, 0.0) * z),
+                CornerRadius::same(2),
+                t.bg.gamma_multiply(0.85 * f),
+            );
+            painter.galley(top_left, g, t.fg);
         }
     }
     // Nodes.
@@ -3701,16 +4031,9 @@ fn draw(
         // of its own; an operator, function or literal is one shade.
         let two_tone = n.kind.headed();
         let deeper = opens.contains(&n.id);
-        if deeper {
-            // Two cards behind it, each a step down and right: there is
-            // more under this block.
-            for k in [2.0, 1.0] {
-                let back = r.translate(Vec2::splat(3.5 * k * z));
-                painter.rect_filled(back, radius, t.bg);
-                painter.rect_filled(back, radius, head.gamma_multiply(0.45 * fade));
-                painter.rect_stroke(back, radius, Stroke::new(1.0 * z, t.edge), StrokeKind::Outside);
-            }
-        }
+        // A block that opens carries the double chevron in its header
+        // (below), inside its own rect: no cards behind it, which read as
+        // a rendering bug (Nick, 2026-11-27).
         if two_tone {
             painter.rect_filled(r, radius, t.panel.gamma_multiply(fade.max(0.7) * on_path));
             painter.rect_filled(
@@ -3746,13 +4069,14 @@ fn draw(
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        let diagram = d;
         if let Some(d) = designation {
             let tag = ghost_texts
                 .iter()
                 .find(|(h, _)| *h == n.id)
                 .map(|(_, g)| g.as_str());
             // A diff tag joins the designation's line rather than printing over it.
-            let line = text.then(|| match tag {
+            let line = (text && io_line_clear(diagram, cam, titles, n)).then(|| match tag {
                 Some(g) => (format!("{} · {g}", d.label()), brand::RED),
                 None => (d.label(), t.muted),
             });
@@ -3818,7 +4142,18 @@ fn draw(
         if far_fold {
             // On the block's body (a headed block) or on a dimmed yellow: the
             // page's ink reads on both.
-            let title_ink = if two_tone || !ran { t.fg } else { ink };
+            // On a dimmed yellow head, whichever of the page's ink and
+            // black stands further from the head as it is drawn: the
+            // dimmed head and the page's ink read 1.7 to 1 (2026-11-27).
+            let title_ink = if two_tone {
+                t.fg
+            } else {
+                let under = t.bg.lerp_to_gamma(head, fade.clamp(0.0, 1.0));
+                let c = |k: Color32| {
+                    crate::theme::contrast([k.r(), k.g(), k.b()], [under.r(), under.g(), under.b()])
+                };
+                if c(t.fg) >= c(BLACK) { t.fg } else { BLACK }
+            };
             // The title at the floor size on screen, whatever the zoom:
             // the block was laid out to hold it ([`zoom_fold`]). A section
             // the scan did not run is dimmed with the block.
@@ -3851,10 +4186,10 @@ fn draw(
             }
         }
         for (k, row) in states.into_iter().flatten().enumerate() {
-            // One chip per state: the one that ran lit in the brand yellow.
+            // One chip per state: the one that ran lit green.
             let c = cam.rect(&layout::body_row(n, k));
             let (fill, ink) = match row.on {
-                Some(true) => (YELLOW, BLACK),
+                Some(true) => (brand::GREEN, BLACK),
                 _ => (t.shade, t.fg),
             };
             let chip = CornerRadius::same(3);
@@ -3864,7 +4199,11 @@ fn draw(
                 chip,
                 Stroke::new(
                     1.0 * z.max(0.6),
-                    if row.on == Some(true) { YELLOW } else { t.edge },
+                    if row.on == Some(true) {
+                        brand::GREEN
+                    } else {
+                        t.edge
+                    },
                 ),
                 StrokeKind::Inside,
             );
@@ -3932,7 +4271,7 @@ fn draw(
                         Align2::LEFT_CENTER,
                         name,
                         font(10.0 * z),
-                        t.muted.gamma_multiply(on_path),
+                        t.muted.lerp_to_gamma(t.fg, 0.55).gamma_multiply(on_path),
                     );
                 }
             }
@@ -3947,7 +4286,7 @@ fn draw(
                         Align2::RIGHT_CENTER,
                         name,
                         font(10.0 * z),
-                        t.muted.gamma_multiply(on_path),
+                        t.muted.lerp_to_gamma(t.fg, 0.55).gamma_multiply(on_path),
                     );
                 }
             }
@@ -3956,9 +4295,19 @@ fn draw(
                 && let Some(v) = live.and_then(|l| l.values[n.id.0 as usize].first().copied().flatten())
                 && let Some(label) = value_text(d, n.id, v, vars)
             {
+                if let Value::Bool(on) = v {
+                    flip_flash(
+                        painter,
+                        (n.id.0, n.rect.x.to_bits(), n.rect.y.to_bits()),
+                        on,
+                        r,
+                        radius,
+                        t,
+                    );
+                }
                 let color = match v {
                     Value::Bool(true) => t.ink(brand::GREEN),
-                    Value::Bool(false) => t.ink(brand::RED),
+                    Value::Bool(false) => t.muted,
                     _ => t.fg,
                 };
                 // Elided to the block, never spilling out of it.
@@ -4715,5 +5064,21 @@ mod ghost_tests {
         assert!(long.ends_with('…'));
         assert_eq!(ghost_name("größenänderungswert_für_zone"), "größenänderungswe…");
         assert_eq!(ghost_name(""), "");
+    }
+}
+
+/// Whether block `n` reads or writes the variable `head` or is its
+/// instance (an address, `%IX0.0`, is one name, dots and all).
+fn names_point(n: &helmsman_diagram::Node, head: &str) -> bool {
+    match &n.kind {
+        NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
+            path.eq_ignore_ascii_case(head)
+                || path
+                    .split(['.', '['])
+                    .next()
+                    .is_some_and(|h| h.eq_ignore_ascii_case(head))
+        }
+        NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
+        _ => false,
     }
 }

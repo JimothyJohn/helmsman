@@ -713,7 +713,7 @@ mod in_the_page {
         let mut v = mine();
         let revs = v.proj.revisions().len();
         let new = LAMP.replace("lamp := start;", "lamp := start; (* same *)");
-        instruct(&mut v, "comment it", &[&st(&new)]);
+        crate::instruct_tests::instruct_applied(&mut v, "comment it", &[&st(&new)]);
         let o = v.instruct.outcome.clone().unwrap();
         assert_eq!(o.kind, Kind::Applied, "{o:?}");
         assert_eq!(v.proj.files["main.st"], new);
@@ -754,6 +754,8 @@ mod in_the_page {
         // Clicked elsewhere since: the scope it was sent with holds.
         v.selection = None;
         crate::instruct_tests::reply(&mut v, &st(&said));
+        assert_eq!(v.proj.files["main.st"], new, "held, not written");
+        crate::instruct_tests::apply(&mut v);
         assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
         assert_eq!(v.proj.files["main.st"], said);
         let r = v.proj.revisions().last().unwrap();
@@ -763,6 +765,11 @@ mod in_the_page {
         v.proj.current_text_mut().unwrap().push_str("(* mine *)\n");
         let theirs = v.proj.files["main.st"].replace("(* mine *)", "(* theirs *)");
         instruct(&mut v, "again", &[&st(&theirs)]);
+        assert!(
+            v.proj.files["main.st"].contains("(* mine *)"),
+            "held: the answer is not written over the edit"
+        );
+        crate::instruct_tests::apply(&mut v);
         assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
         let all = v.proj.revisions();
         assert_eq!(all.len(), revs + 4);
@@ -820,9 +827,9 @@ mod in_the_page {
     fn a_change_that_turns_a_requirement_test_red_is_written_and_names_the_test() {
         let mut v = mine();
         let revs = v.proj.revisions().len();
-        instruct(
+        crate::instruct_tests::instruct_applied(
             &mut v,
-            "invert",
+            "invert the lamp",
             &[&st(&LAMP.replace("lamp := start;", "lamp := NOT start;"))],
         );
         let o = v.instruct.outcome.clone().unwrap();
@@ -863,8 +870,8 @@ mod in_the_page {
             "{s:?}"
         );
         assert!(s.label().starts_with("Editing: block "), "{}", s.label());
-        // The block's answer lands in its lines.
-        instruct(
+        // The block's answer lands in its lines, once applied.
+        crate::instruct_tests::instruct_applied(
             &mut v,
             "debounce",
             &[&format!(

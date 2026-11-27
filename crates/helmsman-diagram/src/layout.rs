@@ -20,26 +20,26 @@ use crate::model::{Diagram, Node, NodeId, Rect, RegionId};
 
 /// Width of one character of a label, in diagram units.
 pub const CHAR_W: f32 = 7.0;
-pub const HEADER: f32 = 20.0;
-pub const PORT_ROW: f32 = 16.0;
-const COL_GAP: f32 = 36.0;
-const ROW_GAP: f32 = 10.0;
-const STMT_GAP: f32 = 18.0;
+pub const HEADER: f32 = 17.0;
+pub const PORT_ROW: f32 = 14.0;
+const COL_GAP: f32 = 26.0;
+const ROW_GAP: f32 = 6.0;
+const STMT_GAP: f32 = 22.0;
 /// Between statements on one row.
-const STMT_GAP_X: f32 = 48.0;
+const STMT_GAP_X: f32 = 32.0;
 /// A row of statements wraps past this width (diagram units): about one
 /// screen, so a program reads as rows of statements, not one column.
 pub const WRAP_W: f32 = 1000.0;
-const PAD: f32 = 12.0;
+const PAD: f32 = 8.0;
 /// Room for a region's label above its statements.
-pub const LABEL_H: f32 = 22.0;
+pub const LABEL_H: f32 = 20.0;
 /// Room under a group's title for the small label a block's top edge may
 /// carry (a wiring or SIM mark, a diff tag), so it never meets the title.
 pub const TAG_H: f32 = 14.0;
 const MIN_BOX_W: f32 = 120.0;
 
 /// Vertical padding of a headerless block, above and below its port rows.
-const BARE_PAD: f32 = 4.0;
+const BARE_PAD: f32 = 3.0;
 
 /// What a block carries between its pins, beside their names: `rows`
 /// lines of text, none longer than `chars` characters. A fold that is more
@@ -73,14 +73,28 @@ fn size(n: &Node, body: Body) -> (f32, f32) {
     let (label, ins, outs) = (&n.label, &n.ins, &n.outs);
     let port_chars =
         ins.iter().map(String::len).max().unwrap_or(0) + outs.iter().map(String::len).max().unwrap_or(0);
-    let chars = label.chars().count().max(port_chars + 2) as f32;
+    let chars = if n.kind.headed() {
+        label.chars().count().max(port_chars + 2)
+    } else {
+        // A bare block's label shares its row with the pin names: room for
+        // both, so `IN1` never prints over `LIMIT`.
+        label.chars().count() + if port_chars > 0 { port_chars + 3 } else { 0 }
+    } as f32;
     let rows = ins.len().max(outs.len()).max(body.rows).max(1) as f32;
     let h = if n.kind.headed() {
-        HEADER + rows * PORT_ROW + 4.0
+        HEADER + rows * PORT_ROW + 3.0
     } else {
         rows * PORT_ROW + 2.0 * BARE_PAD
     };
-    let mut w = (chars * CHAR_W + 20.0).max(56.0);
+    let mut w = (chars * CHAR_W + 14.0).max(56.0);
+    if matches!(n.kind, crate::model::NodeKind::Read { .. }) {
+        // An input carries its control or value over the body: `name FALSE`
+        // as a switch, a number of a few digits. Room for both, so the text
+        // is not cut at the fit zoom.
+        w = w
+            .max((label.chars().count() + 6) as f32 * 5.0 + 14.0)
+            .max(8.0 * CHAR_W + 14.0);
+    }
     if body.rows > 0 {
         w = w.max(names_w(ins) + body.chars as f32 * CHAR_W + 2.0 * BODY_GAP + names_w(outs));
     }

@@ -8,7 +8,9 @@ usage: python3 -I scripts/canvas-smoke.py [--dist DIR] [--out DIR] [--box]
                                      needs cargo build -p helmsman-plc)
 
 Serves DIR (default target/canvas-dist) on a free loopback port and drives
-?playground: panes and tabs by hotkey and click, the view keys (L the Log,
+?playground: a first visit (nothing kept, the old front door's key kept,
+an old ?playground&front link) opening on the editor, panes and tabs by
+hotkey and click, the view keys (L the Log,
 T the Trend, Z fit, Space run and stop), the side pane's ribbon, a typed
 edit, Deploy, the diagram's "why" click, Scan for Device and a found device
 added by name, the Monitor, light mode, and a phone-width Monitor.
@@ -111,62 +113,91 @@ def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
 # Parts of the 1400x860 layout that hold still while a program runs, in
 # points (x, y, width, height): a step that must change one is checked
 # against it. The clock, the diagram's values and the trend never hold.
+# Re-measured with the native harness at 1400 x 860 on 2026-11-27, when
+# the chrome started to float 8 pt in from the edges under a taller header
+# (docs/UI.md "Look and feel").
 LEFT = (0, 100, 300, 200)
 # Where a right pane's tabs show once one is docked there.
-RIGHT_TABS = (1180, 56, 210, 30)
+RIGHT_TABS = (1180, 96, 210, 42)
 # The trend is the bottom strip from the left pane's edge since 2026-11-24
 # (the left pane has the page's whole height).
-BOTTOM_TABS = (330, 545, 1070, 315)
+BOTTOM_TABS = (323, 585, 1070, 270)
 # The Log (the Messages, renamed 2026-11-26): a tab of the bottom panel, its
-# list to the right of the panel's tab strip (the strip at x 323..356 with
-# the left pane at 307 pt); layout()'s msgs=1 shows it. What a deploy says
+# list to the right of the panel's tab strip (the strip at x 331..364 with
+# the left pane's frame ending near 298 pt); layout()'s msgs=1 shows it. What a deploy says
 # is there, not in a line under the header.
-MESSAGES = (360, 575, 1030, 280)
+MESSAGES = (364, 589, 1020, 250)
 # The diagram.
-DIAGRAM = (330, 60, 1000, 500)
+DIAGRAM = (330, 130, 1000, 440)
+# View › Pane layouts…'s popup, in the middle of the page.
+LAYOUTS_POPUP = (540, 290, 320, 340)
 # The Devices tab's Scan for Device under the (empty) list, the simulated
 # E1213 it finds under it, and the small form's Add (2026-11-26). Measured
 # with the native harness at 1400 x 860 points.
-SCAN_FOR_DEVICE = (85, 181)
-FOUND_DEVICE = (150, 213)
-QUICK_ADD = (36, 437)
+SCAN_FOR_DEVICE = (93, 235)
+FOUND_DEVICE = (151, 269)
+QUICK_ADD = (36, 499)
 # The left pane's hide button on its ribbon, at the pane's vertical middle,
 # and shut, the strip's expand glyph at the same height (2026-11-26).
-RIBBON_LEFT = (288, 456)
-STRIP_LEFT = (28, 456)
-# The simulation's run state in the diagram's header ("running · 2.1s").
-RUN_STATE = (870, 60, 190, 32)
+RIBBON_LEFT = (280, 470)
+STRIP_LEFT = (28, 470)
+# The simulation's run state in the diagram's header ("running", its clock
+# beside it).
+RUN_STATE = (900, 92, 190, 32)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt).
-TAB_AGENT = (23, 70)
-TAB_CODE = (60, 70)
-TAB_IO = (97, 70)
-# One tab docked on the right: after the pane's chevron.
-TAB_RIGHT_FIRST = (1229, 71)
+TAB_AGENT = (32, 118)
+TAB_CODE = (74, 118)
+TAB_IO = (114, 118)
+# One tab docked on the right: the first of its row.
+TAB_RIGHT_FIRST = (1218, 118)
 # The fold arrow of the Code tab's second line, in the gutter.
-FOLD_LINE_2 = (14, 168)
+FOLD_LINE_2 = (24, 245)
 # The one menu (the three-line glyph, 2026-11-23), its four submenus, the
 # View submenu's "Pane layouts…" item and, on a box's page, its Proposals
 # item (the box's View menu has two more rows above Pane layouts:
 # Proposals and Simulate in this browser). The submenus open to the right
 # of the menu. Measured with the native harness, 1400 x 860 points.
-MENU = (182, 26)
-MENU_FILE = (201, 64)
-MENU_EDIT = (202, 92)
-MENU_VIEW = (207, 120)
-MENU_HELP = (206, 148)
-VIEW_PANE_LAYOUTS = (396, 505)
+MENU = (190, 40)
+MENU_FILE = (215, 78)
+MENU_EDIT = (215, 108)
+MENU_VIEW = (215, 138)
+MENU_HELP = (215, 168)
+VIEW_PANE_LAYOUTS = (404, 545)
 # The box's View menu lists the Help tab above Pane layouts (2026-11-26).
-VIEW_PANE_LAYOUTS_BOX = (396, 615)
+# Re-measured with the native harness on a signed-in box page on
+# 2026-11-27 (`view layouts` at 269..539, 646..676): (396, 615) had become
+# View › Help.
+VIEW_PANE_LAYOUTS_BOX = (404, 661)
 VIEW_PROPOSALS_BOX = (396, 198)
-LAYOUT_DEFAULT = (668, 330)
-LAYOUT_PROGRAMMING = (668, 368)
-HEADER_RIGHT = (1150, 8, 200, 36)
+LAYOUT_DEFAULT = (669, 324)
+LAYOUT_PROGRAMMING = (669, 363)
+# The header's right end (Editor | Monitor, Sign in or the user, Help),
+# its items centred at y 40 under the floating chrome (2026-11-27).
+HEADER_RIGHT = (1130, 20, 260, 40)
+# The header's Editor | Monitor toggle, each side.
+TOGGLE_EDITOR = (1255, 40)
+TOGGLE_MONITOR = (1312, 40)
 MOD = "ControlOrMeta"
 # The header's Sign in, and the Proposals screen's "Sign in…" on a box
-# signed out, in points (measured from the smoke's screenshots, 2026-11-27).
-HEADER_SIGN_IN = (1309, 17)
-PROPOSALS_SIGN_IN = (55, 143)
+# signed out, in points. Re-measured on 2026-11-27 under the floating
+# chrome (the header is 85 pt tall, its items centred at y 40): the
+# header's from the native harness (`sign in` at 1263..1341, 25..55), the
+# Proposals screen's from the smoke's screenshot.
+HEADER_SIGN_IN = (1302, 40)
+PROPOSALS_SIGN_IN = (54, 181)
+# The Monitor's bottom panel: its Trend tab, the first of the strip at the
+# page's left (native harness, 1400 x 860: `bottom trend` 24..57, 591..624).
+MONITOR_TREND_TAB = (40, 607)
+# The Deploy sheet ("What changes on the machine") on a box: its Cancel.
+# The sheet's Deploy and Cancel are pinned to its bottom edge, which sits a
+# fixed 58 pt above the window's (what it shows scrolls above them), so
+# the button is found from the window's height, whatever the sheet holds:
+# measured with the native harness at 1400 x 860 and 1400 x 1180 for two
+# programs on 2026-11-27 (`deploy sheet cancel` at 377..457, H-88..H-58).
+# The program has no I/O, so the box needs no map.
+SHEET_CANCEL = (417, H - 73)
+SHEET_PROGRAM = "PROGRAM tally\nVAR\n  n : INT;\nEND_VAR\nn := n + 1;\nEND_PROGRAM\n"
 # The box sign-in in the browser build is a real HTML form, so the
 # browser's password manager can fill and save it (Nick, 2026-11-26).
 LOGIN = "#helmsman-login"
@@ -235,12 +266,6 @@ class Run:
 # button sits), in points.
 AGENT_DESIGN = (78, 308)
 
-# The front door's "Fail the high switch" and "Open the editor", in points
-# at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
-FRONT_FAIL_HIGH = (596, 688)
-FRONT_OPEN_EDITOR = (1264, 33)
-
-
 def open_app(ctx, base, query, lay):
     page = ctx.new_page()
     page.goto(base + "/__seed", wait_until="load")
@@ -277,6 +302,9 @@ def playground(ctx, base, out):
     # This build has no free chat: the tab says so (UNAVAILABLE_TEXT) and a
     # click or typing on it changes nothing. (With a design entry:
     # "Design a machine..." opens its window; text typed into it shows.)
+    # The pointer off the tab first: the tab's hover eases out (docs/UI.md
+    # "Look and feel", finish 10), which would read as the click's change.
+    r.page.mouse.move(*AGENT_DESIGN); r.wait(400)
     r.step("design-window", lambda: r.click(*AGENT_DESIGN), LEFT, stays=True)
     # (Typing here is no longer a no-op: with no field focused a letter is a
     # view's key, so the page switches views; the tests cover the keys.)
@@ -287,7 +315,9 @@ def playground(ctx, base, out):
         r.click(*MENU); r.wait(300); r.click(*sub); r.wait(500); r.shot(name); r.key("Escape"); r.key("Escape")
     # Help > Show hotkeys writes each shortcut over its button; one more
     # click puts the page back as it was.
-    HELP_HOTKEYS = (322, 311)
+    # (One row higher since Help › Front page went, 2026-11-27; measured
+    # with the native harness under the floating chrome the same day.)
+    HELP_HOTKEYS = (354, 303)
     def hotkeys_menu():
         r.click(*MENU); r.wait(300); r.click(*MENU_HELP); r.wait(500); r.click(*HELP_HOTKEYS)
     r.step("hotkeys-on", hotkeys_menu, LEFT, 700)
@@ -305,7 +335,7 @@ def playground(ctx, base, out):
     r.click(989, 268); r.wait(1000); r.shot("diagram-why")
     # A right click on the GREEN row's AND block opens its menu (Chat about
     # this); Escape shuts it. The diagram never changes the code.
-    r.step("diagram-menu", lambda: r.click(501, 400, "right"), DIAGRAM)
+    r.step("diagram-menu", lambda: r.click(503, 381, "right"), DIAGRAM)
     r.step("diagram-menu-closed", lambda: r.key("Escape"), DIAGRAM, 400)
     # A drag on empty space draws a selection box (the blocks it touches
     # are outlined blue); Escape deselects.
@@ -357,14 +387,17 @@ def playground(ctx, base, out):
         r.click(*MENU); r.wait(500)
         r.click(*MENU_VIEW); r.wait(1500)
         r.click(*VIEW_PANE_LAYOUTS)
-    r.step("pane-layouts", layouts, LEFT, 1500)
+    r.step("pane-layouts", layouts, LAYOUTS_POPUP, 1500)
     r.step("layout-programming", lambda: r.click(*LAYOUT_PROGRAMMING), RIGHT_TABS, 1000)
     layouts(); r.wait(1500)
     r.step("layout-default", lambda: r.click(*LAYOUT_DEFAULT), RIGHT_TABS, 1000)
-    r.click(1313, 26); r.wait(1500); r.shot("monitor")
-    r.click(1243, 26); r.wait(800); r.shot("editor-again")
+    r.click(*TOGGLE_MONITOR); r.wait(1500); r.shot("monitor")
+    r.click(*TOGGLE_EDITOR); r.wait(800); r.shot("editor-again")
     # A program the checker warns of (RETAIN where it is not kept): marked
-    # in the editor and listed under it, and it still compiles.
+    # in the editor and listed under it, and it still compiles. The Code
+    # tab first: the Default layout above leaves the Agent's tab showing,
+    # and the typing went nowhere (seen in pg-42-warned.png, 2026-11-27).
+    r.click(*TAB_CODE); r.wait(400)
     r.click(130, 300); r.key("Control+a")
     r.page.keyboard.type(
         "FUNCTION_BLOCK Latch\nVAR_INPUT set : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\n"
@@ -402,18 +435,58 @@ def playground(ctx, base, out):
     r2 = Run(open_app(ctx, base, "?playground&editor", layout(pane="files", light=1)), out, "pg-light")
     r2.wait(2500); r2.shot("files")
     r2.click(*TAB_AGENT); r2.wait(600); r2.shot("agent-tab")
-    r2.click(1313, 26); r2.wait(1500); r2.shot("monitor")
+    r2.click(*TOGGLE_MONITOR); r2.wait(1500); r2.shot("monitor")
     problems += r2.problems()
     r2.page.close()
-    # A first visit (nothing kept): the front door, its proofs in, then a
-    # fault thrown and the way on to the editor.
-    rf = Run(open_app(ctx, base, "?playground&front", None), out, "pg-front")
-    rf.wait(2800); rf.shot("writing")
-    rf.wait(7000); rf.shot("proved")
-    rf.click(*FRONT_FAIL_HIGH); rf.wait(16000); rf.shot("high-switch-failed")
-    rf.click(*FRONT_OPEN_EDITOR); rf.wait(1500); rf.shot("editor")
-    problems += rf.problems()
-    rf.page.close()
+    return problems
+
+
+# What a browser kept from the front door (gone 2026-11-27): the key it
+# set once the visitor went on to the editor.
+OLD_FRONT_KEY = "helmsman-canvas/front"
+
+
+def first_visit(browser, base, out):
+    """A first visit opens on the editor, on the default project, with no
+    front door (Nick, 2026-11-27): each case in a fresh browser context
+    (nothing kept, or only what the case puts there) must show the left
+    pane exactly as `?playground&editor` with nothing kept shows it. The
+    old front door covered the whole page, so it cannot pass. The cases:
+    the public page's `?playground`, the same with the old front door's key
+    in storage, and an old `?playground&front` link."""
+
+    def visit(prefix, query, kept):
+        ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+        page = ctx.new_page()
+        r = Run(page, out, prefix)
+        page.goto(base + "/__seed", wait_until="load")
+        page.evaluate("localStorage.clear()")
+        for k, v in kept.items():
+            page.evaluate(f"localStorage.setItem({json.dumps(k)}, {json.dumps(v)})")
+        page.goto(base + "/" + query, wait_until="load")
+        r.wait(3500)
+        r.shot("opened")
+        left = r.look(LEFT)
+        # A while later: nothing has come up in front of the editor.
+        r.wait(6000)
+        r.shot("later")
+        later = r.look(LEFT)
+        problems = r.problems()
+        ctx.close()
+        return left, later, problems
+
+    want, _, problems = visit("pg-first-reference", "?playground&editor", {})
+    for prefix, query, kept in (
+        ("pg-first-visit", "?playground", {}),
+        ("pg-first-old-key", "?playground", {OLD_FRONT_KEY: "seen"}),
+        ("pg-first-old-link", "?playground&front", {}),
+    ):
+        left, later, found = visit(prefix, query, kept)
+        problems += found
+        if left != want:
+            problems.append(f"[smoke] {prefix}: {query} with {kept or 'nothing'} kept does not open on the editor as ?playground&editor does (see {prefix}-01-opened.png)")
+        elif later != want:
+            problems.append(f"[smoke] {prefix}: {query} left the editor within 10 s (see {prefix}-02-later.png)")
     return problems
 
 
@@ -514,6 +587,9 @@ def box(ctx, base, out):
     # runs none, so box_projects_tests covers it against a real box.)
     r.page.mouse.move(700, 300); r.wait(200)
     r.step("help-tab", lambda: r.key("Shift+Slash"), LEFT, 800)
+    # The Help tab opens with the keyboard in its question box, where an L
+    # is a letter: a click on the empty diagram gives the view its keys.
+    r.click(900, 450); r.wait(300)
     r.step("key-l-log-shut", lambda: r.key("l"), BOTTOM_TABS, 600)
     r.step("key-l-log", lambda: r.key("l"), BOTTOM_TABS, 600)
     # A pane layout kept on the box (this page's engineer session puts it
@@ -532,6 +608,25 @@ def box(ctx, base, out):
         r.click(*VIEW_PANE_LAYOUTS_BOX)
     r.step("pane-layouts", layouts, LEFT, 2500)
     r.key("Escape"); r.wait(400)
+    # What changes on the machine (docs/UI.md "Show Changes"): a project
+    # made through the API opens on a reload, and Deploy (Ctrl/Cmd Shift
+    # Enter) opens the sheet against the program the box runs: it checks
+    # and replays, and deploys nothing until its own Deploy; Cancel shuts
+    # it with nothing deployed.
+    hdr = {"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base}
+    for method, url, body in (
+        ("post", "/api/projects", {"name": "smoke-sheet"}),
+        ("put", "/api/projects/smoke-sheet/files/main.st", {"text": SHEET_PROGRAM}),
+    ):
+        q = getattr(r.page.request, method)(base + url, data=json.dumps(body), headers=hdr)
+        if q.status not in (200, 201):
+            extra.append(f"{method.upper()} {url} was refused: {q.status} {q.text()[:200]}")
+    r.page.reload(wait_until="load"); r.wait(5000)
+    r.step("deploy-sheet", lambda: r.key(f"Shift+{MOD}+Enter"), DIAGRAM, 3000)
+    r.step("deploy-sheet-cancel", lambda: r.click(*SHEET_CANCEL), DIAGRAM, 1000)
+    deployed = [u for u in r.urls if u.endswith("/deploy")]
+    if deployed:
+        extra.append(f"[smoke] {r.prefix}: the Deploy sheet deployed before its Deploy was pressed: {deployed}")
     problems = extra + r.problems()
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once
@@ -541,7 +636,7 @@ def box(ctx, base, out):
     m = Run(open_app(ctx, base, "?monitor", layout()), out, "box-monitor")
     m.wait(3000); m.shot("signed-in")
     # The bottom panel's Trend tab, at the page's left on the Monitor.
-    m.step("monitor-trend", lambda: m.click(32, 561), BOTTOM_TABS, 800)
+    m.step("monitor-trend", lambda: m.click(*MONITOR_TREND_TAB), BOTTOM_TABS, 800)
     problems += m.problems()
     m.page.close()
     return problems
@@ -1027,6 +1122,7 @@ def run_engine(browser, base, out, a, proc, box_port):
     ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
     problems += playground(ctx, base, out)
     ctx.close()
+    problems += first_visit(browser, base, out)
     problems += phone(browser, base, "?playground&editor", out, "pg")
     problems += no_webgl2(browser, base, out)
     if proc:

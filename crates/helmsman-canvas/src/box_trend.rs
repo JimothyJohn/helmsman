@@ -72,6 +72,8 @@ pub struct BoxTrend {
     pub pins: Vec<String>,
     /// Per pin: (box time ms, value) points, oldest first.
     pub series: BTreeMap<String, Vec<(u64, f64)>>,
+    /// Per pin: what the box says it is and its unit, as last seen.
+    kinds: BTreeMap<String, (crate::ekg::Kind, Option<String>)>,
     /// The box's clock at the newest point.
     pub now_ms: u64,
     /// The width of the window drawn, ms (the slider's range).
@@ -122,6 +124,7 @@ impl BoxTrend {
         Self {
             pins: Vec::new(),
             series: BTreeMap::new(),
+            kinds: BTreeMap::new(),
             now_ms: 0,
             window_ms: crate::playground::TREND_MS,
             notice: None,
@@ -257,6 +260,16 @@ impl BoxTrend {
             self.ask(now);
         }
         self.pin_expected(session, state, now);
+        for p in &self.pins {
+            if let Some(s) = state.signals.iter().find(|s| &s.name == p) {
+                let kind = match s.value {
+                    Some(Value::Bool(_)) => crate::ekg::Kind::Bool,
+                    Some(Value::Int(_)) => crate::ekg::Kind::Int,
+                    _ => crate::ekg::Kind::Real,
+                };
+                self.kinds.insert(p.clone(), (kind, s.unit.clone()));
+            }
+        }
         if state.seq != self.seq {
             self.seq = state.seq;
             if let Some(at) = state.values_at_ms {
@@ -496,7 +509,7 @@ impl BoxTrend {
                 let key = name.to_ascii_lowercase();
                 let mut on = self.checked.contains(&key);
                 let r = ui
-                    .put(at, egui::Checkbox::without_text(&mut on))
+                    .put(at, |ui: &mut egui::Ui| crate::theme::check(ui, &mut on, ""))
                     .tip("Tick to move, color or remove this signal with the others ticked.");
                 chrome.hit(format!("trend check {key}"), r.rect);
                 if r.changed() {
@@ -530,9 +543,7 @@ impl BoxTrend {
         let mut pick = None;
         ui.horizontal_wrapped(|ui| {
             let mut v = all;
-            let r = ui
-                .checkbox(&mut v, "All")
-                .tip("Tick every signal on the trend, or none.");
+            let r = crate::theme::check(ui, &mut v, "All").tip("Tick every signal on the trend, or none.");
             chrome.hit("trend check all", r.rect);
             if r.changed() {
                 self.checked = if v {
@@ -627,6 +638,7 @@ impl BoxTrend {
         }
         let sweep = crate::ekg::Sweep::new(self.window_ms, self.now_ms);
         let now = ui.input(|i| i.time);
+        let label_w = crate::ekg::label_width(&painter, self.pins.iter());
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / self.pins.len() as f32;
         for (k, name) in self.pins.iter().enumerate() {
@@ -643,11 +655,11 @@ impl BoxTrend {
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let number = line
-                .last()
-                .map(|p| p.1)
-                .filter(|v| v.is_finite())
-                .map(helmsman_iec::shown_real);
+            let value = line.last().map(|p| p.1).filter(|v| v.is_finite());
+            let (kind, unit) = self
+                .kinds
+                .get(name)
+                .map_or((crate::ekg::Kind::Real, None), |(k, u)| (*k, u.as_deref()));
             crate::ekg::paint_lane(
                 &painter,
                 &t,
@@ -656,7 +668,10 @@ impl BoxTrend {
                 &crate::ekg::Lane {
                     name,
                     color: crate::playground_view::lane_color(&t, chrome, name, k),
-                    number,
+                    value,
+                    kind,
+                    unit,
+                    label_w,
                     pop: self.flashes.strength(name, now),
                 },
                 &sweep,

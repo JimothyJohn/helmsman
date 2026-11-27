@@ -81,7 +81,22 @@ fn editing_a_statement_moves_nothing_above_it() {
             .collect()
     };
     assert_eq!(regions(&a), regions(&b));
-    assert_ne!(a.size, b.size, "the edit itself did change the layout");
+    // The edit itself did change the layout: the FOR holds more blocks.
+    // (Its growth fits the row since the compact layout of 2026-11-27, so
+    // the diagram's size alone no longer shows it.)
+    let for_region = |d: &Diagram| {
+        d.regions
+            .iter()
+            .find(|r| r.label.starts_with("FOR"))
+            .map(|r| r.rect)
+            .unwrap()
+    };
+    assert!(b.nodes.len() > a.nodes.len(), "the edit added blocks");
+    assert_ne!(
+        for_region(&a),
+        for_region(&b),
+        "the edit itself did change the layout"
+    );
 }
 
 #[test]
@@ -224,14 +239,22 @@ fn an_operator_is_as_tall_as_its_ports_and_a_variable_keeps_its_header() {
     #[allow(clippy::cast_precision_loss)]
     let rows = and.ins.len().max(and.outs.len()) as f32;
     assert!(and.ins.len() >= 2, "{:?}", and.ins);
+    // No header band: the rows and an even padding above and below them,
+    // less than a header's height in all (8 pt until the compact layout of
+    // 2026-11-27).
+    let pad = (and.rect.h - rows * PORT_ROW) / 2.0;
     assert!(
-        (and.rect.h - (rows * PORT_ROW + 8.0)).abs() < 0.01,
+        pad >= 0.0 && 2.0 * pad < HEADER / 2.0,
         "no header band: {} for {rows} rows",
         and.rect.h
     );
     // Its ports sit in the rows, the first just under the top padding.
     let (_, y0) = in_port(and, 0);
-    assert!((y0 - (and.rect.y + 4.0 + PORT_ROW / 2.0)).abs() < 0.01);
+    assert!(
+        (y0 - (and.rect.y + pad + PORT_ROW / 2.0)).abs() < 0.01,
+        "{y0} in {:?}",
+        and.rect
+    );
     let (_, yo) = out_port(and, 0);
     assert!(yo > and.rect.y && yo < and.rect.bottom());
     let go = d
@@ -240,9 +263,10 @@ fn an_operator_is_as_tall_as_its_ports_and_a_variable_keeps_its_header() {
         .find(|n| matches!(&n.kind, NodeKind::Read { path } if path == "GO"))
         .expect("the read of go");
     assert!(go.kind.headed());
+    // A header, its one row and the operator's padding under the row.
     assert!(
-        (go.rect.h - (HEADER + PORT_ROW + 4.0)).abs() < 0.01,
-        "{}",
+        (go.rect.h - (HEADER + PORT_ROW + pad)).abs() < 0.01,
+        "{} with a padding of {pad}",
         go.rect.h
     );
     let (_, y) = out_port(go, 0);

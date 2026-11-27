@@ -211,7 +211,7 @@ mod page {
     use crate::ask::{CHECK_PATIENCE, State};
     use crate::claude::{Free, Incoming, Takes};
     use crate::instruct::Kind;
-    use crate::instruct_tests::{latches, mine, reply, stream};
+    use crate::instruct_tests::{apply, latches, mine, reply, stream};
     use crate::playground_view::PlaygroundView;
     use crate::verify_tests::LAMP;
 
@@ -302,6 +302,13 @@ mod page {
         whole[cut..].to_string()
     }
 
+    /// The change is held, nothing of it in main.st (docs/UI.md "Show
+    /// Changes"); Apply lands it.
+    fn land(v: &mut PlaygroundView) {
+        assert_eq!(v.proj.files["main.st"], LAMP, "held, not written");
+        apply(v);
+    }
+
     /// The answer begun with [`begin_draft`] ends.
     fn finish(v: &mut PlaygroundView, rest: String) {
         let (seq, _) = v.link.sent.last().cloned().unwrap();
@@ -333,6 +340,7 @@ mod page {
         assert_eq!(card.state, State::Open);
         // Nobody answers: the change is written as ever, and the card goes.
         reply(&mut v, &answer(&latched()));
+        land(&mut v);
         assert_eq!(v.instruct.outcome.as_ref().unwrap().kind, Kind::Applied);
         assert_eq!(v.proj.files["main.st"], latched());
         assert_eq!(v.card, None);
@@ -402,6 +410,8 @@ mod page {
         // The answer to the second is written with no comparison (the
         // Agent had the answer), and the page keeps what was asked.
         reply(&mut v, &answer(&latched()));
+        assert_eq!(v.proj.revisions().len(), revs, "no revision until Apply");
+        land(&mut v);
         assert_eq!(v.instruct.outcome.as_ref().unwrap().kind, Kind::Applied);
         assert_eq!(v.side.sent.len(), 1, "no check");
         assert_eq!(v.proj.revisions().len(), revs + 1);
@@ -443,6 +453,7 @@ mod page {
             "{asked}"
         );
         side_reply(&mut v, "AGREES");
+        land(&mut v);
         assert_eq!(v.instruct.outcome.as_ref().unwrap().kind, Kind::Applied);
         assert_eq!(v.proj.files["main.st"], latched());
         assert_eq!(v.card.as_ref().unwrap().state, State::Covered);
@@ -483,6 +494,7 @@ mod page {
             "{said}"
         );
         reply(&mut v, &answer(&corrected()));
+        land(&mut v);
         assert_eq!(v.instruct.outcome.as_ref().unwrap().kind, Kind::Applied);
         assert_eq!(v.proj.files["main.st"], corrected());
         assert_eq!(v.proj.revisions().len(), revs + 1, "one change, one revision");
@@ -507,6 +519,7 @@ mod page {
             guard += 1;
             assert!(guard < 6, "it must end");
         }
+        land(&mut v);
         assert_eq!(v.instruct.outcome.as_ref().unwrap().kind, Kind::Applied);
         assert_eq!(
             v.proj.files["main.st"],
@@ -526,6 +539,7 @@ mod page {
         click(&mut v, 0);
         finish(&mut v, rest);
         side_reply(&mut v, "Hard to say.");
+        land(&mut v);
         assert_eq!(v.proj.files["main.st"], latched());
         assert_eq!(v.card.as_ref().unwrap().state, State::Unchecked);
         // No answer at all: written once the patience is up, not before.
@@ -538,6 +552,7 @@ mod page {
         tick_at(&mut v, CHECK_PATIENCE - 1.0);
         assert_eq!(v.proj.files["main.st"], LAMP);
         tick_at(&mut v, CHECK_PATIENCE + 1.0);
+        land(&mut v);
         assert_eq!(v.proj.files["main.st"], latched());
         assert_eq!(v.card.as_ref().unwrap().state, State::Unchecked);
         // A verdict that comes after all is too late to change anything.
@@ -551,6 +566,7 @@ mod page {
         let rest = begin_draft(&mut v, &answer(&latched()));
         click(&mut v, 0);
         finish(&mut v, rest);
+        land(&mut v);
         assert_eq!(v.proj.files["main.st"], latched());
         assert_eq!(v.side.sent.len(), 1);
         assert_eq!(v.card.as_ref().unwrap().state, State::Unchecked);

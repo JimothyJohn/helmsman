@@ -68,6 +68,11 @@ pub struct BoxView {
     /// edited, and on the diagram once the box runs it
     /// ([`crate::agent_marks`]).
     pub agent_change: Option<crate::agent_marks::AgentChange>,
+    /// The change held in the Agent tab, drawn while Show Changes is on
+    /// ([`crate::change_ui`]); the box keeps running the program it runs.
+    shown_change: Option<crate::change_ui::Shown>,
+    /// The Deploy sheet's diagram: the source it draws and its viewer.
+    sheet_diagram: Option<(String, crate::st_view::Viewer)>,
     /// The Trend tab: pinned signals from the box's history.
     pub trend: BoxTrend,
     /// The way to the agent the box runs (`POST /api/chat`).
@@ -399,6 +404,8 @@ impl BoxView {
             session: None,
             view: None,
             agent_change: None,
+            shown_change: None,
+            sheet_diagram: None,
             layers: Layers::load(tweaks),
             generation: 0,
             wants_sim: false,
@@ -1004,7 +1011,7 @@ impl BoxView {
         let step = self.with_env(scope, |i, env| i.answered(&turn.text, env));
         match step {
             Some(Step::Ask(ask)) => self.agent_send(&ask.text, false, ctx),
-            Some(Step::Apply(apply)) => self.agent_write(&apply),
+            Some(Step::Apply(apply)) => self.agent_hold(apply),
             // A box never asks for a plan (`steps` is the page's).
             Some(Step::Done | Step::Wait) => {
                 self.instruct.proposed(&proposals);
@@ -1040,6 +1047,100 @@ impl BoxView {
             .map(|c| c.lines().clone());
         if let Some(v) = &mut self.view {
             v.baseline = c.and_then(|c| c.baseline.clone());
+        }
+    }
+
+    /// How the box runs a project's tests: its image sizes, as it reported
+    /// them, else the page's.
+    fn agent_sizes(&self) -> helmsman_iec::ImageSizes {
+        self.projects
+            .open
+            .as_ref()
+            .and_then(|o| o.runs)
+            .map_or(crate::playground::SIZES, |r| r.sizes)
+    }
+
+    /// A checked answer is held, not saved: the Agent tab shows its size
+    /// and the outputs it moves, and the engineer applies it
+    /// (Nick, 2026-11-27, Show Changes).
+    fn agent_hold(&mut self, apply: crate::instruct::Apply) {
+        let Some((_, _, files)) = self.agent_files() else {
+            self.instruct
+                .not_written(&apply.file, "The project is no longer open.");
+            return self.log_agent();
+        };
+        let focus = self.instruct.named_text();
+        let summary = crate::change::of_apply(&files, &apply, &focus, self.agent_sizes());
+        self.instruct.hold(apply, summary);
+        self.shown_change = None;
+        self.log_agent();
+    }
+
+    /// Builds or drops what Show Changes draws, to match the pending change.
+    fn sync_shown(&mut self) {
+        let Some(p) = self.instruct.pending.as_ref().filter(|p| p.showing) else {
+            self.shown_change = None;
+            return;
+        };
+        if self
+            .shown_change
+            .as_ref()
+            .is_some_and(|s| s.text == p.apply.text && s.file == p.apply.file)
+        {
+            return;
+        }
+        let apply = p.apply.clone();
+        let built = self
+            .agent_files()
+            .and_then(|(_, _, files)| crate::change_ui::Shown::build(&files, &apply, self.agent_sizes()));
+        if let Some(b) = built {
+            if let Some(o) = &mut self.projects.open {
+                o.current = Some(apply.file.clone());
+            }
+            self.shown_change = Some(b);
+        } else {
+            self.shown_change = None;
+            if let Some(p) = &mut self.instruct.pending {
+                p.showing = false;
+            }
+        }
+    }
+
+    /// A click on one of the pending change's buttons.
+    fn change_act(&mut self, act: crate::instruct::Act) {
+        use crate::instruct::Act as A;
+        match act {
+            A::ShowChanges => {
+                if let Some(p) = &mut self.instruct.pending {
+                    p.showing = !p.showing;
+                }
+            }
+            A::ApplyChange => {
+                let now = self
+                    .instruct
+                    .pending
+                    .as_ref()
+                    .and_then(|p| {
+                        self.projects
+                            .open
+                            .as_ref()
+                            .and_then(|o| o.bufs.get(&p.apply.file))
+                    })
+                    .map(|b| b.text.clone())
+                    .unwrap_or_default();
+                match self.instruct.take_pending(&now) {
+                    Ok(apply) => {
+                        self.shown_change = None;
+                        self.agent_write(&apply);
+                    }
+                    Err(_) => self.log_agent(),
+                }
+            }
+            A::DiscardChange => {
+                self.instruct.discard();
+                self.shown_change = None;
+            }
+            _ => {}
         }
     }
 
@@ -1316,11 +1417,13 @@ impl BoxView {
                 s
             }
         });
+        let briefs = batch.briefs.clone();
         let started = self.with_env(scope, |i, env| {
             i.start_design_steps(env, &label, (batch.steps, batch.briefs), (from, total))
         });
         match started {
             Some(Ok(ask)) => {
+                self.instruct.name_design(&text, &briefs);
                 self.design_building = Some((project, n));
                 let message = format!("{}\n\n{}", crate::instruct::BOX_RULES, ask.message);
                 self.agent_send(&message, true, ctx);
@@ -1344,7 +1447,7 @@ impl BoxView {
 
     /// A batch that ended counts its steps when it was written.
     fn design_settle(&mut self, ctx: &egui::Context) {
-        if self.design_building.is_some() && !self.instruct.busy() {
+        if self.design_building.is_some() && !self.instruct.busy() && self.instruct.pending.is_none() {
             let applied = self
                 .instruct
                 .outcome
@@ -1744,6 +1847,7 @@ impl BoxView {
             Some(Act::Offer(k)) => self.take_offer(k, &ctx),
             Some(Act::Revision(n)) => self.step_to(n),
             Some(Act::Details(n)) => self.show_revision(n),
+            Some(a @ (Act::ShowChanges | Act::ApplyChange | Act::DiscardChange)) => self.change_act(a),
             Some(Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
     }
@@ -2210,6 +2314,7 @@ impl BoxView {
             self.add_device_line(&line);
         }
         self.revision_ui(&ui.ctx().clone(), chrome);
+        self.sheet_ui(&ui.ctx().clone(), chrome);
         if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }
@@ -3016,6 +3121,71 @@ impl BoxView {
         }
     }
 
+    /// The Deploy sheet, "What changes on the machine", while it is open.
+    fn sheet_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        if self.projects.sheet.is_none() {
+            self.sheet_diagram = None;
+            return;
+        }
+        // The project's text as it is now, to compare with what runs.
+        let files: std::collections::BTreeMap<String, String> = self
+            .projects
+            .open
+            .as_ref()
+            .map(|o| {
+                o.bufs
+                    .iter()
+                    .filter(|(n, b)| b.loaded && !helmsman_project::agent::is_agent_file(n))
+                    .map(|(n, b)| (n.clone(), b.text.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let sizes = self.agent_sizes();
+        let busy = self.projects.deploy.busy();
+        let failed = match &self.projects.deploy {
+            crate::box_projects::Deploy::Failed(why) => Some(why.clone()),
+            _ => None,
+        };
+        let forbidden = self.writable().err();
+        let problems = self.projects.diags.clone();
+        let Some(sheet) = self.projects.sheet.as_mut() else {
+            return;
+        };
+        sheet.compute(&files, sizes);
+        let sheet = sheet.clone();
+        // The diagram of the first module that changes, once the report is in.
+        let want = sheet
+            .report
+            .as_ref()
+            .filter(|r| r.unknown.is_none() && !r.new_src.is_empty())
+            .map(|r| (r.old_src.clone(), r.new_src.clone()));
+        match want {
+            Some((old, new)) if self.sheet_diagram.as_ref().is_none_or(|(src, _)| *src != new) => {
+                self.sheet_diagram = crate::change::draw(&old, &new, sizes).ok().map(|d| {
+                    let mut v = crate::st_view::Viewer::new(&new, d.new);
+                    v.baseline = Some(std::rc::Rc::new(
+                        d.old.unwrap_or(helmsman_diagram::Module { pous: Vec::new() }),
+                    ));
+                    (new, v)
+                });
+            }
+            None => self.sheet_diagram = None,
+            Some(_) => {}
+        }
+        let mut c = crate::deploy_sheet::Context {
+            busy,
+            failed: failed.as_deref(),
+            forbidden,
+            problems: &problems,
+            diagram: self.sheet_diagram.as_mut().map(|(_, v)| v),
+        };
+        match crate::deploy_sheet::ui(ctx, chrome, &sheet, &mut c) {
+            Some(crate::deploy_sheet::Act::Deploy) => self.projects.deploy(),
+            Some(crate::deploy_sheet::Act::Cancel) => self.projects.close_sheet(),
+            None => {}
+        }
+    }
+
     /// The revision on view, in the middle of the screen, until Close or
     /// Restore (an engineer's; the box records the restore).
     fn revision_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
@@ -3183,8 +3353,11 @@ impl Workspace for BoxView {
 
     fn deploy(&mut self) {
         if self.writable().is_ok() {
+            // Deploy never goes straight out: the sheet "What changes on
+            // the machine" opens first, and Deploy on it sends it (Nick,
+            // 2026-11-27, Show Changes).
             self.projects.to_node = self.watches_node;
-            self.projects.deploy();
+            self.projects.open_sheet();
         } else if self.module_writable().is_ok() {
             self.projects.deploy_module();
         }
@@ -3687,6 +3860,27 @@ impl Body for BoxView {
                     _ => {}
                 }
             }
+            // The change held in the Agent tab, on show: the proposed file,
+            // read-only, its lines marked as a diff draws them.
+            self.sync_shown();
+            if let Some(sh) = self
+                .shown_change
+                .as_ref()
+                .filter(|s| Some(&s.file) == o.current.as_ref())
+            {
+                crate::change_ui::code_note(ui, chrome);
+                chrome.st_marks = Some(sh.marks.clone());
+                let mut shown: &str = &sh.text;
+                let size = Vec2::new(ui.available_width(), ui.available_height().max(120.0));
+                let id = editor::source_id("box-st", &o.name, &sh.file).with("proposed-change");
+                let r = ui
+                    .allocate_ui(size, |ui| {
+                        editor::st_editor(ui, id, &mut shown, &[], &[], usize::MAX, chrome);
+                    })
+                    .response;
+                chrome.hit("st proposed", r.rect);
+                return;
+            }
             if let Some(n) = at {
                 let row = self.projects.history.iter().find(|r| r.n == n).cloned();
                 let file = o.current.clone().unwrap_or_default();
@@ -3943,6 +4137,11 @@ impl Body for BoxView {
                 if rows.is_empty() {
                     ui.label(RichText::new("none").color(t.muted)).tip(tip);
                 }
+                // Which points the program's diagram has a block for.
+                let on_diagram: Vec<bool> = rows
+                    .iter()
+                    .map(|(n, _)| self.view.as_ref().is_some_and(|v| v.has_signal(n)))
+                    .collect();
                 let section = ui.vertical(|ui| {
                     crate::io_cards::lay(
                         ui,
@@ -3961,17 +4160,27 @@ impl Body for BoxView {
                                 .map_or(String::new(), |u| format!(" {u}"));
                             let is_forced = sig.is_some_and(|s| s.forced);
                             let forced = if is_forced { "  FORCED" } else { "" };
-                            let text = format!("{name} = {}{unit}{forced}", show(value));
+                            // A BOOL says its state by its colour and its
+                            // glyph, no "= TRUE" (Nick, 2026-11-27).
+                            let text = match value {
+                                Some(helmsman_iec::Value::Bool(_)) => format!("{name}{forced}"),
+                                _ => format!("{name} = {}{unit}{forced}", show(value)),
+                            };
                             let on = value == Some(helmsman_iec::Value::Bool(true));
+                            let state = match value {
+                                Some(helmsman_iec::Value::Bool(b)) => Some(b),
+                                _ => None,
+                            };
                             // An input's BOOL says its state: green on, red
                             // off (Nick, 2026-11-26).
                             let off = input && value == Some(helmsman_iec::Value::Bool(false));
                             let color = match sig.map(|s| s.quality.as_str()) {
                                 _ if is_forced => t.ink(WARN),
                                 Some("missing") => t.ink(RED),
-                                _ if on && !input => t.ink(crate::lamps::colour(name).unwrap_or(GREEN)),
+                                _ if on && !input => t.ink(GREEN),
                                 _ if on => t.ink(GREEN),
                                 _ if off => t.ink(RED),
+                                _ if !input && state == Some(false) => t.muted,
                                 _ => t.fg,
                             };
                             let bool_ty = matches!(value, Some(helmsman_iec::Value::Bool(_)));
@@ -4025,15 +4234,18 @@ impl Body for BoxView {
                                 simulate: false,
                                 designation: crate::assign::designate(&map, name, is_port),
                                 trended: pinned.iter().any(|p| p.eq_ignore_ascii_case(name)),
+                                on_diagram: on_diagram[k],
                             };
                             let sim_input = input && engineer && sig.is_some_and(|s| s.sim);
                             let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
-                                crate::io_cards::value(
+                                // A lamp is green on and red off.
+                                crate::io_cards::value_with(
                                     ui,
                                     (form != Form::Tile).then_some(glyph),
                                     color,
+                                    if input { color } else { t.ink(RED) },
                                     &text,
-                                    form != Form::Tile,
+                                    state,
                                 );
                                 sim_input.then(|| sim_control(ui, value)).flatten()
                             });
@@ -4076,6 +4288,21 @@ impl Body for BoxView {
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        // The change held in the Agent tab, on show: the proposed
+        // program, marked and not running, under its banner. The box keeps
+        // running the program it runs.
+        self.sync_shown();
+        if self.shown_change.is_some() {
+            let refusal = self.instruct.pending.as_ref().and_then(|p| p.summary.refusal());
+            let act = crate::change_ui::banner(ui, chrome, refusal.as_deref());
+            if let Some(sh) = &mut self.shown_change {
+                sh.viewer.canvas(ui, None);
+            }
+            if let Some(a) = act {
+                self.change_act(a);
+            }
+            return;
+        }
         self.banner(ui, chrome);
         self.assign_context();
         let scan = live_scan(&self.state);
@@ -4101,10 +4328,11 @@ impl Body for BoxView {
                     "This box".to_string(),
                     self.state.selected.clone().unwrap_or_default(),
                 ];
-                if v.crumbs_ui(ui, &outer).is_some() {
+                if v.crumbs_ui(ui, &outer, chrome.glyph_strip).is_some() {
                     v.open(0);
                 }
                 area = ui.available_rect_before_wrap();
+                v.flow = scan.is_some();
                 v.canvas(ui, scan);
                 reads = v.reads_on_screen();
                 // The force buttons over the Read blocks take the right-click first.

@@ -540,29 +540,54 @@ fn plant(h: &Harness) -> String {
     h.app.sim.as_ref().unwrap().proj.files[helmsman_project::PLANT].clone()
 }
 
+/// One click on card `key`, under its first line and clear of its
+/// control and glyphs: opens its details, or closes them.
+fn toggle_details(h: &mut Harness, key: &str) {
+    // A click just before would make this a double click.
+    h.wait(1.0);
+    let r = h.rect(key);
+    h.click(eframe::egui::pos2(r.center().x, r.bottom() - 6.0));
+    h.wait(0.3);
+}
+
+/// Nick, 2026-11-27: a compact card is one line; the SIM badge is in its
+/// details, and the dashed outline alone marks a simulated card closed.
 #[test]
-fn a_simulated_card_has_the_badge_and_a_dashed_outline_and_a_physical_one_is_solid() {
+fn a_simulated_card_is_dashed_with_its_badge_in_the_details_and_a_physical_one_is_solid() {
     let mut h = project(MAP);
     for name in ["start", "stop", "spare", "motor", "speed"] {
-        assert!(h.has(&format!("io sim {name}")), "{name} says SIM");
         assert!(h.has(&format!("io dashed {name}")), "{name} is dashed");
         assert!(!h.has(&format!("io solid {name}")), "{name} is not solid");
+        assert!(
+            !h.has(&format!("io sim {name}")),
+            "{name}: no badge on the closed card"
+        );
     }
-    assert!(h.drew("SIM"));
+    for name in ["spare", "motor"] {
+        toggle_details(&mut h, &format!("io card {name}"));
+        assert!(h.has(&format!("io sim {name}")), "{name}'s details say SIM");
+        assert!(h.has(&format!("io dashed {name}")), "{name} open is still dashed");
+        toggle_details(&mut h, &format!("io card {name}"));
+        assert!(!h.has(&format!("io sim {name}")), "{name} closed again: no badge");
+    }
     menu(&mut h, "io row spare", "menu assign port");
     h.press("assign channel rio ch:DI-05");
     h.wait(0.3);
     assert!(
-        !h.has("io sim spare") && !h.has("io dashed spare"),
-        "no badge once physical"
+        !h.has("io dashed spare") && h.has("io solid spare"),
+        "physical: solid"
     );
-    assert!(h.has("io solid spare"), "solid");
-    assert!(h.has("io sim stop"), "the others stay simulated");
-    // And back: the badge returns.
+    assert!(h.has("io dashed stop"), "the others stay simulated");
+    toggle_details(&mut h, "io card spare");
+    assert!(!h.has("io sim spare"), "no badge in a physical card's details");
+    toggle_details(&mut h, "io card spare");
+    // And back: dashed again, the badge back in its details.
     h.right_click(on_card(&h, "io row spare"));
     h.press("menu back to simulated");
     h.wait(0.3);
-    assert!(h.has("io sim spare") && h.has("io dashed spare") && !h.has("io solid spare"));
+    assert!(h.has("io dashed spare") && !h.has("io solid spare"));
+    toggle_details(&mut h, "io card spare");
+    assert!(h.has("io sim spare"), "the badge is back in the details");
 }
 
 #[test]
