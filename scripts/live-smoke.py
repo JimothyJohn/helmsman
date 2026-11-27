@@ -7,9 +7,16 @@ Opens SITE/playground/ in headless Chromium as a first visit (nothing kept
 in the browser), at a laptop's size and a phone's, and fails when:
   - the page logs an error or panics,
   - nothing is drawn (the canvas is one flat colour),
-  - the front door's machine does not move (its picture is the same 4 s
-    apart),
-  - "Open the editor" changes nothing.
+  - at a laptop's size, the page is neither of the two first visits below.
+
+A first visit opens on the editor (Nick, 2026-11-27: the front door is
+gone), told by its left pane matching SITE/playground/?editor's. Until a
+release carries that, live opens on the old front door. So either passes:
+  - the editor: the simulation runs (the page is not the same 4 s apart);
+  - the front door: its machine moves (its picture is the same 4 s apart
+    fails) and "Open the editor" changes the page.
+Once master serves the editor, the front-door branch can go and a front
+door seen becomes a failure; the run prints which one it met.
 A screenshot per step goes to target/live-smoke/ to look at. Reads only;
 it sends nothing to the Agent, so it costs no model turn.
 
@@ -23,10 +30,14 @@ import sys
 from playwright.sync_api import sync_playwright
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# In points at the 1400 x 860 window (crates/helmsman-canvas/src/front.rs):
-# the machine's picture in the middle card, and "Open the editor".
+# In points at the 1400 x 860 window: the old front door's machine picture
+# in the middle card, and its "Open the editor" (the front door went
+# 2026-11-27; live shows it until a release carries that).
 MACHINE = (500, 230, 400, 300)
 OPEN_EDITOR = (1264, 33)
+# The editor's left pane, which holds still while a program runs (as in
+# scripts/canvas-smoke.py); the front door drew over the whole page.
+LEFT = (0, 100, 300, 200)
 # Console noise that is not the page's fault.
 EXPECTED = ("favicon",)
 
@@ -46,8 +57,23 @@ def flat(page):
     return len(page.screenshot()) < 12_000
 
 
-def visit(browser, url, out, name, size):
+def editor_left(browser, url, size):
+    """The left pane of SITE/playground/?editor, a page that opens on the
+    editor both with the front door and without it."""
+    ctx = browser.new_context(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1, color_scheme="dark")
+    page = ctx.new_page()
+    page.goto(url + "?editor", wait_until="load")
+    page.wait_for_timeout(9000)
+    left = digest(page, LEFT)
+    ctx.close()
+    return left
+
+
+def visit(browser, url, out, name, size, editor=None):
+    """The problems a first visit shows, and what it opened on ("editor",
+    "front door", or None when not told)."""
     problems, console = [], []
+    met = None
     ctx = browser.new_context(viewport={"width": size[0], "height": size[1]}, device_scale_factor=1, color_scheme="dark")
     page = ctx.new_page()
     page.on("console", lambda m: console.append((m.type, m.text)))
@@ -55,16 +81,24 @@ def visit(browser, url, out, name, size):
     resp = page.goto(url, wait_until="load")
     if resp is None or resp.status != 200:
         ctx.close()
-        return [f"[{name}] {url} answered {resp.status if resp else 'nothing'}"]
+        return [f"[{name}] {url} answered {resp.status if resp else 'nothing'}"], met
     page.wait_for_timeout(9000)
     page.screenshot(path=os.path.join(out, f"{name}-1-first-visit.png"))
     if flat(page):
         problems.append(f"[{name}] nothing is drawn: the page is one flat colour")
-    if name == "laptop":
+    if editor is not None and digest(page, LEFT) == editor:
+        met = "editor"
+        whole = digest(page)
+        page.wait_for_timeout(4000)
+        page.screenshot(path=os.path.join(out, f"{name}-2-running.png"))
+        if digest(page) == whole:
+            problems.append(f"[{name}] the editor opened but nothing moves: the simulation is not running")
+    elif editor is not None:
+        met = "front door"
         before = digest(page, MACHINE)
         page.wait_for_timeout(4000)
         if digest(page, MACHINE) == before:
-            problems.append(f"[{name}] the front door's machine is not moving")
+            problems.append(f"[{name}] neither the editor nor a moving front door: the left pane is not the editor's and the middle is still")
         whole = digest(page)
         page.mouse.click(*OPEN_EDITOR)
         page.wait_for_timeout(2500)
@@ -77,7 +111,7 @@ def visit(browser, url, out, name, size):
         if t in ("error", "pageerror") and not any(e in x for e in EXPECTED)
     ]
     ctx.close()
-    return problems
+    return problems, met
 
 
 def main():
@@ -90,10 +124,13 @@ def main():
     problems = []
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        problems += visit(browser, url, a.out, "laptop", (1400, 860))
-        problems += visit(browser, url, a.out, "phone", (390, 844))
+        laptop = (1400, 860)
+        found, met = visit(browser, url, a.out, "laptop", laptop, editor_left(browser, url, laptop))
+        problems += found
+        problems += visit(browser, url, a.out, "phone", (390, 844))[0]
         browser.close()
     print(f"screenshots in {a.out}")
+    print(f"a first visit opened on the {met or 'page that did not load'}")
     if problems:
         print("\n".join(problems))
         sys.exit(1)

@@ -314,14 +314,6 @@ pub fn wants_monitor() -> bool {
     crate::app::wants_monitor(&query)
 }
 
-/// The page's query string (`?a&b=c`, or empty).
-#[must_use]
-pub fn query() -> String {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .unwrap_or_default()
-}
-
 /// Whether this page starts the guided tour ([`crate::app::wants_tour`]
 /// on its query string: `?tour`).
 #[must_use]
