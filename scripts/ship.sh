@@ -41,7 +41,8 @@
 #   1. candidate: scripts/compat.sh --candidate (the four tips against
 #      each other's contracts, and their CI), then `helmsman-compat parity`
 #      on the box compat built there, and scripts/parity-tabs.py on the
-#      candidate's committed playground (what master will serve).
+#      candidate's committed playground (what master will serve), with the
+#      tabs only a box's page has (Help) on that box serving its own canvas.
 #   2. promote: each repository whose candidate commit (compat.sh's
 #      target/compat/train.txt) is ahead of the branch it goes to gets a
 #      ship/<stamp> branch at that commit and a pull request from it into
@@ -54,7 +55,7 @@
 #   3. live: scripts/live-state.sh --at each candidate commit until every
 #      row but the try box says live (the site's Pages build takes minutes), then parity on a box
 #      built at the new master held to the candidate's docs/FEATURES.md, and the
-#      tabs on the public site.
+#      tabs on the public site (the box-only ones on that box).
 #   4. report: target/ship/report.md, every feature with its candidate and
 #      live outcome. A feature that passed on the candidate and fails live
 #      is a regression: the report names it and a draft pull request
@@ -242,6 +243,15 @@ build_box() {
   echo "$target/debug/helmsman-plc"
 }
 
+# build_ui SHA LABEL -> the box's canvas build at that commit (make canvas-web
+# there), for the tabs only a box's page has: the playground has no Help tab.
+build_ui() {
+  local dir=$ROOT/target/compat/src/helmsman@${1:0:12} target=$ROOT/target/compat/build/helmsman-$2
+  echo "  build the box's canvas at ${1:0:12} ($2)" >&2
+  (cd "$dir" && CARGO_TARGET_DIR="$target" scripts/canvas-web.sh >"$OUT/ui-$2.log" 2>&1) || { tail -20 "$OUT/ui-$2.log" >&2; return 1; }
+  echo "$dir/target/canvas-dist"
+}
+
 # The relays. The candidate's agent journeys run on the stub model behind
 # the relay compat.sh built at agent-relay's candidate (never a stale local
 # build); live's on the deployed relay, found as compat.sh --live finds it.
@@ -273,8 +283,9 @@ if [ "$LIVE_ONLY" = 0 ]; then
   BOX_DEV=$(build_box "$H_DEV" dev) || die "building the box at $FROM failed ($OUT/build-dev.log)"
   [ -x "$RELAY_DEV" ] || die "no relay built at agent-relay's $FROM tip ($RELAY_DEV): compat.sh builds it"
   parity candidate "$BOX_DEV" --relay-bin "$RELAY_DEV"; c1=$?
-  say "candidate: every tab on $FROM's playground page"
-  tabs candidate --dist "$DEV_DIR/docs" --path /playground; c2=$?
+  say "candidate: every tab on $FROM's playground page, and the box-only ones on its box's page"
+  UI_DEV=$(build_ui "$H_DEV" dev) || die "building the box's canvas at $FROM failed ($OUT/ui-dev.log)"
+  tabs candidate --dist "$DEV_DIR/docs" --path /playground --box "$BOX_DEV" --box-ui "$UI_DEV"; c2=$?
   if [ "$c1" != 0 ] || [ "$c2" != 0 ]; then
     echo "ship.sh: a feature fails on the candidate itself; fix it on dev first$([ "$STAGING" = 1 ] || echo ", then make staging"). Nothing promoted." >&2
     exit 1
@@ -377,8 +388,9 @@ H_LIVE=$(git -C "$MAIN" rev-parse origin/master)
 BOX_LIVE=$(build_box "$H_LIVE" live) || die "building the box at master failed ($OUT/build-live.log)"
 [ -n "$LIVE_URL" ] && [ -r "$LIVE_TOKEN" ] || die "live parity needs the deployed relay: COMPAT_LIVE_URL and a readable COMPAT_LIVE_TOKEN ($LIVE_TOKEN)"
 parity live "$BOX_LIVE" --url "$LIVE_URL" --token "$LIVE_TOKEN"
-say "live: every tab on $SITE/playground/"
-tabs live --site "$SITE"
+say "live: every tab on $SITE/playground/, and the box-only ones on master's box's page"
+UI_LIVE=$(build_ui "$H_LIVE" live) || die "building the box's canvas at master failed ($OUT/ui-live.log)"
+tabs live --site "$SITE" --box "$BOX_LIVE" --box-ui "$UI_LIVE"
 
 fi
 
