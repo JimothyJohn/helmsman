@@ -164,7 +164,9 @@ only go down.
   state, which on a box says the protocol a device by its profile is
   reached over and whether the link is slow (2026-11-12); on a box the
   open project's `io.map`, else the map the box runs; under the map's
-  devices, a **+** opens the New device form (Nick, 2026-11-26: "On the
+  devices, **Scan for Device** lists what answers and a click adds one by
+  its name (Nick, 2026-11-26; a **+** that opened the New device form for
+  a few hours before that, and before it "On the
   network", Scan, Scan and add, the IP address Ask and Advanced are gone;
   until then Scan listed what answered, `POST /api/devices/discover`, and
   Add by click wrote a library device as `device NAME device:PROFILE
@@ -629,7 +631,7 @@ Each menu item prints its key. Reserved, not built (TODO card
 - **Content:** the device picker first, then the tile of the program's
   outputs and one tile per top-level instance with its key outputs,
   green or red. No status card.
-- **Bottom:** the Editor's own Messages and Trend panel, one open or
+- **Bottom:** the Editor's own Log and Trend panel, one open or
   shut state and one tab between the two screens.
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). The breadcrumbs go up; there is no Back button and no

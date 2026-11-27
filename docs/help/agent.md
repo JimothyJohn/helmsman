@@ -129,9 +129,10 @@ change (a new revision; the change stays in History). It is offered while
 the file is still as Helmsman left it; after an edit of your own, go
 back through History instead.
 
-In the simulation the arrows beside Send take Undo's place: the left
-arrow steps back one revision, the right arrow forward one, as far as
-the first revision and the newest. Each revision shown runs at once,
+The arrows beside Send, with an **(i)** between them, step through the
+changes you described: the left arrow to the one before, the right arrow
+to the next, and past the newest back to what you were writing. The
+**(i)** opens the version's details. In the simulation each version shown runs at once,
 marked green and red with what it changed, and its tooltip names the
 instruction behind it. Saving keeps the version shown; an edit of your
 own puts the arrows away. Each step also puts that version's instruction
@@ -282,7 +283,7 @@ policy.
 
 ## Get help
 
-On a box the **?** tab (<kbd>L</kbd>) is for someone who did not write
+On a box the **?** tab (<kbd>?</kbd>) is for someone who did not write
 the program and has a machine that does not do what it should. It keeps
 its own conversation, apart from the Describe tab's. Every error the page
 shows (in the Log, a refused deploy, a device form that will not
