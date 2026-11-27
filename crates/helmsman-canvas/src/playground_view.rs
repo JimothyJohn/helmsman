@@ -149,6 +149,9 @@ pub struct PlaygroundView {
     /// The Agent's last change, marked on the diagram and in the code
     /// until the file is edited ([`crate::agent_marks`]).
     pub agent_change: Option<crate::agent_marks::AgentChange>,
+    /// The change held in the Agent tab, drawn while Show Changes is on
+    /// ([`crate::change_ui`]): the program running is not touched.
+    shown_change: Option<crate::change_ui::Shown>,
     /// The revision the History tab runs, when it is not the newest.
     pub history_at: Option<u32>,
     /// The revision the Describe tab's arrows show, the newest included
@@ -323,6 +326,7 @@ impl PlaygroundView {
             session: Session::new(&proj.build_src()),
             viewer: None,
             agent_change: None,
+            shown_change: None,
             history_at: None,
             exchange_at: None,
 
@@ -1223,7 +1227,68 @@ impl PlaygroundView {
             apply.record.push_str(&crate::ask::record(q, k));
             apply.record.push('\n');
         }
-        self.write(apply);
+        // A new program has nothing running to change: it goes the way it
+        // always has. Any other change is held for the engineer to look
+        // at, size and apply (Nick, 2026-11-27, Show Changes).
+        if apply.scope == crate::scope::Scope::NewProject {
+            self.write(apply);
+            return;
+        }
+        let focus = self.instruct.named.clone();
+        let summary = crate::change::of_apply(&self.proj.files, &apply, &focus, crate::playground::SIZES);
+        self.instruct.hold(apply, summary);
+        self.shown_change = None;
+    }
+
+    /// Builds or drops what Show Changes draws, to match the Agent tab's
+    /// pending change.
+    fn sync_shown(&mut self) {
+        let Some(p) = self.instruct.pending.as_mut().filter(|p| p.showing) else {
+            self.shown_change = None;
+            return;
+        };
+        if self.shown_change.as_ref().is_some_and(|s| s.text == p.apply.text && s.file == p.apply.file) {
+            return;
+        }
+        self.shown_change = crate::change_ui::Shown::build(&self.proj.files, &p.apply, crate::playground::SIZES);
+        if self.shown_change.is_none() {
+            p.showing = false;
+        } else {
+            self.proj.current.clone_from(&p.apply.file);
+        }
+    }
+
+    /// A click on one of the pending change's buttons.
+    fn change_act(&mut self, act: crate::instruct::Act) {
+        use crate::instruct::Act as A;
+        match act {
+            A::ShowChanges => {
+                if let Some(p) = &mut self.instruct.pending {
+                    p.showing = !p.showing;
+                }
+            }
+            A::ApplyChange => {
+                let now = self
+                    .instruct
+                    .pending
+                    .as_ref()
+                    .and_then(|p| self.proj.files.get(&p.apply.file))
+                    .cloned()
+                    .unwrap_or_default();
+                match self.instruct.take_pending(&now) {
+                    Ok(apply) => {
+                        self.shown_change = None;
+                        self.write(apply);
+                    }
+                    Err(_) => self.log_outcome(),
+                }
+            }
+            A::DiscardChange => {
+                self.instruct.discard();
+                self.shown_change = None;
+            }
+            _ => {}
+        }
     }
 
     /// What the `check` agent found for the change on hold: one that
@@ -3725,6 +3790,29 @@ impl Body for PlaygroundView {
             chrome.hit("st draft", r.rect);
             return;
         }
+        // The change held in the Agent tab, on show: the proposed file,
+        // read-only, its lines marked as a diff draws them.
+        self.sync_shown();
+        if let Some(sh) = self.shown_change.as_ref().filter(|s| s.file == current) {
+            crate::change_ui::code_note(ui, chrome);
+            chrome.st_marks = Some(sh.marks.clone());
+            let mut shown: &str = &sh.text;
+            let r = ui
+                .allocate_ui(size, |ui| {
+                    editor::st_editor(
+                        ui,
+                        id.with("proposed-change"),
+                        &mut shown,
+                        &[],
+                        &[],
+                        MAX_SOURCE,
+                        chrome,
+                    )
+                })
+                .inner;
+            chrome.hit("st proposed", r.rect);
+            return;
+        }
         // An old version on show: marked, and read-only; the mark's button
         // runs the newest again.
         if let Some(n) = self.history_at.filter(|n| self.shows_revision(*n)) {
@@ -3937,6 +4025,21 @@ impl Body for PlaygroundView {
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        // The change held in the Agent tab, on show: the proposed
+        // program, marked and not running, under its banner. The program
+        // running is untouched: its scans go on, nothing of them is drawn.
+        self.sync_shown();
+        if self.shown_change.is_some() {
+            let refusal = self.instruct.pending.as_ref().and_then(|p| p.summary.refusal());
+            let act = crate::change_ui::banner(ui, chrome, refusal.as_deref());
+            if let Some(sh) = &mut self.shown_change {
+                sh.viewer.canvas(ui, None);
+            }
+            if let Some(a) = act {
+                self.change_act(a);
+            }
+            return;
+        }
         self.noticed_ui(ui, chrome);
         self.idle_ui(ui, chrome);
         let menus = self.assign_menus();
@@ -4556,6 +4659,11 @@ impl PlaygroundView {
                 Some(crate::instruct::Act::Details(n)) => self.act(Act::ShowRevision(n)),
                 Some(crate::instruct::Act::Answer(k)) => self.answer_question(k, &ctx),
                 Some(crate::instruct::Act::Offer(k)) => self.take_offer(k, &ctx),
+                Some(
+                    a @ (crate::instruct::Act::ShowChanges
+                    | crate::instruct::Act::ApplyChange
+                    | crate::instruct::Act::DiscardChange),
+                ) => self.change_act(a),
                 Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });

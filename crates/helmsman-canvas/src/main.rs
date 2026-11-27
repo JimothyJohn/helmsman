@@ -35,6 +35,8 @@ mod ask;
 mod ask_tests;
 mod assign;
 mod assign_ui;
+mod change;
+mod change_ui;
 mod box_agent;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_agent_tests;

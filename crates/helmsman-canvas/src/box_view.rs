@@ -68,6 +68,9 @@ pub struct BoxView {
     /// edited, and on the diagram once the box runs it
     /// ([`crate::agent_marks`]).
     pub agent_change: Option<crate::agent_marks::AgentChange>,
+    /// The change held in the Agent tab, drawn while Show Changes is on
+    /// ([`crate::change_ui`]); the box keeps running the program it runs.
+    shown_change: Option<crate::change_ui::Shown>,
     /// The Trend tab: pinned signals from the box's history.
     pub trend: BoxTrend,
     /// The way to the agent the box runs (`POST /api/chat`).
@@ -399,6 +402,7 @@ impl BoxView {
             session: None,
             view: None,
             agent_change: None,
+            shown_change: None,
             layers: Layers::load(tweaks),
             generation: 0,
             wants_sim: false,
@@ -1004,7 +1008,7 @@ impl BoxView {
         let step = self.with_env(scope, |i, env| i.answered(&turn.text, env));
         match step {
             Some(Step::Ask(ask)) => self.agent_send(&ask.text, false, ctx),
-            Some(Step::Apply(apply)) => self.agent_write(&apply),
+            Some(Step::Apply(apply)) => self.agent_hold(apply),
             // A box never asks for a plan (`steps` is the page's).
             Some(Step::Done | Step::Wait) => {
                 self.instruct.proposed(&proposals);
@@ -1040,6 +1044,93 @@ impl BoxView {
             .map(|c| c.lines().clone());
         if let Some(v) = &mut self.view {
             v.baseline = c.and_then(|c| c.baseline.clone());
+        }
+    }
+
+    /// How the box runs a project's tests: its image sizes, as it reported
+    /// them, else the page's.
+    fn agent_sizes(&self) -> helmsman_iec::ImageSizes {
+        self.projects
+            .open
+            .as_ref()
+            .and_then(|o| o.runs)
+            .map_or(crate::playground::SIZES, |r| r.sizes)
+    }
+
+    /// A checked answer is held, not saved: the Agent tab shows its size
+    /// and the outputs it moves, and the engineer applies it
+    /// (Nick, 2026-11-27, Show Changes).
+    fn agent_hold(&mut self, apply: crate::instruct::Apply) {
+        let Some((_, _, files)) = self.agent_files() else {
+            self.instruct.not_written(&apply.file, "The project is no longer open.");
+            return self.log_agent();
+        };
+        let focus = self.instruct.named.clone();
+        let summary = crate::change::of_apply(&files, &apply, &focus, self.agent_sizes());
+        self.instruct.hold(apply, summary);
+        self.shown_change = None;
+        self.log_agent();
+    }
+
+    /// Builds or drops what Show Changes draws, to match the pending change.
+    fn sync_shown(&mut self) {
+        let Some(p) = self.instruct.pending.as_ref().filter(|p| p.showing) else {
+            self.shown_change = None;
+            return;
+        };
+        if self.shown_change.as_ref().is_some_and(|s| s.text == p.apply.text && s.file == p.apply.file) {
+            return;
+        }
+        let apply = p.apply.clone();
+        let built = self
+            .agent_files()
+            .and_then(|(_, _, files)| crate::change_ui::Shown::build(&files, &apply, self.agent_sizes()));
+        match built {
+            Some(b) => {
+                if let Some(o) = &mut self.projects.open {
+                    o.current = Some(apply.file.clone());
+                }
+                self.shown_change = Some(b);
+            }
+            None => {
+                self.shown_change = None;
+                if let Some(p) = &mut self.instruct.pending {
+                    p.showing = false;
+                }
+            }
+        }
+    }
+
+    /// A click on one of the pending change's buttons.
+    fn change_act(&mut self, act: crate::instruct::Act) {
+        use crate::instruct::Act as A;
+        match act {
+            A::ShowChanges => {
+                if let Some(p) = &mut self.instruct.pending {
+                    p.showing = !p.showing;
+                }
+            }
+            A::ApplyChange => {
+                let now = self
+                    .instruct
+                    .pending
+                    .as_ref()
+                    .and_then(|p| self.projects.open.as_ref().and_then(|o| o.bufs.get(&p.apply.file)))
+                    .map(|b| b.text.clone())
+                    .unwrap_or_default();
+                match self.instruct.take_pending(&now) {
+                    Ok(apply) => {
+                        self.shown_change = None;
+                        self.agent_write(&apply);
+                    }
+                    Err(_) => self.log_agent(),
+                }
+            }
+            A::DiscardChange => {
+                self.instruct.discard();
+                self.shown_change = None;
+            }
+            _ => {}
         }
     }
 
@@ -1744,6 +1835,7 @@ impl BoxView {
             Some(Act::Offer(k)) => self.take_offer(k, &ctx),
             Some(Act::Revision(n)) => self.step_to(n),
             Some(Act::Details(n)) => self.show_revision(n),
+            Some(a @ (Act::ShowChanges | Act::ApplyChange | Act::DiscardChange)) => self.change_act(a),
             Some(Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
     }
@@ -3687,6 +3779,23 @@ impl Body for BoxView {
                     _ => {}
                 }
             }
+            // The change held in the Agent tab, on show: the proposed file,
+            // read-only, its lines marked as a diff draws them.
+            self.sync_shown();
+            if let Some(sh) = self.shown_change.as_ref().filter(|s| Some(&s.file) == o.current.as_ref()) {
+                crate::change_ui::code_note(ui, chrome);
+                chrome.st_marks = Some(sh.marks.clone());
+                let mut shown: &str = &sh.text;
+                let size = Vec2::new(ui.available_width(), ui.available_height().max(120.0));
+                let id = editor::source_id("box-st", &o.name, &sh.file).with("proposed-change");
+                let r = ui
+                    .allocate_ui(size, |ui| {
+                        editor::st_editor(ui, id, &mut shown, &[], &[], usize::MAX, chrome);
+                    })
+                    .response;
+                chrome.hit("st proposed", r.rect);
+                return;
+            }
             if let Some(n) = at {
                 let row = self.projects.history.iter().find(|r| r.n == n).cloned();
                 let file = o.current.clone().unwrap_or_default();
@@ -4094,6 +4203,21 @@ impl Body for BoxView {
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
+        // The change held in the Agent tab, on show: the proposed
+        // program, marked and not running, under its banner. The box keeps
+        // running the program it runs.
+        self.sync_shown();
+        if self.shown_change.is_some() {
+            let refusal = self.instruct.pending.as_ref().and_then(|p| p.summary.refusal());
+            let act = crate::change_ui::banner(ui, chrome, refusal.as_deref());
+            if let Some(sh) = &mut self.shown_change {
+                sh.viewer.canvas(ui, None);
+            }
+            if let Some(a) = act {
+                self.change_act(a);
+            }
+            return;
+        }
         self.banner(ui, chrome);
         self.assign_context();
         let scan = live_scan(&self.state);
