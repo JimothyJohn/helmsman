@@ -370,11 +370,16 @@ fn the_box_serves_a_running_modules_output() {
             let _ = tx.send(line);
         }
     });
+    let mut said = String::new();
     let addr: SocketAddr = loop {
-        let line = rx.recv_timeout(Duration::from_secs(20)).expect("no OPC UA line");
+        let line = rx
+            .recv_timeout(Duration::from_secs(20))
+            .unwrap_or_else(|e| panic!("no OPC UA line ({e}); the box said:\n{said}"));
         if let Some(rest) = line.split("OPC UA on opc.tcp://").nth(1) {
             break rest.split('/').next().unwrap().parse().unwrap();
         }
+        said.push_str(&line);
+        said.push('\n');
     };
     runtime().block_on(async {
         let s = connect(addr, "bin").await;

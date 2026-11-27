@@ -2057,9 +2057,15 @@ fn plc_projects(state: &Path) -> Plc {
         .unwrap();
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let mut addr = None;
+    let mut said = String::new();
     while addr.is_none() {
         let mut line = String::new();
-        assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
+        assert!(
+            stderr.read_line(&mut line).unwrap() > 0,
+            "PLC exited ({:?}) before it said where its API is:\n{said}",
+            child.wait()
+        );
+        said.push_str(&line);
         if let Some(rest) = line
             .strip_prefix("helmsman-plc: API on https://")
             .or_else(|| line.strip_prefix("helmsman-plc: API on http://"))
