@@ -131,8 +131,9 @@ impl DevicesUi {
                 ui.label("Name").tip("What the program calls the device. A channel you add is named after it: rio and DI-04 give rio_di_04.");
                 let r = ui
                     .add(egui::TextEdit::singleline(&mut q.name).desired_width(200.0))
-                    .tip("The device's name in the program: a letter, then letters, digits or _.");
+                    .tip("The device's name in the program: a letter, then letters, digits or _. Spaces become _; at most 32 characters.");
                 chrome.hit("quick name", r.rect);
+                tidy_name(&mut q.name);
             });
             ui.add_space(6.0);
             match &q.profile {
@@ -195,6 +196,82 @@ impl DevicesUi {
             self.quick = None;
         } else {
             self.quick = Some(q);
+        }
+        out
+    }
+
+    /// The name form of a found device the library does not know (a click
+    /// on it in the scan's list): only its name is asked. Add writes a
+    /// typed device at the address it answered from, the New device form's
+    /// defaults for its protocol.
+    pub fn named_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
+        let mut n = self.named.clone()?;
+        let mut out = None;
+        let mut done = false;
+        let m = crate::theme::near_pointer(ctx, "device-named").show(ctx, |ui| {
+            ui.set_min_width(WIDTH * 0.75);
+            ui.set_max_width(WIDTH * 0.75);
+            ui.label(RichText::new(format!("Add {}", n.title)).strong().size(20.0));
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Name").tip("What the program calls the device. A channel you add is named after it.");
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut n.name).desired_width(200.0))
+                    .tip("The device's name in the program: a letter, then letters, digits or _. Spaces become _; at most 32 characters.");
+                chrome.hit("named name", r.rect);
+                tidy_name(&mut n.name);
+            });
+            ui.add_space(6.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new("The library does not know this device, so it is added by its address. Its inputs and outputs are added under it, with + Add I/O.")
+                        .color(theme(ui).muted),
+                )
+                .wrap(),
+            );
+            if let Some(err) = &n.error {
+                ui.add_space(4.0);
+                crate::messages::error_link(ui, chrome, "device error", err, theme(ui).ink(RED));
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let ok = ui
+                    .add(egui::Button::new(RichText::new("Add").strong()).min_size(tall))
+                    .tip("Adds the device to io.map by the address it answered from.");
+                chrome.hit("named ok", ok.rect);
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Closes the form. Nothing is added.");
+                chrome.hit("named cancel", no.rect);
+                if ok.clicked() {
+                    let d = n.device();
+                    let w = if self.map.devices.iter().any(|x| x.name == d.name) {
+                        Err(format!("A device called {} is in io.map already.", d.name))
+                    } else {
+                        check_settings(d.driver(), &d.params)
+                            .and_then(|()| d.line())
+                            .and_then(|line| {
+                                device_form::wiring(&d.name, line, &d.points, &self.program, &self.map)
+                            })
+                    };
+                    match w {
+                        Ok(w) => {
+                            out = Some(DeviceAct::Add(w));
+                            done = true;
+                        }
+                        Err(e) => n.error = Some(e),
+                    }
+                } else if no.clicked() {
+                    done = true;
+                }
+            });
+        });
+        chrome.hit("named form", m.response.rect);
+        if done || crate::theme::escaped(&m) {
+            self.named = None;
+        } else {
+            self.named = Some(n);
         }
         out
     }
@@ -481,4 +558,12 @@ pub fn quick_add(
             extend: false,
         },
     })
+}
+
+/// A device name as it is typed: spaces stored as underscores, at most the
+/// 32 characters a Skipper's map takes.
+fn tidy_name(name: &mut String) {
+    if name.contains(' ') || name.chars().count() > 32 {
+        *name = name.replace(' ', "_").chars().take(32).collect();
+    }
 }
