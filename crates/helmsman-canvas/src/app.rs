@@ -198,24 +198,6 @@ pub fn wants_tour(query: &str) -> bool {
     has(query, "tour")
 }
 
-/// Whether a page with this query string opens on the front door
-/// (`crate::front`): `?front` always; never with a link that asks for
-/// something else (`?editor`, `?tour`, `?monitor`, a box to watch);
-/// otherwise until this browser has gone on to the editor once (`seen`).
-#[must_use]
-pub fn wants_front(query: &str, seen: bool) -> bool {
-    if has(query, "front") {
-        return true;
-    }
-    !seen
-        && !["editor", "tour", "monitor", "andon", "box"]
-            .iter()
-            .any(|k| has(query, k))
-}
-
-/// Where the browser keeps that the visitor went on from the front door.
-pub const FRONT_KEY: &str = "helmsman-canvas/front";
-
 // Independent UI flags (menu open, served by a box, first frame routed,
 // …), not a state machine in disguise.
 #[allow(clippy::struct_excessive_bools)]
@@ -275,12 +257,6 @@ pub struct App {
     confirm: Option<(bool, Vec<String>)>,
     /// The guided tour, while it runs (`?tour`, Help › Take the tour).
     pub tour: Option<crate::tour::Tour>,
-    /// The front door, while it is what the page shows (`crate::front`):
-    /// a first visit to the simulation, `?front`, Help › Front page.
-    pub front: Option<crate::front::Front>,
-    /// The visitor went on to the editor: kept, so the next visit opens
-    /// there.
-    front_seen: bool,
 }
 
 /// A click this frame that lets the diagram's selection go (Nick,
@@ -352,15 +328,6 @@ impl App {
         if app.source == Source::Sim && crate::web::wants_tour() {
             app.tour = Some(crate::tour::Tour::new());
         }
-        // A first visit to the simulation opens on the front door.
-        app.front_seen = cc.storage.is_some_and(|s| s.get_string(FRONT_KEY).is_some());
-        #[cfg(target_arch = "wasm32")]
-        let query = crate::web::query();
-        #[cfg(not(target_arch = "wasm32"))]
-        let query = String::new();
-        if app.source == Source::Sim && !app.served_by_box && wants_front(&query, app.front_seen) {
-            app.front = Some(crate::front::Front::new());
-        }
         app
     }
 
@@ -394,8 +361,6 @@ impl App {
             space: None,
             confirm: None,
             tour: None,
-            front: None,
-            front_seen: false,
         }
     }
 
@@ -533,16 +498,6 @@ impl App {
         }
     }
 
-    /// From the front door to the editor, on the front door's project.
-    pub fn leave_front(&mut self) {
-        self.front = None;
-        self.front_seen = true;
-        self.screen = Screen::Editor;
-        self.sim
-            .get_or_insert_with(PlaygroundView::new)
-            .open_project(crate::front::PROJECT);
-    }
-
     /// One frame of the whole window. Split from [`eframe::App::ui`] so tests
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
@@ -557,16 +512,6 @@ impl App {
         glyphs::set_hotkeys(&ctx, self.chrome.hotkeys);
         let now = ctx.input(|i| i.time);
         theme::apply(&ctx, self.chrome.light);
-        // The front door is the whole page until the visitor goes on.
-        if self.source == Source::Sim
-            && let Some(f) = &mut self.front
-        {
-            self.chrome.hits.clear();
-            if crate::front::ui(ui, &mut self.chrome, f) == Some(crate::front::Act::OpenEditor) {
-                self.leave_front();
-            }
-            return;
-        }
         if self.source == Source::Sim && self.screen == Screen::Proposals {
             self.screen = Screen::Editor;
         }
@@ -2235,18 +2180,6 @@ impl App {
                     self.tour = Some(crate::tour::Tour::new());
                     self.screen = Screen::Editor;
                 }
-                if self.source == Source::Sim
-                    && menu_item(
-                        ui,
-                        &mut chrome,
-                        "help front",
-                        "Front page",
-                        false,
-                        "The page a first visit opens on: a tank, its program and the proofs that it holds safe.",
-                    )
-                {
-                    self.front = Some(crate::front::Front::new());
-                }
                 ui.separator();
                 let shown = chrome.hotkeys;
                 if menu_item(
@@ -2517,9 +2450,6 @@ impl eframe::App for App {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
         storage.set_string(crate::pane_layout::LAYOUTS_KEY, self.layouts.saved());
-        if self.front_seen {
-            storage.set_string(FRONT_KEY, "seen".into());
-        }
     }
 
     /// The layout string above is all that is kept per browser. egui's

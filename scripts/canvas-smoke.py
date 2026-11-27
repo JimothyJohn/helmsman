@@ -8,7 +8,9 @@ usage: python3 -I scripts/canvas-smoke.py [--dist DIR] [--out DIR] [--box]
                                      needs cargo build -p helmsman-plc)
 
 Serves DIR (default target/canvas-dist) on a free loopback port and drives
-?playground: panes and tabs by hotkey and click, the view keys (L the Log,
+?playground: a first visit (nothing kept, the old front door's key kept,
+an old ?playground&front link) opening on the editor, panes and tabs by
+hotkey and click, the view keys (L the Log,
 T the Trend, Z fit, Space run and stop), the side pane's ribbon, a typed
 edit, Deploy, the diagram's "why" click, Scan for Device and a found device
 added by name, the Monitor, light mode, and a phone-width Monitor.
@@ -235,12 +237,6 @@ class Run:
 # button sits), in points.
 AGENT_DESIGN = (78, 308)
 
-# The front door's "Fail the high switch" and "Open the editor", in points
-# at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
-FRONT_FAIL_HIGH = (596, 688)
-FRONT_OPEN_EDITOR = (1264, 33)
-
-
 def open_app(ctx, base, query, lay):
     page = ctx.new_page()
     page.goto(base + "/__seed", wait_until="load")
@@ -287,7 +283,9 @@ def playground(ctx, base, out):
         r.click(*MENU); r.wait(300); r.click(*sub); r.wait(500); r.shot(name); r.key("Escape"); r.key("Escape")
     # Help > Show hotkeys writes each shortcut over its button; one more
     # click puts the page back as it was.
-    HELP_HOTKEYS = (322, 311)
+    # (One row higher since Help › Front page went, 2026-11-27: measured
+    # from pg-14-help-menu.png.)
+    HELP_HOTKEYS = (322, 274)
     def hotkeys_menu():
         r.click(*MENU); r.wait(300); r.click(*MENU_HELP); r.wait(500); r.click(*HELP_HOTKEYS)
     r.step("hotkeys-on", hotkeys_menu, LEFT, 700)
@@ -405,15 +403,55 @@ def playground(ctx, base, out):
     r2.click(1313, 26); r2.wait(1500); r2.shot("monitor")
     problems += r2.problems()
     r2.page.close()
-    # A first visit (nothing kept): the front door, its proofs in, then a
-    # fault thrown and the way on to the editor.
-    rf = Run(open_app(ctx, base, "?playground&front", None), out, "pg-front")
-    rf.wait(2800); rf.shot("writing")
-    rf.wait(7000); rf.shot("proved")
-    rf.click(*FRONT_FAIL_HIGH); rf.wait(16000); rf.shot("high-switch-failed")
-    rf.click(*FRONT_OPEN_EDITOR); rf.wait(1500); rf.shot("editor")
-    problems += rf.problems()
-    rf.page.close()
+    return problems
+
+
+# What a browser kept from the front door (gone 2026-11-27): the key it
+# set once the visitor went on to the editor.
+OLD_FRONT_KEY = "helmsman-canvas/front"
+
+
+def first_visit(browser, base, out):
+    """A first visit opens on the editor, on the default project, with no
+    front door (Nick, 2026-11-27): each case in a fresh browser context
+    (nothing kept, or only what the case puts there) must show the left
+    pane exactly as `?playground&editor` with nothing kept shows it. The
+    old front door covered the whole page, so it cannot pass. The cases:
+    the public page's `?playground`, the same with the old front door's key
+    in storage, and an old `?playground&front` link."""
+
+    def visit(prefix, query, kept):
+        ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+        page = ctx.new_page()
+        r = Run(page, out, prefix)
+        page.goto(base + "/__seed", wait_until="load")
+        page.evaluate("localStorage.clear()")
+        for k, v in kept.items():
+            page.evaluate(f"localStorage.setItem({json.dumps(k)}, {json.dumps(v)})")
+        page.goto(base + "/" + query, wait_until="load")
+        r.wait(3500)
+        r.shot("opened")
+        left = r.look(LEFT)
+        # A while later: nothing has come up in front of the editor.
+        r.wait(6000)
+        r.shot("later")
+        later = r.look(LEFT)
+        problems = r.problems()
+        ctx.close()
+        return left, later, problems
+
+    want, _, problems = visit("pg-first-reference", "?playground&editor", {})
+    for prefix, query, kept in (
+        ("pg-first-visit", "?playground", {}),
+        ("pg-first-old-key", "?playground", {OLD_FRONT_KEY: "seen"}),
+        ("pg-first-old-link", "?playground&front", {}),
+    ):
+        left, later, found = visit(prefix, query, kept)
+        problems += found
+        if left != want:
+            problems.append(f"[smoke] {prefix}: {query} with {kept or 'nothing'} kept does not open on the editor as ?playground&editor does (see {prefix}-01-opened.png)")
+        elif later != want:
+            problems.append(f"[smoke] {prefix}: {query} left the editor within 10 s (see {prefix}-02-later.png)")
     return problems
 
 
@@ -1027,6 +1065,7 @@ def run_engine(browser, base, out, a, proc, box_port):
     ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
     problems += playground(ctx, base, out)
     ctx.close()
+    problems += first_visit(browser, base, out)
     problems += phone(browser, base, "?playground&editor", out, "pg")
     problems += no_webgl2(browser, base, out)
     if proc:
