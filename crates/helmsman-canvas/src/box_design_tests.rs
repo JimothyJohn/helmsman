@@ -303,6 +303,11 @@ fn build_hands_the_designs_brief_to_the_boxs_agent_and_a_small_design_lands_once
     agent_reply(&mut v, &answer(&horn_latched(), &latches()));
     run(&b, &jar, &mut v, &ctx);
     assert_eq!(file(&b, "lamp", "main.st"), LAMP, "held until Apply");
+    assert_eq!(
+        v.kept_design_for_test().unwrap().built,
+        0,
+        "a held batch is not counted built"
+    );
     crate::box_projects_tests::apply_on_box(&mut v);
     run(&b, &jar, &mut v, &ctx);
     let o = v.instruct.outcome.as_ref().unwrap();

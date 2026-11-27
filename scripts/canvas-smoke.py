@@ -189,10 +189,14 @@ PROPOSALS_SIGN_IN = (54, 181)
 # The Monitor's bottom panel: its Trend tab, the first of the strip at the
 # page's left (native harness, 1400 x 860: `bottom trend` 24..57, 591..624).
 MONITOR_TREND_TAB = (40, 607)
-# The Deploy sheet ("What changes on the machine") on a box: its Cancel,
-# for a one-file project, measured from the smoke's screenshot at 1400 x
-# 860 (2026-11-27). The program has no I/O, so the box needs no map.
-SHEET_CANCEL = (416, 771)
+# The Deploy sheet ("What changes on the machine") on a box: its Cancel.
+# The sheet's Deploy and Cancel are pinned to its bottom edge, which sits a
+# fixed 58 pt above the window's (what it shows scrolls above them), so
+# the button is found from the window's height, whatever the sheet holds:
+# measured with the native harness at 1400 x 860 and 1400 x 1180 for two
+# programs on 2026-11-27 (`deploy sheet cancel` at 377..457, H-88..H-58).
+# The program has no I/O, so the box needs no map.
+SHEET_CANCEL = (417, H - 73)
 SHEET_PROGRAM = "PROGRAM tally\nVAR\n  n : INT;\nEND_VAR\nn := n + 1;\nEND_PROGRAM\n"
 # The box sign-in in the browser build is a real HTML form, so the
 # browser's password manager can fill and save it (Nick, 2026-11-26).

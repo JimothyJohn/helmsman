@@ -359,6 +359,60 @@ fn a_small_design_builds_step_by_step_and_is_written_once_when_every_step_has_pa
     );
 }
 
+/// A built batch is held like any described change (docs/UI.md "Show
+/// Changes"): the kept design does not count it until it is applied, and
+/// Discard leaves it to build again. Apply takes it, as a change whose file
+/// has not moved since the build started; an edit by hand while it is held
+/// still refuses it.
+#[test]
+fn a_held_design_batch_is_counted_only_once_applied_and_apply_checks_the_file() {
+    let built = |v: &mut PlaygroundView| {
+        let k = v.kept_design_for_test().unwrap();
+        (k.built, k.next)
+    };
+    let held = |v: &mut PlaygroundView| {
+        v.build_design(&ctx());
+        reply(v, &answer(&horn(), &horn_follows()));
+        reply(v, &answer(&horn_latched(), &latches()));
+        assert!(v.instruct.pending.is_some(), "held: {:?}", v.instruct.outcome);
+        assert_eq!(v.proj.files["main.st"], LAMP, "nothing written");
+    };
+    let mut v = mine();
+    v.proj.files.insert(DESIGN_FILE.into(), lamp_and_horn_design());
+    v.proj.save_as("kept the design", None);
+    let before = built(&mut v);
+    assert_eq!(before.0, 0);
+    assert!(before.1.is_some(), "a batch to build");
+
+    // Held: not built yet.
+    held(&mut v);
+    assert_eq!(built(&mut v), before, "a held batch is not counted");
+
+    // Discarded: still not built, and Build offers the same batch.
+    crate::instruct_tests::press_on_page(&mut v, "agent discard");
+    assert!(v.instruct.pending.is_none());
+    assert_eq!(v.proj.files["main.st"], LAMP);
+    assert_eq!(built(&mut v), before, "Discard builds nothing");
+
+    // Built again and applied: taken (the file did not move), and counted.
+    held(&mut v);
+    crate::instruct_tests::apply(&mut v);
+    assert_eq!(v.proj.files["main.st"], horn_latched());
+    assert_eq!(built(&mut v), (2, None), "counted once applied");
+
+    // An edit by hand while a batch is held: Apply refuses it.
+    let mut v = mine();
+    v.proj.files.insert(DESIGN_FILE.into(), lamp_and_horn_design());
+    v.proj.save_as("kept the design", None);
+    held(&mut v);
+    let edited = format!("{LAMP}(* mine *)\n");
+    v.proj.current_text_mut().unwrap().clone_from(&edited);
+    v.proj.save();
+    crate::instruct_tests::press_on_page(&mut v, "agent apply");
+    assert_eq!(v.proj.files["main.st"], edited, "the edit stands");
+    assert_eq!(built(&mut v), before, "nothing counted");
+}
+
 #[test]
 fn a_design_step_that_runs_out_of_room_pauses_and_is_never_split() {
     let mut v = mine();
