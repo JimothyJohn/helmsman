@@ -16,7 +16,7 @@ use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, SimRevision, Storage};
-use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WARN, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GREEN, WARN, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
@@ -3933,6 +3933,7 @@ impl Body for PlaygroundView {
                 v.saw(t, now);
             }
             v.menu_open = self.dmenu.is_open() || self.sim_popup.is_some();
+            v.flow = self.session.running;
             v.canvas(ui, scan);
             let reads = v.reads_on_screen();
             // The switches over the Read blocks take the right-click first.
@@ -5430,6 +5431,7 @@ pub fn answer_name(code: &str) -> String {
 
 /// One input's control filling its block at `rect`.
 fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> MapInput {
+    let t = theme(ui);
     let label = p.name.to_ascii_lowercase();
     let size = (rect.height() * 0.4).clamp(7.0, 18.0);
     let builder = egui::UiBuilder::new().max_rect(rect).id_salt(("pg-map", k));
@@ -5440,9 +5442,9 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             let b = egui::Button::new(RichText::new(&label).strong().size(size).color(if on {
                 BLACK
             } else {
-                WHITE
+                t.muted
             }))
-            .fill(if on { GREEN } else { OFF_RED })
+            .fill(if on { GREEN } else { t.rule })
             // Never wrapped: a narrow block at low zoom would stack the
             // letters one a row.
             .wrap_mode(egui::TextWrapMode::Truncate)
@@ -5458,9 +5460,9 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
                 RichText::new(format!("{label} {}", if on { "TRUE" } else { "FALSE" }))
                     .strong()
                     .size(size)
-                    .color(if on { BLACK } else { WHITE }),
+                    .color(if on { BLACK } else { t.muted }),
             )
-            .fill(if on { GREEN } else { OFF_RED })
+            .fill(if on { GREEN } else { t.rule })
             .wrap_mode(egui::TextWrapMode::Truncate);
             if ui
                 .add_sized(rect.size(), b)
@@ -5733,12 +5735,12 @@ impl Default for PlaygroundView {
 
 /// One input: its control, and the response a right-click on its row
 /// opens a menu from. `place` is where the point is now, in its tooltip.
-/// An input's glyph says its state: green on, red off (Nick, 2026-11-26);
+/// An input's glyph says its state: green on, flat grey off (Nick, 2026-11-27);
 /// a number's is plain.
 fn state_ink(t: &crate::theme::Theme, v: Value) -> egui::Color32 {
     match v {
         Value::Bool(true) => t.ink(crate::st_view::brand::GREEN),
-        Value::Bool(false) => t.ink(crate::st_view::brand::RED),
+        Value::Bool(false) => t.muted,
         _ => t.fg,
     }
 }
@@ -5778,7 +5780,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                             .strong()
                             .color(if on { BLACK } else { t.fg }),
                     )
-                    .fill(if on { YELLOW } else { t.rule })
+                    .fill(if on { GREEN } else { t.rule })
                     .sense(Sense::click_and_drag());
                 let r = control_button(ui, b, size, tile).tip(format!(
                     "Push button: on while held. Click the card for its details.\n{place}"
@@ -5793,7 +5795,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                         .strong()
                         .color(if on { BLACK } else { t.fg }),
                 )
-                .fill(if on { YELLOW } else { t.rule });
+                .fill(if on { GREEN } else { t.rule });
                 let r = control_button(ui, b, size, tile).tip(format!(
                     "Switch: click to flip. Click the card for its details.\n{place}"
                 ));
@@ -5932,7 +5934,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     let color = if on {
         t.ink(crate::lamps::colour(&p.name).unwrap_or(GREEN))
     } else {
-        t.fg
+        t.muted
     };
     // A tile has the lamp and the name; the glyph would take half of it.
     let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));

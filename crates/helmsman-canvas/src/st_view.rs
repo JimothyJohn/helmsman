@@ -347,6 +347,8 @@ pub struct Viewer {
     /// The hand toggle of the corner controls: a primary drag on empty
     /// space pans instead of selecting. View state, never saved.
     hand: bool,
+    /// The program is running: live TRUE wires carry dots.
+    pub flow: bool,
 }
 
 /// Whether folds of `kind` start as their blocks and fold when the reader
@@ -694,6 +696,7 @@ impl Viewer {
             jumped: None,
             zoom: zoom_fold::ZoomFolds::new(),
             hand: false,
+            flow: false,
         };
         v.reshow();
         v
@@ -2409,9 +2412,15 @@ impl Viewer {
         }
         cam.area = area.size();
         if !cam.fitted {
-            // Fit under the glyph strip along the top, so no block opens
-            // under it.
-            let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+            // Fit under the glyph strip along the top and above the corner
+            // controls along the bottom, so no block opens under either.
+            let below = Rect::from_min_max(
+                area.min + Vec2::new(0.0, GLYPH_BAND),
+                Pos2::new(
+                    area.max.x,
+                    (area.max.y - TAP - 2.0 * CORNER_GAP).max(area.min.y + 2.0 * GLYPH_BAND),
+                ),
+            );
             cam.fit(below, size);
             cam.offset.y += GLYPH_BAND;
         }
@@ -2808,6 +2817,7 @@ impl Viewer {
             self.shown(),
             seen.as_ref(),
             Marks {
+                flow: (self.flow && page_visible()).then(|| ui.input(|i| i.time)),
                 pick,
                 lines: &self.highlight,
                 lit: lit.as_ref(),
@@ -2987,12 +2997,13 @@ fn font(size: f32) -> FontId {
     FontId::monospace(size)
 }
 
-/// A wire's colour and width: TRUE in the brand yellow on either page,
-/// FALSE muted, a value in the page's ink, no scan faint.
+/// A wire's colour and width: TRUE green (a darker green on the light
+/// page, and heavier), FALSE a thin flat muted grey, a value in the page's
+/// ink, no scan faint. Yellow is never a signal state (Nick, 2026-11-27).
 fn wire_color(t: &Theme, v: Option<Value>) -> (Color32, f32) {
     match v {
-        Some(Value::Bool(true)) => (YELLOW, 2.5),
-        Some(Value::Bool(false)) => (t.muted, 1.5),
+        Some(Value::Bool(true)) => (t.ink(brand::GREEN), if t.dark { 2.5 } else { 3.0 }),
+        Some(Value::Bool(false)) => (t.muted, 1.0),
         Some(_) => (t.fg, 1.5),
         None => (t.idle, 1.2),
     }
@@ -3009,6 +3020,147 @@ fn bezier(painter: &egui::Painter, a: Pos2, b: Pos2, z: f32, color: Color32, wid
 }
 
 /// The scope that calls scope `k` (`m.t.` → `m.`, `m.` → the program).
+/// How a TRUE wire is told from a FALSE one: glow, weight and motion as
+/// well as hue (Nick, 2026-11-27). `flow` is the page time while the
+/// program runs and the page is visible; `None` stills the dots.
+#[derive(Clone, Copy)]
+struct Flow {
+    time: Option<f64>,
+    /// The visible part of the diagram: off-screen wires are not glowed.
+    area: Rect,
+}
+
+/// The wire's four control points, as [`bezier`] draws it.
+fn wire_points(a: Pos2, b: Pos2, z: f32) -> [Pos2; 4] {
+    let dx = ((b.x - a.x).abs() * 0.5).max(30.0 * z);
+    [a, a + Vec2::new(dx, 0.0), b - Vec2::new(dx, 0.0), b]
+}
+
+/// A TRUE wire's glow (dark page: two wide faint under-strokes) and its
+/// slow even dots source to sink (both pages); the core stroke is drawn by
+/// the caller. A wire off the screen draws nothing.
+fn true_wire_extras(
+    painter: &egui::Painter,
+    t: &Theme,
+    pts: [Pos2; 4],
+    z: f32,
+    core: (Color32, f32),
+    f: f32,
+    flow: Flow,
+) {
+    let bounds = Rect::from_points(&pts).expand(8.0);
+    if !flow.area.intersects(bounds) {
+        return;
+    }
+    let (color, width) = core;
+    let w = width * z.max(0.5);
+    if t.dark {
+        for (k, alpha) in [(5.0, 0.08), (2.5, 0.18)] {
+            painter.add(CubicBezierShape::from_points_stroke(
+                pts,
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(w * k, color.gamma_multiply(alpha * f)),
+            ));
+        }
+    }
+    let Some(time) = flow.time else { return };
+    if z <= 0.35 {
+        return;
+    }
+    let shape = CubicBezierShape::from_points_stroke(pts, false, Color32::TRANSPARENT, Stroke::NONE);
+    let len = (pts[3] - pts[0]).length().max(1.0);
+    // One dot every 36 points of diagram, drifting 14 points a second.
+    let gap = 36.0 * z;
+    let n = (len / gap).ceil().max(1.0);
+    #[allow(clippy::cast_possible_truncation)]
+    let drift = ((time * f64::from(14.0 * z / gap)).fract()) as f32;
+    let dot = Color32::WHITE;
+    for i in 0..n as u32 {
+        let u = (i as f32 + drift) / n;
+        painter.circle_filled(shape.sample(u), (2.0 * z).max(1.6), dot.gamma_multiply(0.85 * f));
+    }
+    painter
+        .ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
+}
+
+/// Whether the page is on screen: a hidden tab animates nothing. Always
+/// true off the web.
+fn page_visible() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()
+            .and_then(|w| w.document())
+            .is_none_or(|d| !d.hidden())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        true
+    }
+}
+
+/// A block's brief wash when its BOOL flips: green to TRUE, grey to
+/// FALSE, easing out over [`FLIP_S`]. The first value seen is no flip.
+fn flip_flash(
+    painter: &egui::Painter,
+    key: (u32, u32, u32),
+    on: bool,
+    r: Rect,
+    radius: CornerRadius,
+    t: &Theme,
+) {
+    const FLIP_S: f64 = 0.45;
+    let ctx = painter.ctx();
+    let now = ctx.input(|i| i.time);
+    let id = egui::Id::NULL.with(("flip", key));
+    let (_, at) = ctx.data_mut(|d| {
+        let e = d.get_temp_mut_or_insert_with(id, || (on, f64::NEG_INFINITY));
+        if e.0 != on {
+            *e = (on, now);
+        }
+        *e
+    });
+    let age = now - at;
+    if (0.0..FLIP_S).contains(&age) {
+        #[allow(clippy::cast_possible_truncation)]
+        let k = (1.0 - age / FLIP_S) as f32;
+        let c = if on { t.ink(brand::GREEN) } else { t.muted };
+        painter.rect_filled(r, radius, c.gamma_multiply(0.35 * k));
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+}
+
+/// Diagram units between the grid's dots.
+const GRID: f32 = 24.0;
+
+/// A faint dot grid on the ground, a step or two off it, panned and zoomed
+/// with the diagram and gone as the zoom gets small.
+fn dot_grid(painter: &egui::Painter, t: &Theme, area: Rect, cam: Cam) {
+    let z = cam.zoom;
+    let fade = ((z - 0.3) / 0.35).clamp(0.0, 1.0);
+    if fade <= 0.0 {
+        return;
+    }
+    let mut step = GRID * z;
+    while step < 14.0 {
+        step *= 2.0;
+    }
+    let color = t.bg.lerp_to_gamma(t.fg, 0.14 * fade);
+    let origin = cam.to_screen(0.0, 0.0);
+    let first = |o: f32, lo: f32| o + ((lo - o) / step).ceil() * step;
+    let radius = (0.9 * z).clamp(0.7, 1.4);
+    let mut y = first(origin.y, area.top());
+    while y <= area.bottom() {
+        let mut x = first(origin.x, area.left());
+        while x <= area.right() {
+            painter.circle_filled(Pos2::new(x, y), radius, color);
+            x += step;
+        }
+        y += step;
+    }
+}
+
 fn parent_of(scopes: &[Scope], k: usize) -> Option<usize> {
     let prefix = scopes.get(k)?.prefix.strip_suffix('.')?;
     let up = prefix
@@ -3239,6 +3391,8 @@ fn elide(painter: &egui::Painter, text: &str, size: f32, max_w: f32) -> String {
 /// What [`draw`] marks on the diagram beside the scan.
 #[derive(Clone, Copy)]
 struct Marks<'a> {
+    /// The page time while the program runs and the page is visible.
+    flow: Option<f64>,
     pick: Option<Pick>,
     /// Source lines the explanation cites.
     lines: &'a [u32],
@@ -3327,7 +3481,7 @@ fn draw_table_row(
         let (fill, ink, edge) = if cell.stops {
             (brand::OFF_RED, t.ink(brand::RED), brand::RED)
         } else if lit {
-            (YELLOW, BLACK, YELLOW)
+            (brand::GREEN, BLACK, brand::GREEN)
         } else {
             (t.shade, t.fg, t.edge)
         };
@@ -3517,6 +3671,7 @@ fn draw(
     marks: Marks<'_>,
 ) {
     let Marks {
+        flow,
         pick,
         lines,
         lit,
@@ -3551,6 +3706,7 @@ fn draw(
         .map(|w| (w.to, w.inp))
         .collect();
     painter.rect_filled(area, CornerRadius::ZERO, t.bg);
+    dot_grid(painter, t, area, cam);
     let text = z > 0.35;
     let ghost_texts = ghosts.map_or_else(Vec::new, |(old, removed)| ghost_tags(old, removed, d, added));
     // Regions, outermost first.
@@ -3559,7 +3715,11 @@ fn draw(
         let f = strength(lit.is_some_and(|l| l.region(r.id)));
         let rect = cam.rect(&r.rect);
         let (stroke, fill, state) = match gate {
-            Some(Gate::Open(n)) => (YELLOW, YELLOW.gamma_multiply(0.06), format!("taken ×{n}")),
+            Some(Gate::Open(n)) => (
+                t.ink(brand::GREEN),
+                brand::GREEN.gamma_multiply(0.06),
+                format!("taken ×{n}"),
+            ),
             Some(Gate::Closed) => (
                 t.muted.gamma_multiply(0.7),
                 Color32::TRANSPARENT,
@@ -3655,6 +3815,10 @@ fn draw(
                 c.gamma_multiply(f),
             );
         } else {
+            if v == Some(Value::Bool(true)) && live.is_some() {
+                let area_flow = Flow { time: flow, area };
+                true_wire_extras(painter, t, wire_points(pa, end, z), z, (c, width), f, area_flow);
+            }
             bezier(painter, pa, end, z, c.gamma_multiply(f), width);
         }
         if w.negated {
@@ -3671,8 +3835,16 @@ fn draw(
             // At most the wire's own length (and a block's width) wide.
             let room = (end.x - pa.x - 8.0 * z).clamp(48.0 * z, 120.0 * z);
             let g = fitted(painter, &label, font(10.0 * z), t.fg.gamma_multiply(f), room);
-            let at = pa + Vec2::new(4.0, -7.0) * z;
-            painter.galley(at - Vec2::new(0.0, g.size().y / 2.0), g, t.fg);
+            let at = pa + Vec2::new(4.0, -9.0) * z;
+            let top_left = at - Vec2::new(0.0, g.size().y / 2.0);
+            // A ground of the page's own, so a wire passing under the
+            // number does not strike through it.
+            painter.rect_filled(
+                Rect::from_min_size(top_left, g.size()).expand2(Vec2::new(2.0, 0.0) * z),
+                CornerRadius::same(2),
+                t.bg.gamma_multiply(0.85 * f),
+            );
+            painter.galley(top_left, g, t.fg);
         }
     }
     // Nodes.
@@ -3851,10 +4023,10 @@ fn draw(
             }
         }
         for (k, row) in states.into_iter().flatten().enumerate() {
-            // One chip per state: the one that ran lit in the brand yellow.
+            // One chip per state: the one that ran lit green.
             let c = cam.rect(&layout::body_row(n, k));
             let (fill, ink) = match row.on {
-                Some(true) => (YELLOW, BLACK),
+                Some(true) => (brand::GREEN, BLACK),
                 _ => (t.shade, t.fg),
             };
             let chip = CornerRadius::same(3);
@@ -3864,7 +4036,11 @@ fn draw(
                 chip,
                 Stroke::new(
                     1.0 * z.max(0.6),
-                    if row.on == Some(true) { YELLOW } else { t.edge },
+                    if row.on == Some(true) {
+                        brand::GREEN
+                    } else {
+                        t.edge
+                    },
                 ),
                 StrokeKind::Inside,
             );
@@ -3932,7 +4108,7 @@ fn draw(
                         Align2::LEFT_CENTER,
                         name,
                         font(10.0 * z),
-                        t.muted.gamma_multiply(on_path),
+                        t.muted.lerp_to_gamma(t.fg, 0.55).gamma_multiply(on_path),
                     );
                 }
             }
@@ -3947,7 +4123,7 @@ fn draw(
                         Align2::RIGHT_CENTER,
                         name,
                         font(10.0 * z),
-                        t.muted.gamma_multiply(on_path),
+                        t.muted.lerp_to_gamma(t.fg, 0.55).gamma_multiply(on_path),
                     );
                 }
             }
@@ -3956,9 +4132,19 @@ fn draw(
                 && let Some(v) = live.and_then(|l| l.values[n.id.0 as usize].first().copied().flatten())
                 && let Some(label) = value_text(d, n.id, v, vars)
             {
+                if let Value::Bool(on) = v {
+                    flip_flash(
+                        painter,
+                        (n.id.0, n.rect.x.to_bits(), n.rect.y.to_bits()),
+                        on,
+                        r,
+                        radius,
+                        t,
+                    );
+                }
                 let color = match v {
                     Value::Bool(true) => t.ink(brand::GREEN),
-                    Value::Bool(false) => t.ink(brand::RED),
+                    Value::Bool(false) => t.muted,
                     _ => t.fg,
                 };
                 // Elided to the block, never spilling out of it.

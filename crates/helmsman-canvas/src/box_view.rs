@@ -4105,6 +4105,7 @@ impl Body for BoxView {
                     v.open(0);
                 }
                 area = ui.available_rect_before_wrap();
+                v.flow = scan.is_some();
                 v.canvas(ui, scan);
                 reads = v.reads_on_screen();
                 // The force buttons over the Read blocks take the right-click first.
