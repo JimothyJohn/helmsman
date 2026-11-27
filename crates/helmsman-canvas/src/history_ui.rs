@@ -90,7 +90,9 @@ pub fn tab_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], at: 
     let shown = at.map_or(Some(0), |n| newest.iter().position(|r| r.n == n));
     let here = shown.unwrap_or(usize::MAX);
     let mut pick = None;
-    ui.horizontal(|ui| {
+    // Wrapped: the two 18 pt buttons are wider than the answer area in a
+    // pane at its default width, and a plain row widened the pane.
+    ui.horizontal_wrapped(|ui| {
         let r = ui
             .add_enabled(
                 shown.is_some_and(|k| k > 0),
