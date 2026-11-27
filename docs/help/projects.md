@@ -9,9 +9,8 @@ shows them.
 
 ## Files
 
-- **The heading** at the top of the Files tab says where the projects are
-  kept: "Files in this browser" on the simulation page, "Files on the box"
-  when you are connected to one. Under it, **My Files** holds your own
+- **The heading** at the top of the Files tab on the simulation page says
+  the projects are kept in this browser; a box's tab has none. **My Files** holds your own
   projects and **Examples** the built-in ones (a box has none, so it shows
   only My Files). Each shows how many it holds; a click on its name folds
   it away or opens it again, and the editor remembers which are folded.

@@ -93,6 +93,9 @@ pub enum Icon {
     ZoomIn,
     /// A magnifier with a minus: zoom out.
     ZoomOut,
+    /// A magnifier with a frame in it: fit the diagram, or the blocks
+    /// selected, to the view.
+    ZoomFit,
     /// A line that rises and falls: the bottom panel's Trend tab.
     Trend,
     /// ↑ : move up (the Trend's ticked signals, a lane).
@@ -101,6 +104,8 @@ pub enum Icon {
     Down,
     /// A painter's palette: pick a color.
     Palette,
+    /// A pencil: edit (a device's row on the Devices tab).
+    Edit,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -151,6 +156,25 @@ pub fn action_wide(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool, 
         Rect::from_center_size(rect.center(), Vec2::splat(side)),
         icon,
         ink,
+    );
+    r
+}
+
+/// Send when the agent cannot be reached (Nick, 2026-11-26): the arrow in
+/// red on the gray of a deactivated button, which still takes a click.
+/// The caller tips it with why.
+pub fn send_off(ui: &mut egui::Ui, width: f32) -> Response {
+    let size = Vec2::new(width, TAP * 0.75);
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    let t = theme(ui);
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(5), t.rule.gamma_multiply(0.5));
+    let side = rect.height() * 0.56;
+    draw(
+        painter,
+        Rect::from_center_size(rect.center(), Vec2::splat(side)),
+        Icon::Send,
+        t.ink(RED),
     );
     r
 }
@@ -325,6 +349,7 @@ const fn tab_action(icon: Icon) -> Option<Action> {
         Icon::Code => Some(Action::St),
         Icon::Agent => Some(Action::Describe),
         Icon::Io => Some(Action::Io),
+        Icon::Help => Some(Action::HelpTab),
         Icon::Messages => Some(Action::Messages),
         Icon::Trend => Some(Action::Trend),
         _ => None,
@@ -754,6 +779,24 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             );
         }
+        Icon::ZoomFit => {
+            // The lens and handle of Find, a small frame in the lens.
+            let rad = b.width() * 0.32;
+            let at = Pos2::new(l + rad + w * 0.5, t + rad + w * 0.5);
+            p.circle_stroke(at, rad, stroke);
+            let d = rad * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment(
+                [Pos2::new(at.x + d, at.y + d), Pos2::new(r, bt)],
+                Stroke::new(w * 1.3, color),
+            );
+            let side = rad * 0.95;
+            p.rect_stroke(
+                Rect::from_center_size(at, Vec2::splat(side)),
+                CornerRadius::same(1),
+                Stroke::new(w * 0.8, color),
+                egui::StrokeKind::Middle,
+            );
+        }
         Icon::Find => {
             // A lens and its handle, down to the right.
             let rad = b.width() * 0.32;
@@ -889,6 +932,28 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             ));
             p.rect_stroke(front, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
+        }
+        Icon::Edit => {
+            // A pencil on the diagonal: its tip at the lower left, a
+            // shoulder where the point ends, the body to the upper right.
+            let u = b.width();
+            let d = Vec2::new(1.0, -1.0).normalized();
+            let n = Vec2::new(1.0, 1.0).normalized();
+            let tip = Pos2::new(l + u * 0.06, bt - u * 0.06);
+            let hw = u * 0.15;
+            let shoulder = tip + d * u * 0.34;
+            let end = tip + d * u * 1.22;
+            p.add(egui::Shape::closed_line(
+                vec![
+                    tip,
+                    shoulder + n * hw,
+                    end + n * hw,
+                    end - n * hw,
+                    shoulder - n * hw,
+                ],
+                stroke,
+            ));
+            p.line_segment([shoulder + n * hw, shoulder - n * hw], stroke);
         }
         Icon::Clear => {
             // A bin: the lid and its handle over a tapering body.

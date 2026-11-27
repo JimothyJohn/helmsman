@@ -34,6 +34,9 @@ pub enum Tab {
     #[default]
     Io,
     Claude,
+    /// The Help tab (Nick, 2026-11-26): a question about an error or
+    /// about how to do something, kept apart from the Describe tab.
+    Help,
 }
 
 impl Tab {
@@ -42,6 +45,7 @@ impl Tab {
         match self {
             Self::Io => "I/O",
             Self::Claude => "Describe",
+            Self::Help => "Help",
         }
     }
 
@@ -51,6 +55,9 @@ impl Tab {
         match self {
             Self::Io => "I/O: the program's inputs and outputs with their live values.",
             Self::Claude => "Describe: say what the program should do, and the change is made and checked.",
+            Self::Help => {
+                "Help: ask what an error means or how to do something. It reads the Log and the devices and changes nothing."
+            }
         }
     }
 }
@@ -76,11 +83,20 @@ pub enum Pane {
     /// The I/O map's devices and their points (`crate::devices`).
     Devices,
     Files,
+    /// Ask what an error means or how to do something (`crate::help`).
+    Help,
 }
 
 impl Pane {
     /// Every tab, in the left pane's first order.
-    pub const ALL: [Self; 5] = [Self::Claude, Self::Code, Self::Io, Self::Devices, Self::Files];
+    pub const ALL: [Self; 6] = [
+        Self::Claude,
+        Self::Code,
+        Self::Io,
+        Self::Devices,
+        Self::Files,
+        Self::Help,
+    ];
 
     /// The view's own tab this is, for the two a view draws through
     /// [`Body::tab`].
@@ -89,6 +105,7 @@ impl Pane {
         match self {
             Self::Claude => Some(Tab::Claude),
             Self::Io => Some(Tab::Io),
+            Self::Help => Some(Tab::Help),
             Self::Code | Self::Devices | Self::Files => None,
         }
     }
@@ -100,7 +117,7 @@ impl Pane {
             Self::Files => "Alt+Shift+0  Files: the projects and their files.",
             Self::Devices => "Alt+Shift+4  Devices: the I/O map and its modules.",
             Self::Code => "Alt+Shift+1  Code: the open file's Structured Text.",
-            Self::Claude | Self::Io => match self.tab() {
+            Self::Claude | Self::Io | Self::Help => match self.tab() {
                 Some(t) => t.tip(),
                 None => "",
             },
@@ -115,6 +132,7 @@ impl Pane {
             Self::Code => Icon::Code,
             Self::Claude => Icon::Agent,
             Self::Io => Icon::Io,
+            Self::Help => Icon::Help,
         }
     }
 
@@ -127,6 +145,7 @@ impl Pane {
             Self::Code => "Structured Text",
             Self::Claude => Tab::Claude.label(),
             Self::Io => Tab::Io.label(),
+            Self::Help => Tab::Help.label(),
         }
     }
 
@@ -138,6 +157,7 @@ impl Pane {
             Self::Code => "code",
             Self::Claude => "claude",
             Self::Io => "io",
+            Self::Help => "help",
         }
     }
 
@@ -164,8 +184,8 @@ impl Pane {
 /// since 2026-11-05 (Nick: "just a bit wider"); 320 since 2026-11-10 (at
 /// 240 the Code tab held 19 characters a row and wrapped a 14-line
 /// program to 24 rows; at 320 it holds 27); 384 since 2026-11-26 (Nick:
-/// "20% wider").
-pub const LEFT_W: f32 = 384.0;
+/// "20% wider"); 307 the same day (Nick: "20% narrower", 384 x 0.8).
+pub const LEFT_W: f32 = 307.0;
 /// The right panel's width when first opened, points: 236 since
 /// 2026-11-05 (the tab buttons and the hide chevron must fit the row, or
 /// the panel grows every frame; the Requirements tab is archived since
@@ -220,6 +240,10 @@ pub struct Chrome {
     pub scan: bool,
     /// View › Light mode: the light page instead of the dark one.
     pub light: bool,
+    /// The Describe tab's key was pressed: its instruction field takes the
+    /// keyboard the next time it is drawn (Nick, 2026-11-26: A, then type,
+    /// then Enter). Not remembered.
+    pub focus_describe: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
@@ -269,6 +293,12 @@ pub struct Chrome {
     /// Help › Show hotkeys: every control with a shortcut wears it as a
     /// superscript, to teach it. Remembered.
     pub hotkeys: bool,
+    /// An error the person clicked, to put to the Help tab: the view
+    /// takes it ([`Self::ask_help`]); never saved.
+    pub help_ask: Option<String>,
+    /// The view has a Help tab this frame, so an error is a link to it
+    /// ([`crate::messages::error_link`]).
+    pub help_on: bool,
 }
 
 impl Default for Chrome {
@@ -287,6 +317,7 @@ impl Default for Chrome {
             msgs: false,
             scan: false,
             light: false,
+            focus_describe: false,
             line: None,
             jump: None,
             hits: Vec::new(),
@@ -305,11 +336,18 @@ impl Default for Chrome {
             files_fold_mine: false,
             files_fold_examples: false,
             hotkeys: false,
+            help_ask: None,
+            help_on: false,
         }
     }
 }
 
 impl Chrome {
+    /// Puts `error`, as shown, to the Help tab: the view opens it and asks.
+    pub fn ask_help(&mut self, error: &str) {
+        self.help_ask = Some(error.to_string());
+    }
+
     /// Whether the Files tab's section for `g` is folded away.
     #[must_use]
     pub const fn files_folded(&self, g: crate::projects::Group) -> bool {
@@ -928,6 +966,7 @@ fn strip(
     hover: &str,
     hits: &mut Vec<(String, Rect)>,
 ) -> (Option<usize>, egui::Response) {
+    let mid = ui.max_rect().center().y;
     let mut picked = None;
     let side = ui.available_width().clamp(STRIP - 16.0, TAB);
     for (k, t) in tabs.iter().enumerate() {
@@ -938,13 +977,15 @@ fn strip(
             picked = Some(k);
         }
     }
-    (picked, strip_toggle(ui, left, hover))
+    (picked, strip_toggle(ui, left, hover, mid))
 }
 
 /// The rest of a collapsed sidebar's strip as one button: the fold glyph
 /// for showing the pane, tinted under the pointer. `left`: the pane is the
 /// right one, so showing it moves it left (the strip is on the right).
-fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
+/// The glyph sits at height `mid`, the pane's middle, where the open
+/// pane's ribbon button is, unless the tabs reach past it.
+fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str, mid: f32) -> egui::Response {
     let size = Vec2::new(
         ui.available_width().max(STRIP - 8.0),
         ui.available_height().max(TAP),
@@ -955,20 +996,42 @@ fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
         let tint = ui.style().interact(&r).bg_fill;
         ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
     }
-    fold_glyph(ui, rect.center(), !left, false, r.hovered());
+    let y = mid.clamp(
+        rect.top() + TAP * 0.5,
+        (rect.bottom() - TAP * 0.5).max(rect.top() + TAP * 0.5),
+    );
+    fold_glyph(ui, Pos2::new(rect.center().x, y), !left, false, r.hovered(), 1.0);
     r
 }
 
-/// An open sidebar's hide button in the header row. `left`: the pane is
-/// the left one.
-fn header_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
-    let (rect, r) = ui.allocate_exact_size(Vec2::splat(TAP * 0.75), Sense::click());
-    let r = r.tip(hover);
+/// Width of an open sidebar's ribbon, points.
+const RIBBON: f32 = 20.0;
+
+/// An open sidebar's hide button (Nick, 2026-11-26): a thin ribbon along
+/// the pane's inner edge, `full` the pane's rect, the button at its
+/// vertical middle, the very spot the collapsed strip's button takes.
+/// `left`: the pane is the left one (its ribbon is on its right).
+fn ribbon(ui: &mut egui::Ui, full: Rect, left: bool, hover: &str) -> egui::Response {
+    let rib = if left {
+        Rect::from_min_max(Pos2::new(full.right() - RIBBON, full.top()), full.max)
+    } else {
+        Rect::from_min_max(full.min, Pos2::new(full.left() + RIBBON, full.bottom()))
+    };
+    let btn = Rect::from_center_size(
+        Pos2::new(rib.center().x, full.center().y),
+        Vec2::new(RIBBON, TAP * 0.9),
+    );
+    let r = ui
+        .interact(btn, ui.scope_id().with(("ribbon", left)), Sense::click())
+        .tip(hover);
+    let t = theme(ui);
+    ui.painter()
+        .rect_filled(rib, CornerRadius::ZERO, t.shade.gamma_multiply(0.5));
     if r.hovered() {
         let tint = ui.style().interact(&r).bg_fill;
-        ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
+        ui.painter().rect_filled(btn, CornerRadius::same(4), tint);
     }
-    fold_glyph(ui, rect.center(), left, true, r.hovered());
+    fold_glyph(ui, btn.center(), left, true, r.hovered(), 0.8);
     r
 }
 
@@ -976,10 +1039,10 @@ fn header_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
 /// window outline with the pane's side filled, and an arrow in the rest
 /// of it pointing the way the pane will move, into its edge to hide it,
 /// out of it to show it. `pane_left`: the pane is on the left.
-fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool) {
+fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool, scale: f32) {
     let t = theme(ui);
     let ink = if hot { t.accent } else { t.muted };
-    let (w, h, slab) = (22.0, 18.0, 7.0);
+    let (w, h, slab) = (22.0 * scale, 18.0 * scale, 7.0 * scale);
     let frame = Rect::from_center_size(c, Vec2::new(w, h));
     let p = ui.painter();
     p.rect_stroke(
@@ -1002,12 +1065,12 @@ fn fold_glyph(ui: &egui::Ui, c: Pos2, pane_left: bool, hiding: bool, hot: bool) 
     // The arrow's head points toward the pane's edge to hide, away to show.
     let dir = if hiding { side } else { -side };
     let mid = Pos2::new(edge - side * (slab + (w - slab) / 2.0), c.y);
-    let reach = 3.0;
+    let reach = 3.0 * scale;
     let tip = Pos2::new(mid.x + dir * reach, c.y);
     let back = mid.x - dir * reach;
     let stroke = Stroke::new(2.0, ink);
-    p.line_segment([Pos2::new(back, c.y - 4.0), tip], stroke);
-    p.line_segment([Pos2::new(back, c.y + 4.0), tip], stroke);
+    p.line_segment([Pos2::new(back, c.y - 4.0 * scale), tip], stroke);
+    p.line_segment([Pos2::new(back, c.y + 4.0 * scale), tip], stroke);
 }
 
 /// How far from the window's right edge a tab dragged out of the left
@@ -1027,6 +1090,7 @@ fn pane_body(ui: &mut egui::Ui, p: Pane, body: &mut dyn Body, chrome: &mut Chrom
         Pane::Code => body.st(ui, chrome),
         Pane::Claude => body.tab(ui, Tab::Claude, chrome),
         Pane::Io => body.tab(ui, Tab::Io, chrome),
+        Pane::Help => body.tab(ui, Tab::Help, chrome),
     }
 }
 
@@ -1117,70 +1181,74 @@ fn side_pane(
     };
     let shown = egui::Panel::show_switched(ui, &mut open, strip_panel, panel, |ui, is_open| {
         let toggle = if is_open {
-            let mut t = None;
-            // The tabs shrink to share one row with the chevron (seven at
-            // full size are wider than the pane's 320 pt), down to 24 pt,
-            // and wrap below that: a row that overflows widens the pane
-            // every frame. The row's width is read here, before it starts:
-            // inside a wrapped row `available_width` is not what is left.
-            let row = ui.available_width();
-            let gap_x = ui.spacing().item_spacing.x;
-            #[allow(clippy::cast_precision_loss)]
-            let n = tabs.len() as f32;
-            let size = ((row - TAP * 0.75 - gap_x * (n + 1.0)) / n.max(1.0)).clamp(24.0, TAB);
-            let fill = row - n * (size + gap_x) - TAP * 0.75 - gap_x;
-            ui.horizontal_wrapped(|ui| {
-                if right {
-                    t = Some(header_toggle(ui, false, &chevron_tip));
-                }
-                for &p in tabs {
-                    let r =
-                        crate::glyphs::tab_sensed(ui, p.icon(), size, on == p, None, Sense::click_and_drag())
-                            .tip(format!(
-                                "{}\nDrag to reorder or to {other}; right-click hides the tab.",
-                                p.tip()
-                            ));
-                    r.dnd_set_drag_payload(p);
-                    row_tabs.push((p, r.rect));
-                    r.context_menu(|ui| {
-                        let b = ui
-                            .add(egui::Button::new("Hide tab").min_size(Vec2::new(74.0, TAP * 0.7)))
-                            .tip(format!(
-                                "Takes {} out of the pane. View › {} brings it back.",
-                                p.label(),
-                                p.label()
-                            ));
-                        hits.push((format!("hide {}", p.key()), b.rect));
-                        if b.clicked() {
-                            hidden = Some(p);
-                            ui.close();
+            let full = ui.max_rect();
+            let content = if right {
+                Rect::from_min_max(Pos2::new(full.left() + RIBBON, full.top()), full.max)
+            } else {
+                Rect::from_min_max(full.min, Pos2::new(full.right() - RIBBON, full.bottom()))
+            };
+            let t = ribbon(ui, full, !right, &chevron_tip);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+                // The tabs shrink to share one row (seven at full size are
+                // wider than the pane's 320 pt), down to 24 pt,
+                // and wrap below that: a row that overflows widens the pane
+                // every frame. The row's width is read here, before it starts:
+                // inside a wrapped row `available_width` is not what is left.
+                let row = ui.available_width();
+                let gap_x = ui.spacing().item_spacing.x;
+                #[allow(clippy::cast_precision_loss)]
+                let n = tabs.len() as f32;
+                let size = ((row - gap_x * (n + 1.0)) / n.max(1.0)).clamp(24.0, TAB);
+                ui.horizontal_wrapped(|ui| {
+                    for &p in tabs {
+                        let r = crate::glyphs::tab_sensed(
+                            ui,
+                            p.icon(),
+                            size,
+                            on == p,
+                            None,
+                            Sense::click_and_drag(),
+                        )
+                        .tip(format!(
+                            "{}\nDrag to reorder or to {other}; right-click hides the tab.",
+                            p.tip()
+                        ));
+                        r.dnd_set_drag_payload(p);
+                        row_tabs.push((p, r.rect));
+                        r.context_menu(|ui| {
+                            let b = ui
+                                .add(egui::Button::new("Hide tab").min_size(Vec2::new(74.0, TAP * 0.7)))
+                                .tip(format!(
+                                    "Takes {} out of the pane. View › {} brings it back.",
+                                    p.label(),
+                                    p.label()
+                                ));
+                            hits.push((format!("hide {}", p.key()), b.rect));
+                            if b.clicked() {
+                                hidden = Some(p);
+                                ui.close();
+                            }
+                        });
+                        // A tab is a control first: the finger, not the grab
+                        // hand a draggable thing gets (`theme::pointer_cursor`
+                        // leaves the dragged ones alone).
+                        if r.hovered() && !r.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         }
-                    });
-                    // A tab is a control first: the finger, not the grab
-                    // hand a draggable thing gets (`theme::pointer_cursor`
-                    // leaves the dragged ones alone).
-                    if r.hovered() && !r.dragged() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                        hits.push((p.hit(), r.rect));
+                        if r.clicked() {
+                            on = p;
+                        }
+                        if r.double_clicked() {
+                            hide = true;
+                        }
                     }
-                    hits.push((p.hit(), r.rect));
-                    if r.clicked() {
-                        on = p;
-                    }
-                    if r.double_clicked() {
-                        hide = true;
-                    }
-                }
-                if !right {
-                    // The chevron at the right edge when the row has room.
-                    if fill > 0.0 {
-                        ui.add_space(fill);
-                    }
-                    t = Some(header_toggle(ui, true, &chevron_tip));
-                }
+                });
+                ui.separator();
+                pane_body(ui, on, body, chrome);
             });
-            ui.separator();
-            pane_body(ui, on, body, chrome);
-            t
+            ui.expand_to_include_rect(full);
+            Some(t)
         } else {
             let strip_tabs: Vec<StripTab> = tabs
                 .iter()
@@ -1412,7 +1480,7 @@ fn trend_panel(
                         chrome.msgs = false;
                     }
                     let r = crate::glyphs::tab(ui, Icon::Messages, TAB, chrome.msgs, cue.alarm)
-                        .tip("Messages: what happened, newest last.");
+                        .tip("Log: what happened, newest last.");
                     hits.push(("bottom messages".to_string(), r.rect));
                     if r.clicked() {
                         chrome.msgs = true;
@@ -1422,9 +1490,9 @@ fn trend_panel(
                         let r = ui
                             .label(RichText::new(cue.errors.to_string()).strong().color(red))
                             .tip(if cue.errors == 1 {
-                                "One error in the Messages.".to_string()
+                                "One error in the Log.".to_string()
                             } else {
-                                format!("{} errors in the Messages.", cue.errors)
+                                format!("{} errors in the Log.", cue.errors)
                             });
                         hits.push(("messages error count".to_string(), r.rect));
                     }
@@ -1446,10 +1514,33 @@ fn trend_panel(
     chrome.trend = open;
 }
 
+/// The bottom panel on the Monitor: the Editor's own (`trend_panel`, one
+/// `chrome.trend` and `chrome.msgs` between them), drawn before the
+/// Monitor's central panel.
+pub fn bottom(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
+    let now = ui.input(|i| i.time);
+    let standing = body.alarm();
+    let alarm = body.messages().alarm(now, standing);
+    if body.messages().take_fresh() && !chrome.trend {
+        chrome.show_messages();
+    }
+    if body.messages().flashing(now) {
+        ui.ctx().request_repaint();
+    }
+    let cue = Cue {
+        alarm,
+        errors: body.messages().errors(),
+    };
+    let mut hits = Vec::new();
+    trend_panel(ui, chrome, body, &cue, &mut hits);
+    chrome.hits.extend(hits);
+}
+
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut hits = Vec::new();
     let have = body.tabs();
+    chrome.help_on = have.contains(&Tab::Help);
     let has = |p: &Pane| p.tab().is_none_or(|t| have.contains(&t));
     let lefts: Vec<Pane> = chrome.lefts.iter().copied().filter(has).collect();
     let rights: Vec<Pane> = chrome.rights.iter().copied().filter(has).collect();
@@ -1893,10 +1984,14 @@ pub fn busy(ui: &mut egui::Ui, chrome: &mut Chrome, stage: &str, hit: &str) {
     let t = crate::theme::theme(ui);
     let r = ui
         .add(egui::Label::new(RichText::new(stage).color(t.muted)).truncate())
-        .tip("Deploy is under way. The Messages say how it ends.");
+        .tip("Deploy is under way. The Log says how it ends.");
     let s = ui.add(egui::Spinner::new().size(crate::glyphs::ROW * 0.8));
     chrome.hit(hit, r.rect.union(s.rect));
 }
+
+/// The Code header's Back, (i) and Forward, points a side: a little under
+/// the row's glyphs, so the row still fits the 307 pt pane.
+const STEP: f32 = crate::glyphs::ROW * 0.8;
 
 /// What was pressed at the header's right end.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1906,6 +2001,8 @@ pub struct Pressed {
     pub errors: bool,
     /// Back or Forward: the revision to show.
     pub revision: Option<u32>,
+    /// The info button between them: the revision to open in a window.
+    pub info: Option<u32>,
 }
 
 /// The header's right end, right to left: Deploy as a filled yellow
@@ -1916,6 +2013,10 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
     // What is left of the row, up to the pane's right edge.
     chrome.hit("code header rest", ui.available_rect_before_wrap());
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // Close together, as the Agent tab's row: with Back, (i) and
+        // Forward the default spacing ran the clock over the wrap glyph
+        // in the 307 pt pane (2026-11-27).
+        ui.spacing_mut().item_spacing.x = 2.0;
         let tip = s.deploy.as_ref().err().map_or(s.deploy_tip, String::as_str);
         let r = crate::glyphs::deploy(ui, s.deploy.is_ok()).tip(tip);
         chrome.hit("code deploy", r.rect);
@@ -1924,23 +2025,41 @@ pub fn header_right(ui: &mut egui::Ui, chrome: &mut Chrome, s: &Status<'_>) -> P
             busy(ui, chrome, stage, "code deploying");
         }
         if let Some(steps) = s.steps {
-            // Right to left: Forward, then Back, so they read Back Forward.
-            for (key, icon, to, end) in [
+            // Right to left: Forward, info, then Back, so they read
+            // Back (i) Forward as in the Agent tab.
+            for (k, (key, icon, to, end)) in [
                 (
                     "code forward",
                     Icon::Forward,
                     &steps.forward,
                     "Forward: this is the newest revision.",
                 ),
+                ("code info", Icon::Info, &None, ""),
                 (
                     "code back",
                     Icon::Back,
                     &steps.back,
                     "Back: this is the first revision.",
                 ),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if k == 1 {
+                    let tip = if steps.shown.is_some() {
+                        "Details: this version's instruction, what changed and the code, in a window, to look at or restore."
+                    } else {
+                        "Details: step Back to an older version first, then see its details here."
+                    };
+                    let r = crate::glyphs::button_sized(ui, icon, STEP, steps.shown.is_some(), false, tip);
+                    chrome.hit(key, r.rect);
+                    if r.clicked() {
+                        out.info = steps.shown;
+                    }
+                    continue;
+                }
                 let tip = to.as_ref().map_or(end, |(_, t)| t.as_str());
-                let r = crate::glyphs::button_sized(ui, icon, crate::glyphs::ROW, to.is_some(), false, tip);
+                let r = crate::glyphs::button_sized(ui, icon, STEP, to.is_some(), false, tip);
                 chrome.hit(key, r.rect);
                 if r.clicked() {
                     out.revision = to.as_ref().map(|(n, _)| *n);

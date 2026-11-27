@@ -432,13 +432,6 @@ impl DevicesUi {
             if b.clicked() {
                 act = Some(DeviceAct::AddIo(device.to_string()));
             }
-            let wire = ui
-                .add(egui::Button::new("Wire it").small())
-                .tip("Steps through wiring this device's inputs and checks each as you switch it. Changes nothing.");
-            chrome.hit(format!("wire it {device}"), wire.rect);
-            if wire.clicked() {
-                self.open_wire_it(device);
-            }
             if let Some(n) = left.filter(|n| *n > 0) {
                 ui.label(RichText::new(format!("{n} more available")).color(t.muted))
                     .tip("Channels the device has that are not in the project. They stay out of the lists until you add them.");
@@ -600,7 +593,7 @@ impl DevicesUi {
             }
             if let Some(err) = &a.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(theme(ui).ink(RED))).wrap());
+                crate::messages::error_link(ui, chrome, "device error", err, theme(ui).ink(RED));
             }
             ui.add_space(12.0);
             let ok = ui

@@ -22,15 +22,25 @@ fn open_popup(h: &mut Harness) {
 
 #[test]
 fn a_tab_dragged_along_its_row_takes_that_place() {
-    use Pane::{Claude, Code, Devices, Files, Io};
+    use Pane::{Claude, Code, Devices, Files, Help, Io};
     let mut h = sim();
-    assert_eq!(h.app.chrome.lefts, [Claude, Code, Io, Devices, Files]);
+    assert_eq!(h.app.chrome.lefts, [Claude, Code, Io, Devices, Files, Help]);
+    // The row the simulation draws: Help is a box's tab (2026-11-26).
+    let row = |h: &Harness| -> Vec<Pane> {
+        h.app
+            .chrome
+            .lefts
+            .iter()
+            .copied()
+            .filter(|p| *p != Help)
+            .collect()
+    };
     // Onto the left half of the first tab: before it.
     let io = h.rect("tab io").center();
     let first = h.rect("tab claude");
     h.drag(io, first.left_center() + vec2(3.0, 0.0));
     h.wait(0.2);
-    assert_eq!(h.app.chrome.lefts, [Io, Claude, Code, Devices, Files]);
+    assert_eq!(row(&h), [Io, Claude, Code, Devices, Files]);
     assert_eq!(
         h.app.chrome.pane, Claude,
         "a drag is not a click: the Agent still shows"
@@ -43,13 +53,13 @@ fn a_tab_dragged_along_its_row_takes_that_place() {
     let last = h.rect("pane files");
     h.drag(io, last.right_center() - vec2(3.0, 0.0));
     h.wait(0.2);
-    assert_eq!(h.app.chrome.lefts, [Claude, Code, Devices, Files, Io]);
+    assert_eq!(row(&h), [Claude, Code, Devices, Files, Io]);
     // Onto the right half of a tab in the middle: after it.
     let files = h.rect("pane files").center();
     let code = h.rect("pane code");
     h.drag(files, code.right_center() - vec2(3.0, 0.0));
     h.wait(0.2);
-    assert_eq!(h.app.chrome.lefts, [Claude, Code, Files, Devices, Io]);
+    assert_eq!(row(&h), [Claude, Code, Files, Devices, Io]);
     // Dropped on itself, or let go over the pane's body: nothing moves.
     let was = h.app.chrome.lefts.clone();
     let code = h.rect("pane code");
@@ -111,7 +121,11 @@ fn a_tab_hidden_from_its_menu_comes_back_from_the_view_menu() {
     h.view_menu("view tab claude");
     h.wait(0.2);
     assert!(h.app.chrome.hidden.is_empty() && h.app.chrome.showing(Pane::Claude));
-    assert_eq!(h.app.chrome.lefts[3..], [Pane::Files, Pane::Claude]);
+    assert!(
+        h.app.chrome.lefts.ends_with(&[Pane::Files, Pane::Claude]),
+        "{:?}",
+        h.app.chrome.lefts
+    );
     // Every tab hidden: no pane is drawn, the diagram has the width, and
     // the View menu still opens one.
     for p in Pane::ALL {
@@ -360,4 +374,38 @@ fn on_a_box_the_popup_offers_the_boxs_layouts_and_an_engineer_keeps_one_there() 
     let mut s = sim();
     open_popup(&mut s);
     assert!(!s.has("layouts box note") && s.app.boxv.is_none());
+}
+
+/// The simulation has no Help tab (it is a box's, 2026-11-26): whichever
+/// tab is moved or hidden, the left pane never comes to show Help there,
+/// and with every tab it draws hidden no pane is drawn, as before.
+#[test]
+fn the_simulation_never_shows_the_help_tab_it_does_not_have() {
+    for p in [Pane::Files, Pane::Devices, Pane::Io, Pane::Code, Pane::Claude] {
+        let mut h = sim();
+        h.app.chrome.show(p);
+        h.wait(0.1);
+        h.app.chrome.hide(p);
+        h.wait(0.2);
+        assert_ne!(h.app.chrome.pane, Pane::Help, "{p:?} hidden: the pane shows Help");
+    }
+    let mut h = sim();
+    h.app.chrome.show(Pane::Files);
+    h.wait(0.1);
+    h.app.chrome.send_right();
+    h.wait(0.2);
+    assert_ne!(
+        h.app.chrome.pane,
+        Pane::Help,
+        "Files sent right: the pane shows Help"
+    );
+    let mut h = sim();
+    for p in [Pane::Files, Pane::Devices, Pane::Io, Pane::Code, Pane::Claude] {
+        h.app.chrome.hide(p);
+    }
+    h.wait(0.3);
+    assert!(
+        !h.has("left") && !h.has("right"),
+        "every tab the simulation draws is hidden: no pane is drawn"
+    );
 }

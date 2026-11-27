@@ -8,8 +8,10 @@ usage: python3 -I scripts/canvas-smoke.py [--dist DIR] [--out DIR] [--box]
                                      needs cargo build -p helmsman-plc)
 
 Serves DIR (default target/canvas-dist) on a free loopback port and drives
-?playground: panes and tabs by hotkey and click, a typed edit, Deploy, the
-diagram's "why" click, the Monitor, light mode, and a phone-width Monitor.
+?playground: panes and tabs by hotkey and click, the view keys (L the Log,
+T the Trend, Z fit, Space run and stop), the side pane's ribbon, a typed
+edit, Deploy, the diagram's "why" click, Scan for Device and a found device
+added by name, the Monitor, light mode, and a phone-width Monitor.
 With --box it also starts target/debug/helmsman-plc on another free port
 serving the same dist, with projects on, HTTPS and OPC UA off and the CIP
 ports ephemeral so it cannot collide with a bench box, under a fresh state
@@ -91,8 +93,9 @@ EXPECTED = ("/__seed", "status of 404", "status of 401", "status of 409", "statu
 
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
-# Agent first; a tab can be docked in a right pane).
-PANES = ("claude", "code", "io", "devices", "files")
+# Agent first; a tab can be docked in a right pane). Help (?) is last, on a
+# box only: the simulation leaves it out (2026-11-26).
+PANES = ("claude", "code", "io", "devices", "files", "help")
 
 
 def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
@@ -114,15 +117,25 @@ RIGHT_TABS = (1180, 56, 210, 30)
 # The trend is the bottom strip from the left pane's edge since 2026-11-24
 # (the left pane has the page's whole height).
 BOTTOM_TABS = (330, 545, 1070, 315)
-# The Messages: a tab of the bottom panel since 2026-11-26, its list to the
-# right of the panel's tab strip (the strip at x 384..434 with the left pane
-# at 384 pt); layout()'s msgs=1 shows it. What a deploy says is there, not
-# in a line under the header.
-MESSAGES = (440, 575, 950, 280)
+# The Log (the Messages, renamed 2026-11-26): a tab of the bottom panel, its
+# list to the right of the panel's tab strip (the strip at x 323..356 with
+# the left pane at 307 pt); layout()'s msgs=1 shows it. What a deploy says
+# is there, not in a line under the header.
+MESSAGES = (360, 575, 1030, 280)
 # The diagram.
 DIAGRAM = (330, 60, 1000, 500)
-# The Devices tab's "Scan and add", beside Scan.
-SCAN_AND_ADD = (286, 195)
+# The Devices tab's Scan for Device under the (empty) list, the simulated
+# E1213 it finds under it, and the small form's Add (2026-11-26). Measured
+# with the native harness at 1400 x 860 points.
+SCAN_FOR_DEVICE = (85, 181)
+FOUND_DEVICE = (150, 213)
+QUICK_ADD = (36, 437)
+# The left pane's hide button on its ribbon, at the pane's vertical middle,
+# and shut, the strip's expand glyph at the same height (2026-11-26).
+RIBBON_LEFT = (288, 456)
+STRIP_LEFT = (28, 456)
+# The simulation's run state in the diagram's header ("running · 2.1s").
+RUN_STATE = (870, 60, 190, 32)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt).
 TAB_AGENT = (23, 70)
@@ -143,7 +156,8 @@ MENU_EDIT = (202, 92)
 MENU_VIEW = (207, 120)
 MENU_HELP = (206, 148)
 VIEW_PANE_LAYOUTS = (396, 505)
-VIEW_PANE_LAYOUTS_BOX = (396, 578)
+# The box's View menu lists the Help tab above Pane layouts (2026-11-26).
+VIEW_PANE_LAYOUTS_BOX = (396, 615)
 VIEW_PROPOSALS_BOX = (396, 198)
 LAYOUT_DEFAULT = (668, 330)
 LAYOUT_PROGRAMMING = (668, 368)
@@ -303,6 +317,26 @@ def playground(ctx, base, out):
     r.step("diagram-deselected", lambda: r.key("Escape"), DIAGRAM, 500)
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
+    # The view keys (2026-11-26): T the Trend, L the Log, each shutting the
+    # panel when its tab shows; Z fits the diagram; Space stops and runs
+    # the simulation (on release; a box would ask first).
+    r.page.mouse.move(700, 300); r.wait(200)
+    r.step("key-t-trend", lambda: r.key("t"), BOTTOM_TABS)
+    r.step("key-l-log", lambda: r.key("l"), BOTTOM_TABS)
+    r.step("key-l-shut", lambda: r.key("l"), BOTTOM_TABS)
+    r.key("l"); r.wait(400)
+    def zoomed_in():
+        r.page.mouse.move(700, 300)
+        for _ in range(6):
+            r.page.mouse.wheel(0, -240); r.wait(60)
+    r.step("zoomed-in", zoomed_in, DIAGRAM, 600)
+    r.step("key-z-fit", lambda: r.key("z"), DIAGRAM, 900)
+    r.step("space-stopped", lambda: r.key("Space"), RUN_STATE, 600)
+    r.step("space-running", lambda: r.key("Space"), RUN_STATE, 600)
+    # The left pane's ribbon: its button hides the pane, the strip's glyph
+    # at the same height brings it back.
+    r.step("ribbon-shut", lambda: r.click(*RIBBON_LEFT), LEFT, 700)
+    r.step("ribbon-open", lambda: r.click(*STRIP_LEFT), LEFT, 700)
     # Alt+Shift+5 docks the Code tab on the right, the I/O shown on the
     # left; Alt+Shift+3 hides and shows that pane; the tab dragged back
     # onto the left pane returns.
@@ -347,20 +381,17 @@ def playground(ctx, base, out):
         "lmap := go;\nEND_PROGRAM\n"
     )
     r.wait(3500); r.shot("agent-noticed")
-    # Last on this page: the simulated E1213 is added, and its Wire it
-    # window opens (wire_it.rs): a checklist, as there is no hardware.
-    # After the program's own steps, because adding the device copies its
-    # profile into the project and the Code tab opens on that file: the
-    # fold, the typed comment and the two programs above would land in it.
+    # Last on this page: Scan for Device lists the simulated E1213, a click
+    # asks only its name, Add adds it (2026-11-26; Wire it is off until its
+    # walkthrough works). After the program's own steps, because adding
+    # the device copies its profile into the project and the Code tab opens
+    # on that file: the fold, the typed comment and the two programs above
+    # would land in it.
     r.step("devices-again", lambda: r.key("Alt+Shift+Digit4"), LEFT)
-    r.step("sim-scan", lambda: r.click(178, 195), LEFT, 900)
-    # "Scan and add" on the first row beside Scan since the left pane is
-    # 384 pt wide (2026-11-26); (80, 231) is the Advanced box now.
-    r.step("sim-device-added", lambda: r.click(*SCAN_AND_ADD), LEFT, 1500)
+    r.step("scan-for-device", lambda: r.click(*SCAN_FOR_DEVICE), LEFT, 1200)
+    r.step("found-device-name", lambda: r.click(*FOUND_DEVICE), LEFT, 900)
+    r.step("sim-device-added", lambda: r.click(*QUICK_ADD), LEFT, 1500)
     r.shot("sim-device-rows")
-    r.step("wire-it", lambda: r.click(176, 178), LEFT, 900)
-    r.shot("wire-it-window")
-    r.step("wire-it-closed", lambda: r.key("Escape"), LEFT, 600)
     problems = r.problems()
     r.page.close()
     # No layout kept: the page opens on the Agent, every tab on the left.
@@ -477,6 +508,14 @@ def box(ctx, base, out):
     r.wait(4500); r.shot("devices-proposal")
     r.click(*TAB_AGENT); r.wait(800); r.shot("agent-tab")
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
+    # ? (Shift and /, as a US keyboard types it) opens the Help tab, a
+    # box's only (2026-11-26); L shuts the Log that shows, and opens it.
+    # (Space asking "Stop the machine?" needs a program running: this box
+    # runs none, so box_projects_tests covers it against a real box.)
+    r.page.mouse.move(700, 300); r.wait(200)
+    r.step("help-tab", lambda: r.key("Shift+Slash"), LEFT, 800)
+    r.step("key-l-log-shut", lambda: r.key("l"), BOTTOM_TABS, 600)
+    r.step("key-l-log", lambda: r.key("l"), BOTTOM_TABS, 600)
     # A pane layout kept on the box (this page's engineer session puts it
     # there), then View › Pane layouts…: the popup lists it under "On
     # this box".
@@ -497,8 +536,12 @@ def box(ctx, base, out):
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once
     # somebody is signed in.
+    # The Monitor (2026-11-26): the program and its lamp in the header, the
+    # device picker first, the Editor's Log and Trend along the bottom.
     m = Run(open_app(ctx, base, "?monitor", layout()), out, "box-monitor")
     m.wait(3000); m.shot("signed-in")
+    # The bottom panel's Trend tab, at the page's left on the Monitor.
+    m.step("monitor-trend", lambda: m.click(32, 561), BOTTOM_TABS, 800)
     problems += m.problems()
     m.page.close()
     return problems

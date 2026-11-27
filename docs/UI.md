@@ -85,7 +85,7 @@ only go down.
   and their lanes pop for a second and a half; at the cap of six the
   oldest pin nobody chose makes room, and the engineer's own stay. It
   opens 320 pt tall (the diagram keeps about 430 pt at 1280x800).
-- **Messages**, the bottom panel's second tab beside the trend (Nick,
+- **Log**, the bottom panel's second tab beside the trend (Nick,
   2026-11-26: they are historic and run long; under the left pane's tabs
   from 2026-11-23), the two tab glyphs stacked at the panel's left, the
   tab shown kept per browser. The standing notices sit above either tab.
@@ -164,23 +164,13 @@ only go down.
   state, which on a box says the protocol a device by its profile is
   reached over and whether the link is slow (2026-11-12); on a box the
   open project's `io.map`, else the map the box runs; under the map's
-  devices, "On the network": Scan asks the box for one scan on every
-  protocol (`POST /api/devices/discover`; the simulation answers with its
-  simulated E1213; since 2026-11-11 the request asks EtherNet/IP, Modbus
-  and, where the build has it, PROFINET, and answers `found`, one entry
-  per device however many protocols it answered on, which the tab reads,
-  with the older `devices` list as the fallback for an older box) and
-  lists every device that answered by vendor and model, with whether a
-  map device binds it and what the public device library knows of it
-  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
-  then by vendor and model text; `--devices-index` points a box at
-  another). **Add by click** (2026-11-12, PROTOCOLS.md step 3): a device
-  the library knows, whose entry names a profile (`NAME.device`), offers
-  Add: a small form asks one thing, the device's name, and says how many
-  channels it has; Add copies the profile into the project as
-  `NAME.device` (the box fetches and checks it, `GET
-  /api/devices/library`; the simulation carries its E1213's) and writes
-  `device NAME device:PROFILE IDENTITY` with the identity the scan saw.
+  devices, **Scan for Device** lists what answers and a click adds one by
+  its name (Nick, 2026-11-26; a **+** that opened the New device form for
+  a few hours before that, and before it "On the
+  network", Scan, Scan and add, the IP address Ask and Advanced are gone;
+  until then Scan listed what answered, `POST /api/devices/discover`, and
+  Add by click wrote a library device as `device NAME device:PROFILE
+  IDENTITY`).
   No signal is written and no protocol, address, byte order or cycle
   time is asked. **A device's I/O is added one point at a time**
   (`device_io.rs`, Nick, 2026-11-15: every channel is available, and
@@ -198,12 +188,12 @@ only go down.
   the variable stays). A device with signals the program has no variable
   for (every channel, as Add wrote them until 2026-11-15) offers Remove N
   unused, which asks first. The New device and Edit forms hold settings
-  only: Edit is the name alone unless Advanced is on, and Save writes
+  only: Edit is the name and the address (2026-11-26), and Save writes
   the device's signals back as they were. The agent's listing in the
   playground names the channels not added (`device_io::describe_free`);
-  the box's `list_devices` does not yet. A device the library does
-  not know says so and offers Advanced, and, on a box with an agent, a
-  button **Build from vendor file…** (`device_vendor.rs`, Nick,
+  the box's `list_devices` does not yet. The New device form
+  has, on a box with an agent, **From the vendor's file…** (on a found
+  device the library did not know until 2026-11-26) (`device_vendor.rs`, Nick,
   2026-11-15). It picks the vendor's file (an EDS, an IODD, a PDF manual
   or a text file: text up to 1 MB, a PDF up to 2 MB), posts it to the box
   as a drop-in (`POST /api/dropins`, the file name cut to `A-Z a-z 0-9 . _ -`
@@ -254,8 +244,7 @@ only go down.
   the stored console password (write-only, the field never shows a value)
   and Change the console's password. Everyone else sees the controls
   disabled with the reason as the tooltip. Errors are the box's own words.
-  **Advanced** (a tick box beside
-  Scan, off by default, remembered in the browser) is the older way: a
+  A
   right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
   and settings, written as one `device` line of `io.map`; Import device…
@@ -335,9 +324,9 @@ only go down.
   entry only while that says it is open (and says when it is closed or
   the hour's allowance is used). A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
-  the tab (its reason goes to the Messages). One that does not is an
-  error in the Messages (their red count, and they open), the box is
-  outlined red, and one red line opens the Messages. Undo is Before /
+  the tab (its reason goes to the Log). One that does not is an
+  error in the Log (their red count, and they open), the box is
+  outlined red, and one red line opens the Log. Undo is Before /
   After there: the file swaps at once between the version before the
   change and the change, compiled and running, each marked green and red
   against the other; nothing is saved (Save keeps the version shown), and
@@ -401,29 +390,15 @@ only go down.
   longer pans the diagram: Space and a drag, or the middle button, do; the
   arrow keys too, and the wheel zooms (no W A S D since 2026-11-26: those
   letters are view keys). Hovering empty space says nothing.
-- **The zoom ladder (Nick, 2026-11-23).** The closer the camera, the more
-  concrete the diagram, and each step out says less about how and more
-  about what. Five levels, closest first: **Code** (each statement is the
-  Structured Text that wrote it), **Wiring** (the blocks and wires, where
-  a fitted view lands), **Statements** (one card per statement, named by
-  what it sets, with its value), **Sections** (one card per commented
-  section, IF or CASE arm, or leftover statement) and **Program** (the
-  whole program as one card). The first try swapped the drawing at a
-  threshold, text far out and blocks close, which looked glitchy, like
-  another interface, and upside down. So: nothing is laid out again (a
-  card is painted over its own blocks, where they are); how strongly is a
-  continuous function of the zoom, with no state to flip; the groups that
-  will close together are outlined faintly one level before they do, and
-  the outline firms up on the way; and the levels are a factor of 2.2
-  apart, so a turn of the wheel never crosses two. A formed card takes
-  the pointer: a click flies in one level to what it holds. Folds the
-  reader makes (a double click, the tabs, the CASE and interlock tables)
-  work as before. In the diagram's bottom-right corner, left of the lamps:
-  a hand (while on, a drag on empty space moves the view instead of
-  drawing a box; off by default, not saved with the project), zoom in and
-  zoom out (one step about the middle, the wheel's limits), each a 44 pt
-  glyph with a tooltip, and the level's name, which opens the list of
-  levels to step to.
+- **The zoom only scales (Nick, 2026-11-26).** The zoom ladder of
+  2026-11-23 (cards per statement, section and program, a rung picker,
+  clicks that flew in) was removed: it was broken, and the diagram is
+  always drawn as its blocks and wires. Folds the reader makes (a double
+  click, the tabs, the CASE and interlock tables) work as before. In the
+  diagram's bottom-right corner: a hand (while on, a drag on empty space
+  moves the view instead of drawing a box; off by default, not saved with
+  the project), zoom in and zoom out (one step about the middle, the
+  wheel's limits) and fit, each a 44 pt glyph with a tooltip.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).
@@ -578,14 +553,11 @@ only go down.
   the project's `icons.map` naming the block or its type still puts its
   character instead.
 - **Lamps** (Nick, 2026-11-12: the first screen should speak without
-  words). The program's BOOL outputs are lamps in the diagram's
-  bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a
-  green together are a traffic light, anything else a row of pilot lamps
-  named under them. An output named after a colour (`red`, `lamp_green`,
-  `amber`, `blue`, `white`) takes that colour there, in the I/O tab's
-  output text when on, and on both trends until a palette colour is
-  picked for it. Only the program's own diagram shows them, not a block
-  instance's.
+  words). An output named after a colour (`red`, `lamp_green`, `amber`,
+  `blue`, `white`) takes that colour in the I/O tab's output text when on,
+  and on both trends until a palette colour is picked for it. The fixture
+  of lamps in the diagram's bottom-right corner (a traffic light, a row of
+  pilot lamps) was removed 2026-11-26: the I/O tab shows the same.
 - **Examples** (Nick, 2026-11-05). Six programs from the first chapters
   of a Structured Text book, a few lines each: Traffic light (first, Nick,
   2026-11-12), Blink, Read and write, Logic (AND, OR, NOT), Start/stop
@@ -650,44 +622,50 @@ Each menu item prints its key. Reserved, not built (TODO card
 
 ## Monitor (phone to wall TV; replaces Andon)
 
-- **Top:** status tiles: running or faulted, then one tile per top-level
-  instance with its key outputs, green or red. The scan period and
-  counts are too low level for the wall: hidden unless an engineer turns
-  "Scan detail" on (card `monitor-scan-time`).
+- **Header (Nick, 2026-11-26):** each program's name with its state's
+  lamp (green running, red faulted, yellow held, grey stopped or stale)
+  and the state in a word, where the Editor shows its own status. The
+  tooltip has the fault, who stopped it and, with "Scan detail" on, the
+  scan period, counts and load (card `monitor-scan-time`): too low level
+  for the wall otherwise.
+- **Content:** the device picker first, then the tile of the program's
+  outputs and one tile per top-level instance with its key outputs,
+  green or red. No status card.
+- **Bottom:** the Editor's own Log and Trend panel, one open or
+  shut state and one tab between the two screens.
 - **Tap a tile:** the same tiles one level down (that instance's instances
-  and outputs). Back and breadcrumbs go up; the full diagram is one tap
-  away.
+  and outputs). The breadcrumbs go up; there is no Back button and no
+  "Open diagram" (the header's Editor | Monitor switch is the way out).
 - **Watch only, but for an engineer's Stop and Restart.** In the
   simulation the header carries the transport (run or stop, step,
   restart) and the same keys as the Editor (Nick, 2026-11-01). On a box,
   an engineer signed in gets Stop or Run and Restart there (no step):
   they act on the program shown, or on every program at the top level,
   through the box's audited routes (card `monitor-box-run-stop`, Nick
-  2026-11-06). A stopped program's tile says STOPPED, "outputs at safe
-  values" and who stopped it. For anyone else the Monitor writes
+  2026-11-06). A stopped program's header says STOPPED, and its tooltip
+  "outputs at safe values" and who stopped it. For anyone else the Monitor writes
   nothing. The Editor's glyph strip carries the same Stop or Run and
   Restart for every program the box runs; no key does it on a box.
 
-As built (step 3): a group per PROGRAM (a module on a box), each with its
-status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
+As built (step 3): a group per PROGRAM (a module on a box), its status
+in the header (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
 period and count only while an engineer is signed in and this browser's
 "Scan detail" is on, kept with the Editor's layout), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
-`monitor-lamp-polarity`), a number its value. "Open diagram" opens the
-Editor's diagram at the level shown. Stale data is never a colour: a
+`monitor-lamp-polarity`), a number its value. Stale data is never a colour: a
 program with no new scan for 3 s, or every program while the box is out
 of reach, goes grey with "stale" and the age, under a red NO DATA banner
 when the box itself is the problem; a stopped simulation is grey too.
 
 Scan load (card `scan-stats`): on a box, "Scan detail" also puts three
-lines on each status tile, each with a tooltip on what it means and
+lines in the program's header tooltip, each saying what it means and
 what is normal: the scan time (average and peak over the module's last
 1000 scans; the tooltip adds the p99 and the shortest), the jitter (how
 late each scan started after its deadline, the same way), and the
 overruns with how long ago the last one was. An overrun in the last
-minute shows on the tile for everyone, in yellow, Scan detail or not.
+minute shows there for everyone, Scan detail or not.
 The simulation runs in the page on no real clock and shows none of
 these.
 Phones (under 600 points wide), `?monitor` and the old `?andon` open on
