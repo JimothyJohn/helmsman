@@ -111,7 +111,9 @@ impl SkipperClock {
     #[must_use]
     pub fn wall(&self, at_ms: u64) -> Option<Shown> {
         let b = self.base?;
-        let unix = (b.unix_ms + at_ms).checked_sub(b.uptime_ms)?;
+        // Checked: what a Skipper answers is not trusted (the tester's
+        // find: u64::MAX for both overflowed the sum).
+        let unix = b.unix_ms.checked_add(at_ms)?.checked_sub(b.uptime_ms)?;
         Some(Shown {
             time: clock_text(unix),
             dated: format!("{} {}", date_text(unix), clock_text(unix)),
@@ -123,7 +125,7 @@ impl SkipperClock {
     #[must_use]
     pub fn uptime_now(&self, now: f64) -> Option<u64> {
         let b = self.base?;
-        Some(b.uptime_ms + page_ms(now).saturating_sub(b.page_at))
+        Some(b.uptime_ms.saturating_add(page_ms(now).saturating_sub(b.page_at)))
     }
 
     /// The tooltip for a shown time.
