@@ -48,40 +48,41 @@ fn click_card(h: &mut Harness, key: &str) {
     h.wait(0.2);
 }
 
+/// Nick, 2026-11-27: a compact card is one line, the point alone; what
+/// drives an output and what an input affects are in its details.
 #[test]
-fn a_card_says_the_first_link_and_its_details_say_them_all() {
+fn a_card_is_its_point_alone_and_its_details_say_every_link() {
     let mut h = sim_with(MIXER);
-    assert!(h.drew("affects"), "an input says what it affects");
-    assert!(h.drew("driven by"), "an output says what drives it");
-    // The last output's card is under the fold of the inputs.
-    h.press("io head inputs");
-    h.wait(0.2);
-    assert!(h.drew("nothing sets it"), "spare is never assigned");
-    h.press("io head inputs");
-    h.wait(0.2);
-    assert!(
-        h.has("io more start"),
-        "start affects three outputs: the first and …"
-    );
-    assert!(!h.has("io more stop"), "stop affects one: no …");
-    assert!(!h.drew("named"), "no details until asked");
-    assert!(!h.drew("kept"), "the groups are in the details");
-    // The details open below the fold of the inputs unless they are folded.
-    h.press("io head inputs");
-    h.wait(0.2);
+    for word in [
+        "affects",
+        "driven by",
+        "nothing sets it",
+        "kept",
+        "named",
+        "times in the code",
+    ] {
+        assert!(!h.drew(word), "no {word:?} until a card is opened");
+    }
+    assert!(!h.has("io more start"), "no summary line, so no …");
     click_card(&mut h, "io card motor");
+    assert!(h.drew("driven by"), "an output's details say what drives it");
     assert!(h.drew("kept"), "motor latches on itself");
     assert!(h.drew("times in the code"), "and how often it is named");
-    assert!(!h.has("io more motor"), "all of them are shown");
     click_card(&mut h, "io card motor");
-    assert!(!h.drew("times in the code"), "a second click closes them");
-    h.press("io head inputs");
-    h.wait(0.2);
-    h.press("io more start");
-    h.wait(0.2);
+    assert!(
+        !h.drew("driven by") && !h.drew("times in the code"),
+        "a second click closes them"
+    );
+    // spare is never assigned: said in its details.
+    click_card(&mut h, "io card spare");
+    assert!(h.drew("nothing sets it"), "spare is never assigned");
+    click_card(&mut h, "io card spare");
+    assert!(!h.drew("nothing sets it"));
+    click_card(&mut h, "io card start");
+    assert!(h.drew("affects"), "an input's details say what it affects");
     assert!(
         h.drew("named 5 times in the code"),
-        "the … opens them: start as a whole name"
+        "start as a whole name, not start_button"
     );
     assert!(
         h.has("io simulate start"),
@@ -430,29 +431,79 @@ feeder_belt_motor_contactor_closed := feeder_belt_run_request;
 END_PROGRAM
 ";
 
+/// The pieces of text the last frame drew inside `area` whose text
+/// contains `needle`: (rows, cut short with an ellipsis).
+fn text_in(h: &Harness, area: eframe::egui::Rect, needle: &str) -> Vec<(usize, bool)> {
+    use eframe::egui::Shape;
+    fn walk(s: &Shape, area: eframe::egui::Rect, needle: &str, out: &mut Vec<(usize, bool)>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, area, needle, out)),
+            Shape::Text(t) if area.contains(t.pos) && t.galley.job.text.contains(needle) => {
+                out.push((t.galley.rows.len(), t.galley.elided));
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, area, needle, &mut out);
+    }
+    out
+}
+
+/// How many pieces of text the last frame drew that are `name` exactly
+/// and whole (not cut short).
+fn whole(h: &Harness, name: &str) -> usize {
+    use eframe::egui::Shape;
+    fn walk(s: &Shape, name: &str) -> usize {
+        match s {
+            Shape::Vec(v) => v.iter().map(|s| walk(s, name)).sum(),
+            Shape::Text(t) => usize::from(t.galley.job.text == name && !t.galley.elided),
+            _ => 0,
+        }
+    }
+    h.shapes.iter().map(|c| walk(&c.shape, name)).sum()
+}
+
+/// Nick, 2026-11-27: a long name is cut to the room on the card's one
+/// line, and the whole of it is in its tooltip.
 #[test]
-fn a_row_gives_its_long_names_the_room_they_need_inside_the_default_width() {
+fn a_long_name_is_cut_to_the_cards_one_line_and_shown_whole_on_hover() {
     let mut h = sim_with(LONG);
     let right = h.rect("right");
-    // What was cut to an ellipsis before shows whole, wrapped on the card.
-    for name in ["feeder_belt_run_request", "feeder_belt_motor_contactor_closed"] {
-        assert!(h.drew(name), "{name}");
-        assert!(!h.elided(name), "{name} is not cut");
+    for name in ["feeder_belt_motor_contactor_closed", "feeder_belt_run_request"] {
         let card = h.rect(&format!("io card {name}"));
         assert!(
             card.left() >= h.size.x - RIGHT_W - 8.0 && card.right() <= h.size.x,
             "{name}: {card:?} stays in the {RIGHT_W} pt panel"
         );
+        let drawn = text_in(&h, card, name);
+        assert!(!drawn.is_empty(), "{name} is on its card");
+        assert!(
+            drawn.iter().all(|&(rows, _)| rows == 1),
+            "{name} is on one line, not wrapped: {drawn:?} in {card:?}"
+        );
+        assert!(
+            drawn.iter().any(|&(_, cut)| cut),
+            "{name} is cut to the room: {drawn:?}"
+        );
+        // The whole name on hover.
+        let before = whole(&h, name);
+        let at = eframe::egui::pos2(card.left() + 50.0, card.top() + 15.0);
+        h.frame(vec![Event::PointerMoved(at)]);
+        h.wait(1.5);
+        assert!(
+            whole(&h, name) > before,
+            "{name}: hovering its card shows the whole name"
+        );
+        h.frame(vec![Event::PointerMoved(eframe::egui::pos2(700.0, 600.0))]);
+        h.wait(0.5);
     }
-    assert!(
-        !h.elided("driven by") && !h.elided("affects"),
-        "the summary lines too"
-    );
     assert!(
         (h.rect("right").left() - right.left()).abs() <= 8.0,
         "the panel kept its width"
     );
-    // A tile has no room for it: there the name is still cut to the tile.
+    // A tile has no room for it either: cut to the tile.
     h.press("io grid");
     h.wait(0.3);
     assert!(h.elided("feeder_belt_motor_contactor_closed"));
