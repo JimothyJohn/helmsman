@@ -559,6 +559,10 @@ pub struct Instruct {
     /// What the engineer named besides the instruction, as of Send: the
     /// blocks in focus and the things collected ([`crate::change`]).
     pub(crate) named: String,
+    /// For a design's build step: the design document and the step's
+    /// brief, which the engineer approved, so every output they name is
+    /// named ([`Self::name_design`]).
+    pub(crate) design_named: String,
 }
 
 impl Instruct {
@@ -673,6 +677,7 @@ impl Instruct {
         // The collected chips go with an instruction.
         self.about = self.take_about();
         self.last.clone_from(&instruction);
+        self.design_named.clear();
         self.pending = None;
         self.sent = crate::change::hash(
             env.scope
@@ -824,6 +829,14 @@ impl Instruct {
             return Err("The design has no steps to build.".into());
         }
         self.outcome = None;
+        self.pending = None;
+        self.design_named.clear();
+        self.sent = crate::change::hash(
+            env.scope
+                .file()
+                .and_then(|f| env.files.get(f))
+                .map_or("", String::as_str),
+        );
         // What was collected with "Chat about this" goes with the batch's
         // steps, as it does with an instruction.
         self.about = self.take_about();
@@ -1330,6 +1343,19 @@ impl Instruct {
             why,
             instruction: run.instruction,
         })
+    }
+
+    /// The run just started is a design's build step: the design document
+    /// and the step briefs name what it may change.
+    pub fn name_design(&mut self, document: &str, briefs: &[String]) {
+        self.design_named = format!("{document}\n{}", briefs.join("\n"));
+    }
+
+    /// Everything the engineer named besides the instruction: the blocks in
+    /// focus and, for a design's build step, the design.
+    #[must_use]
+    pub fn named_text(&self) -> String {
+        format!("{}\n{}", self.named, self.design_named)
     }
 
     /// Holds a green answer as the change waiting for the engineer: the

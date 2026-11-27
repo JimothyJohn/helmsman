@@ -4,8 +4,8 @@
 //! see it: each file's diff, the diagram diff with its counts, every
 //! output whose logic changes, the checks, the replay where the policy
 //! wants one (run before the sheet shows), and the tier with who may
-//! apply it. Deploy on the sheet runs the usual steps; Cancel changes
-//! nothing.
+//! apply it. Deploy on the sheet runs the usual steps; Cancel sends
+//! nothing to the machine.
 //!
 //! Free of I/O like [`crate::box_projects`]: what to ask the box for is
 //! queued there; the answers come in through [`Sheet`]'s `parse` and
@@ -179,8 +179,13 @@ pub struct Report {
     pub outputs: Vec<String>,
     /// Modules the box runs that the project no longer builds.
     pub removed: Vec<String>,
-    /// Why the diagram could not be compared, when it could not.
+    /// Why the blocks and the outputs could not be compared, when they
+    /// could not: the sheet says so and never reports "no output changes".
     pub unknown: Option<String>,
+    /// The whole program the box runs and the project builds, when they
+    /// could be compared: what the sheet's diagram draws.
+    pub old_src: String,
+    pub new_src: String,
 }
 
 impl Report {
@@ -192,8 +197,12 @@ impl Report {
             || self.blocks != (0, 0, 0)
     }
 
-    /// Compares each module the project builds (`check`) with the one the
-    /// box runs by that name: `files` is the project's text by file.
+    /// Compares the project with what the box runs. The line diffs are per
+    /// file (the running module's source carries every file under a
+    /// `(* file NAME *)` line); the blocks and the outputs are worked out on
+    /// the WHOLE program, every file lowered together, on both sides, so a
+    /// change made through a block in another file is seen. `files` is the
+    /// project's text by file.
     #[must_use]
     pub fn compare(
         running: &BTreeMap<String, String>,
@@ -202,44 +211,99 @@ impl Report {
         sizes: ImageSizes,
     ) -> Self {
         let mut r = Self::default();
-        for (module, file) in &check.modules {
-            let new = files.get(file).cloned().unwrap_or_default();
-            let old = running.get(module).cloned().unwrap_or_default();
-            r.files.push(FileDiff {
-                file: file.clone(),
-                module: module.clone(),
-                lines: diff::lines(&old, &new),
-            });
-            let (olds, news): (crate::scope::Files, crate::scope::Files) = (
-                std::iter::once((file.clone(), old)).collect(),
-                std::iter::once((file.clone(), new)).collect(),
-            );
-            let (s, _) = change::summarize(&olds, &news, file, sizes, &[]);
-            if let Some(why) = s.unknown {
-                r.unknown.get_or_insert(why);
-            }
-            r.blocks.0 += s.blocks_added;
-            r.blocks.1 += s.blocks_changed;
-            r.blocks.2 += s.blocks_removed;
-            for o in s.outputs {
-                if !r.outputs.contains(&o) {
-                    r.outputs.push(o);
-                }
+        let built: Vec<(&String, &String)> = files
+            .iter()
+            .filter(|(n, _)| crate::sim_projects::is_st(n) && !helmsman_iec::spec::is_test(n))
+            .collect();
+        let module_of = |file: &str| {
+            check
+                .modules
+                .iter()
+                .find(|(_, f)| f == file)
+                .map_or_else(String::new, |(m, _)| m.clone())
+        };
+        // What the running modules hold of each file.
+        let mut olds: BTreeMap<String, String> = BTreeMap::new();
+        for src in running.values() {
+            for (file, body) in split_files(src) {
+                olds.entry(file).or_insert(body);
             }
         }
-        for (module, src) in running {
-            if check.modules.iter().any(|(m, _)| m == module) {
-                continue;
-            }
-            r.removed.push(module.clone());
+        // A source with no file lines is the one file's own.
+        if olds.is_empty()
+            && let ([(file, _)], [src]) = (built.as_slice(), running.values().collect::<Vec<_>>().as_slice())
+        {
+            olds.insert((*file).clone(), (*src).clone());
+        }
+        for (file, new) in &built {
+            let old = olds.get(*file).cloned().unwrap_or_default();
             r.files.push(FileDiff {
-                file: format!("{module} (removed)"),
-                module: module.clone(),
-                lines: diff::lines(src, ""),
+                file: (*file).clone(),
+                module: module_of(file),
+                lines: diff::lines(&old, new),
             });
+        }
+        for (file, old) in &olds {
+            if !built.iter().any(|(f, _)| *f == file) {
+                r.files.push(FileDiff {
+                    file: format!("{file} (removed)"),
+                    module: String::new(),
+                    lines: diff::lines(old, ""),
+                });
+            }
+        }
+        for module in running.keys() {
+            if !check.modules.iter().any(|(m, _)| m == module) {
+                r.removed.push(module.clone());
+            }
+        }
+        // The whole program, both sides.
+        let mut names: Vec<&String> = check.modules.iter().map(|(m, _)| m).collect();
+        names.dedup();
+        if names.len() > 1 || running.len() > 1 {
+            r.unknown = Some("the project or the box runs more than one program, which are compared one at a time by the box".into());
+            return r;
+        }
+        let old_src = running.values().next().cloned().unwrap_or_default();
+        let mut new_src = String::new();
+        for (file, text) in &built {
+            let _ = writeln!(new_src, "(* file {file} *)");
+            new_src.push_str(text);
+            if !text.ends_with('\n') {
+                new_src.push('\n');
+            }
+        }
+        let one = |t: &str| -> crate::scope::Files {
+            std::iter::once(("program.st".to_string(), t.to_string())).collect()
+        };
+        let (s, _) = change::summarize(&one(&old_src), &one(&new_src), "program.st", sizes, &[]);
+        if let Some(why) = s.unknown {
+            r.unknown = Some(why);
+        } else if s.old_broken {
+            r.unknown = Some("the program the box runs does not compile here".into());
+        } else {
+            r.blocks = (s.blocks_added, s.blocks_changed, s.blocks_removed);
+            r.outputs = s.outputs;
+            r.old_src = old_src;
+            r.new_src = new_src;
         }
         r
     }
+}
+
+/// A module's source split by its `(* file NAME *)` lines into each file's
+/// text.
+fn split_files(src: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for line in src.lines() {
+        if let Some(name) = line.strip_prefix("(* file ").and_then(|r| r.strip_suffix(" *)")) {
+            out.push((name.to_string(), String::new()));
+        } else if let Some((_, body)) = out.last_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    out
 }
 
 /// The sheet's state.
@@ -382,6 +446,13 @@ pub fn ui(ctx: &egui::Context, chrome: &mut Chrome, sheet: &Sheet, c: &mut Conte
                 .color(t.accent),
         ));
         chrome.hit("deploy sheet", r.rect);
+        let r = ui.add(
+            egui::Label::new(
+                RichText::new("Your edits were saved; nothing has been sent to the machine.").color(t.fg),
+            )
+            .wrap(),
+        );
+        chrome.hit("deploy sheet saved", r.rect);
         ui.label(
             RichText::new(format!(
                 "Deploying {} to the machine, against the program it runs now.",
@@ -415,7 +486,7 @@ pub fn ui(ctx: &egui::Context, chrome: &mut Chrome, sheet: &Sheet, c: &mut Conte
             }
             let r = ui
                 .button(RichText::new("Cancel").size(18.0))
-                .tip("Cancel: changes nothing. Esc does the same.");
+                .tip("Cancel: sends nothing to the machine. Esc does the same.");
             chrome.hit("deploy sheet cancel", r.rect);
             if r.clicked() {
                 act = Some(Act::Cancel);
@@ -472,38 +543,55 @@ fn body(ui: &mut egui::Ui, chrome: &mut Chrome, sheet: &Sheet, c: &mut Context<'
         .iter()
         .map(FileDiff::counts)
         .fold((0, 0), |s, x| (s.0 + x.0, s.1 + x.1));
-    let r = ui
-        .add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "Diagram: {a} block(s) added, {ch} changed, {rm} removed. Files: {} line(s) added, {} removed.",
-                    lines.0, lines.1
-                ))
-                .color(t.fg),
-            )
-            .wrap(),
-        )
-        .tip("How much differs from the program the box runs now.");
-    chrome.hit("deploy sheet counts", r.rect);
-    let outputs = if report.outputs.is_empty() {
-        "No output changes.".to_string()
-    } else {
-        format!("Switches {}.", report.outputs.join(", "))
-    };
-    let r = ui
-        .add(egui::Label::new(RichText::new(outputs).strong().color(t.fg)).wrap())
-        .tip("The outputs whose logic changes.");
-    chrome.hit("deploy sheet outputs", r.rect);
     if let Some(why) = &report.unknown {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "The diagram could not be compared ({why}): read the files below."
-                ))
-                .color(t.ink(crate::st_view::brand::WARN)),
+        // Never "no output changes" for what could not be compared.
+        let r = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "Could not compare the outputs: {why}. Read the files below."
+                    ))
+                    .strong()
+                    .color(t.ink(crate::st_view::brand::WARN)),
+                )
+                .wrap(),
             )
-            .wrap(),
+            .tip("The blocks and the outputs that change could not be worked out.");
+        chrome.hit("deploy sheet outputs", r.rect);
+        ui.label(
+            RichText::new(format!("Files: {} line(s) added, {} removed.", lines.0, lines.1)).color(t.fg),
         );
+    } else {
+        let r = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "Diagram: {a} block(s) added, {ch} changed, {rm} removed. Files: {} line(s) added, {} removed.",
+                        lines.0, lines.1
+                    ))
+                    .color(t.fg),
+                )
+                .wrap(),
+            )
+            .tip("How much differs from the program the box runs now.");
+        chrome.hit("deploy sheet counts", r.rect);
+        let policy_says = sheet
+            .check
+            .as_ref()
+            .and_then(|c| c.tier.as_deref())
+            .is_some_and(|t| t == "output-affecting");
+        let outputs = if !report.outputs.is_empty() {
+            format!("Switches {}.", report.outputs.join(", "))
+        } else if policy_says {
+            "No output's logic changes. The box's policy still treats a new module as output-affecting."
+                .to_string()
+        } else {
+            "No output changes.".to_string()
+        };
+        let r = ui
+            .add(egui::Label::new(RichText::new(outputs).strong().color(t.fg)).wrap())
+            .tip("The outputs whose logic changes.");
+        chrome.hit("deploy sheet outputs", r.rect);
     }
     if !sheet.same() && !report.differs() {
         ui.add(
@@ -727,6 +815,34 @@ mod tests {
         s.check = Some(check("new"));
         s.compute(&BTreeMap::new(), SIZES);
         assert!(s.blocked(false, None).is_some());
+    }
+
+    #[test]
+    fn a_block_in_another_file_is_seen_on_the_whole_program() {
+        let marked = |f: &str, t: &str| format!("(* file {f} *)\n{t}");
+        let old = "PROGRAM p\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+        let main = "PROGRAM p\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nVAR l : Latch; END_VAR\nl(set := start, reset := FALSE);\nlamp := l.q;\nEND_PROGRAM\n";
+        let blocks = "FUNCTION_BLOCK Latch\nVAR_INPUT set : BOOL; reset : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nIF set THEN q := TRUE; END_IF;\nEND_FUNCTION_BLOCK\n";
+        let running: BTreeMap<String, String> = [("p".to_string(), marked("main.st", old))].into();
+        let files: BTreeMap<String, String> = [
+            ("main.st".to_string(), main.to_string()),
+            ("blocks.st".to_string(), blocks.to_string()),
+        ]
+        .into();
+        let r = Report::compare(&running, &check("abc"), &files, SIZES);
+        assert_eq!(r.outputs, vec!["LAMP".to_string()], "{r:?}");
+        assert!(r.unknown.is_none());
+        assert!(r.blocks.0 > 0);
+        assert!(r.files.iter().any(|f| f.file == "blocks.st" && f.counts().0 > 0));
+    }
+
+    #[test]
+    fn what_cannot_be_compared_is_unknown_never_no_change() {
+        let running: BTreeMap<String, String> = [("p".to_string(), OLD.to_string())].into();
+        let files: BTreeMap<String, String> =
+            [("main.st".to_string(), "PROGRAM p\nnot st\n".to_string())].into();
+        let r = Report::compare(&running, &check("abc"), &files, SIZES);
+        assert!(r.unknown.is_some(), "{r:?}");
     }
 
     #[test]

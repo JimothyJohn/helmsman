@@ -1069,7 +1069,7 @@ impl BoxView {
                 .not_written(&apply.file, "The project is no longer open.");
             return self.log_agent();
         };
-        let focus = self.instruct.named.clone();
+        let focus = self.instruct.named_text();
         let summary = crate::change::of_apply(&files, &apply, &focus, self.agent_sizes());
         self.instruct.hold(apply, summary);
         self.shown_change = None;
@@ -1417,11 +1417,13 @@ impl BoxView {
                 s
             }
         });
+        let briefs = batch.briefs.clone();
         let started = self.with_env(scope, |i, env| {
             i.start_design_steps(env, &label, (batch.steps, batch.briefs), (from, total))
         });
         match started {
             Some(Ok(ask)) => {
+                self.instruct.name_design(&text, &briefs);
                 self.design_building = Some((project, n));
                 let message = format!("{}\n\n{}", crate::instruct::BOX_RULES, ask.message);
                 self.agent_send(&message, true, ctx);
@@ -1445,7 +1447,7 @@ impl BoxView {
 
     /// A batch that ended counts its steps when it was written.
     fn design_settle(&mut self, ctx: &egui::Context) {
-        if self.design_building.is_some() && !self.instruct.busy() {
+        if self.design_building.is_some() && !self.instruct.busy() && self.instruct.pending.is_none() {
             let applied = self
                 .instruct
                 .outcome
@@ -3152,25 +3154,18 @@ impl BoxView {
         sheet.compute(&files, sizes);
         let sheet = sheet.clone();
         // The diagram of the first module that changes, once the report is in.
-        let want = sheet.report.as_ref().and_then(|r| {
-            let f = r
-                .files
-                .iter()
-                .find(|f| f.counts() != (0, 0) && !f.file.ends_with("(removed)"))?;
-            let new = files.get(&f.file)?.clone();
-            let old = match &sheet.running {
-                crate::deploy_sheet::Running::Is { modules, .. } => {
-                    modules.get(&f.module).cloned().unwrap_or_default()
-                }
-                _ => String::new(),
-            };
-            Some((old, new))
-        });
+        let want = sheet
+            .report
+            .as_ref()
+            .filter(|r| r.unknown.is_none() && !r.new_src.is_empty())
+            .map(|r| (r.old_src.clone(), r.new_src.clone()));
         match want {
             Some((old, new)) if self.sheet_diagram.as_ref().is_none_or(|(src, _)| *src != new) => {
                 self.sheet_diagram = crate::change::draw(&old, &new, sizes).ok().map(|d| {
                     let mut v = crate::st_view::Viewer::new(&new, d.new);
-                    v.baseline = d.old.map(std::rc::Rc::new);
+                    v.baseline = Some(std::rc::Rc::new(
+                        d.old.unwrap_or(helmsman_diagram::Module { pous: Vec::new() }),
+                    ));
                     (new, v)
                 });
             }

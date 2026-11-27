@@ -140,31 +140,60 @@ fn join_names(names: &[String]) -> String {
     }
 }
 
-/// Lower case, `_` and runs of whitespace as one space.
-fn flat(s: &str) -> String {
-    s.to_lowercase()
-        .replace('_', " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Whether `name` appears in `text` as a whole name, in any case, with
-/// `_` and a space alike.
+/// Whether `name` is named in `text`, in any case: as a whole identifier
+/// (a run of letters, digits and `_`), where each `_` of the name may also
+/// be written as spaces (`motor_speed` is named by "motor speed" and by
+/// `motor_speed` itself). A longer identifier does not name it: `motor_speed_limit`
+/// is not `motor_speed`.
 #[must_use]
 pub fn named(text: &str, name: &str) -> bool {
-    let (text, name) = (flat(text), flat(name));
+    let name: Vec<char> = name.trim().to_lowercase().chars().collect();
     if name.is_empty() {
         return false;
     }
-    let bytes = text.as_bytes();
-    let alnum = |b: u8| b.is_ascii_alphanumeric();
-    text.match_indices(&name).any(|(at, _)| {
-        let before = at == 0 || !alnum(bytes[at - 1]);
-        let end = at + name.len();
-        let after = end >= bytes.len() || !alnum(bytes[end]);
-        before && after
+    let text: Vec<char> = text.to_lowercase().chars().collect();
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    (0..text.len()).any(|start| {
+        if start > 0 && word(text[start - 1]) {
+            return false;
+        }
+        let mut at = start;
+        for &c in &name {
+            if c == '_' && text.get(at).is_some_and(|t| t.is_whitespace()) {
+                while text.get(at).is_some_and(|t| t.is_whitespace()) {
+                    at += 1;
+                }
+            } else if text.get(at) == Some(&c) {
+                at += 1;
+            } else {
+                return false;
+            }
+        }
+        !text.get(at).is_some_and(|t| word(*t))
     })
+}
+
+/// What a scope puts in focus, as text: a block's name and its lines, the
+/// lines selected.
+fn scope_text(scope: &crate::scope::Scope, files: &Files) -> String {
+    use crate::scope::Scope;
+    let lines = |file: &str, from: u32, to: u32| {
+        files
+            .get(file)
+            .map(|t| {
+                t.lines()
+                    .skip(from.saturating_sub(1) as usize)
+                    .take((to.saturating_sub(from) + 1) as usize)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default()
+    };
+    match scope {
+        Scope::Block { file, name, from, to } => format!("{name}\n{}", lines(file, *from, *to)),
+        Scope::Lines { file, from, to } => lines(file, *from, *to),
+        Scope::NewProject | Scope::File(_) => String::new(),
+    }
 }
 
 /// The variable a path is of: `m.on` and `a[1]` are `M` and `A`.
@@ -449,12 +478,13 @@ pub fn proposed(old: &Files, apply: &crate::instruct::Apply) -> Files {
 /// the engineer named: its instruction and the blocks in focus at Send.
 #[must_use]
 pub fn of_apply(old: &Files, apply: &crate::instruct::Apply, focus: &str, sizes: ImageSizes) -> Summary {
+    let scoped = scope_text(&apply.scope, old);
     summarize(
         old,
         &proposed(old, apply),
         &apply.file,
         sizes,
-        &[apply.instruction.as_str(), focus],
+        &[apply.instruction.as_str(), focus, scoped.as_str()],
     )
     .0
 }
@@ -616,6 +646,29 @@ mod tests {
             s.unknown.is_some(),
             "a proposed file that does not lower is still refused"
         );
+    }
+
+    #[test]
+    fn a_longer_identifier_does_not_name_a_shorter_one() {
+        assert!(!named("set motor_speed_limit to 10", "motor_speed"));
+        assert!(named("set motor_speed to 10", "MOTOR_SPEED"));
+        assert!(named("set the motor speed to 10", "motor_speed"));
+        assert!(!named("set the motor speed limit", "motor_speed_limit_x"));
+    }
+
+    #[test]
+    fn a_block_in_another_file_that_drives_an_output_is_seen() {
+        let main_old = "PROGRAM p\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+        let main_new = "PROGRAM p\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nVAR l : Latch; END_VAR\nl(set := start, reset := FALSE);\nlamp := l.q;\nEND_PROGRAM\n";
+        let blocks = "FUNCTION_BLOCK Latch\nVAR_INPUT set : BOOL; reset : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nIF set THEN q := TRUE; END_IF;\nIF reset THEN q := FALSE; END_IF;\nEND_FUNCTION_BLOCK\n";
+        let old: Files = [("main.st".to_string(), main_old.to_string())].into();
+        let new: Files = [
+            ("main.st".to_string(), main_new.to_string()),
+            ("blocks.st".to_string(), blocks.to_string()),
+        ]
+        .into();
+        let s = summarize(&old, &new, "main.st", SIZES, &[]).0;
+        assert_eq!(s.outputs, vec!["LAMP".to_string()], "{s:?}");
     }
 
     #[test]

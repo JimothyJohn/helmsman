@@ -1234,7 +1234,7 @@ impl PlaygroundView {
             self.write(apply);
             return;
         }
-        let focus = self.instruct.named.clone();
+        let focus = self.instruct.named_text();
         let summary = crate::change::of_apply(&self.proj.files, &apply, &focus, crate::playground::SIZES);
         self.instruct.hold(apply, summary);
         self.shown_change = None;
@@ -1892,11 +1892,13 @@ impl PlaygroundView {
         self.instruct.edits = self.chat.serves(crate::instruct::AGENT);
         let n = batch.to - batch.from;
         let (from, total) = (batch.from, batch.total);
+        let (doc, briefs) = (text.clone(), batch.briefs.clone());
         match self
             .instruct
             .start_design_steps(&env, &label, (batch.steps, batch.briefs), (from, total))
         {
             Ok(ask) => {
+                self.instruct.name_design(&doc, &briefs);
                 self.design_building = Some((self.proj.open.clone(), n));
                 self.asked_at = ctx.input(|i| i.time);
                 self.drop_question();
@@ -1930,7 +1932,7 @@ impl PlaygroundView {
     /// A batch of the design that was written counts its steps; one that
     /// was stopped or refused counts none.
     fn design_count(&mut self) {
-        if self.design_building.is_none() || self.instruct.busy() {
+        if self.design_building.is_none() || self.instruct.busy() || self.instruct.pending.is_some() {
             return;
         }
         let applied = self

@@ -606,7 +606,7 @@ staged and slowly implemented specs.
   diagram diff with its counts, every output whose logic changes by name,
   the checks and, where the policy needs one, the replay's result (run
   before the sheet shows), the tier and who may apply it. Deploy on the
-  sheet sends it; Cancel changes nothing. When nothing differs it says
+  sheet sends it; Cancel sends nothing to the machine. When nothing differs it says
   the box already runs this program and Deploy is off. Deploy in the
   simulation (the page's own program) is unchanged.
 - **Later, not now:** running the proposed program in a trial simulation

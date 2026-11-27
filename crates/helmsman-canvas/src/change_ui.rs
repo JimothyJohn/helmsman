@@ -40,7 +40,9 @@ impl Shown {
         let (old_src, new_src) = (change::build_src(old), change::build_src(&new));
         let drawn = change::draw(&old_src, &new_src, sizes).ok()?;
         let mut viewer = Viewer::new(&new_src, drawn.new);
-        viewer.baseline = drawn.old.map(Rc::new);
+        viewer.baseline = Some(Rc::new(
+            drawn.old.unwrap_or(helmsman_diagram::Module { pous: Vec::new() }),
+        ));
         Some(Self {
             file: apply.file.clone(),
             marks: StMarks::of(old.get(&apply.file).map_or("", String::as_str), &apply.text),
@@ -55,6 +57,11 @@ impl Shown {
 /// cannot be applied.
 pub fn banner(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, refusal: Option<&str>) -> Option<Act> {
     let t = crate::theme::theme(ui);
+    // Below the run controls, which float over the top of the canvas.
+    let (strip, top) = (chrome.glyph_strip, ui.cursor().top());
+    if strip != egui::Rect::NOTHING && strip.bottom() > top {
+        ui.add_space(strip.bottom() - top + 4.0);
+    }
     let mut act = None;
     egui::Frame::new()
         .fill(t.rule)
@@ -63,8 +70,6 @@ pub fn banner(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, refusal: Op
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
-                let r = ui.add(egui::Label::new(RichText::new(BANNER).strong().color(t.fg)).wrap());
-                chrome.hit("changes banner", r.rect);
                 let r = crate::glyphs::button(
                     ui,
                     crate::glyphs::Icon::Find,
@@ -98,6 +103,10 @@ pub fn banner(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, refusal: Op
                 if r.clicked() {
                     act = Some(Act::DiscardChange);
                 }
+                // The words after the buttons, which sit at the left, clear
+                // of what pops up under the save glyph at the right.
+                let r = ui.add(egui::Label::new(RichText::new(BANNER).strong().color(t.fg)).wrap());
+                chrome.hit("changes banner", r.rect);
             });
         });
     act
