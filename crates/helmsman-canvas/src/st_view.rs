@@ -1976,7 +1976,13 @@ impl Viewer {
             Vec2::new(room, ui.spacing().interact_size.y),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                // Cut at the room's sides only: the row is taller than
+                // `interact_size`, and a clip to its height cut the crumb's
+                // lower half off.
+                let (mut clip, room) = (ui.clip_rect(), ui.max_rect());
+                clip.min.x = clip.min.x.max(room.min.x);
+                clip.max.x = clip.max.x.min(room.max.x);
+                ui.set_clip_rect(clip);
                 let up = self.parent();
                 if ui
                     .add_enabled(up.is_some(), egui::Button::new("↑"))
