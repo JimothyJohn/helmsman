@@ -2,7 +2,7 @@
 //! went (Nick, 2026-11-27), stays a built-in example of the simulation: it
 //! is listed with the examples, and opened in the editor it runs against
 //! its own plant with its five tests green. Its proofs are checked without
-//! a screen in sim_projects_tests.rs.
+//! a screen in `sim_projects_tests.rs`.
 
 use super::{App, Harness};
 use crate::front::{PLANT, PROJECT, TESTS};
