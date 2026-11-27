@@ -122,10 +122,14 @@ fn applying_a_layout_arranges_the_panes_and_asks_for_its_sizes() {
     c.wrap = false;
     let p = presets();
     let programming = &p.iter().find(|p| p.name == "Programming").unwrap().layout;
+    assert!(
+        !c.msgs,
+        "the bottom panel shows the Trend first (Nick, 2026-11-26)"
+    );
     c.apply(programming);
     assert_eq!(c.layout().lefts, programming.lefts);
     assert_eq!(c.side, Pane::Code);
-    assert!(c.msgs, "the Messages stay as they were");
+    assert!(!c.msgs, "the bottom panel's tab stays as it was");
     assert_eq!(
         c.resize,
         Some(Sizes {
@@ -297,8 +301,8 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
     assert_eq!(odd.pane, Pane::Claude, "an unknown shown tab: the first page's");
     assert!(odd.left, "a flag that is not a flag keeps the first page's value");
     assert!(
-        odd.msgs,
-        "a flag that is not a flag: Messages open, as the first page has them"
+        !odd.msgs,
+        "a flag that is not a flag: the bottom panel on the Trend, as the first page has it"
     );
     assert_eq!(
         odd.sizes,
@@ -327,8 +331,9 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
 }
 
 /// A layout file written when the bottom panel had tabs (`bottom_shows`)
-/// still reads: its panes come back as they were and the Messages are
-/// open, as the first page has them.
+/// still reads: its panes come back as they were. The Messages' key of
+/// those files, `messages_open`, still reads into the tab the bottom panel
+/// shows (Nick, 2026-11-26).
 #[test]
 fn a_layout_file_from_the_tabbed_bottom_panel_still_reads() {
     let file = format!(
@@ -343,12 +348,24 @@ fn a_layout_file_from_the_tabbed_bottom_panel_still_reads() {
     assert_eq!(l.lefts[..2], [Pane::Files, Pane::Claude]);
     assert_eq!(l.pane, Pane::Files);
     assert_eq!(l.side, Pane::Code);
-    assert!(l.right && !l.trend && l.msgs);
+    assert!(l.right && !l.trend);
     assert_eq!((l.sizes.left, l.sizes.bottom), (Some(300.0), Some(210.0)));
-    // And one that keeps the Messages folded keeps them so.
-    let mut c = Chrome::default();
-    c.msgs = false;
-    let json = c.layout().to_json("Folded").to_string();
-    let file = format!(r#"{{"format":"{FORMAT}","layouts":[{json}]}}"#);
-    assert!(!parse(&file).unwrap()[0].1.msgs);
+    // `messages_open`, from the days the Messages were under the left
+    // pane, reads into the bottom panel's tab either way.
+    for open in [true, false] {
+        let file = format!(
+            r#"{{"format":"{FORMAT}","layouts":[
+                {{"name":"Older","left":["files","claude"],"left_shows":"files","messages_open":{open}}}
+            ]}}"#
+        );
+        assert_eq!(parse(&file).unwrap()[0].1.msgs, open, "messages_open {open}");
+    }
+    // And what this page writes comes back the same.
+    for msgs in [true, false] {
+        let mut c = Chrome::default();
+        c.msgs = msgs;
+        let json = c.layout().to_json("Mine").to_string();
+        let file = format!(r#"{{"format":"{FORMAT}","layouts":[{json}]}}"#);
+        assert_eq!(parse(&file).unwrap()[0].1.msgs, msgs);
+    }
 }

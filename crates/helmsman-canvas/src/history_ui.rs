@@ -59,8 +59,9 @@ impl RevisionRow {
     }
 }
 
-/// Rows of a version's description in the History tab.
-pub const DESCRIPTION_ROWS: usize = 2;
+/// Rows of a version's description in the History tab (two until
+/// 2026-11-26: Nick, "way too short").
+pub const DESCRIPTION_ROWS: usize = 3;
 
 /// What the History tab asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

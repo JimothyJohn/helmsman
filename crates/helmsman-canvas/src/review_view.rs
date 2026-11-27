@@ -244,7 +244,7 @@ impl ReviewView {
         ui.label(RichText::new(head).strong()).tip(SESSION);
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("● {who}")).color(t.accent))
+                ui.label(RichText::new(format!("● {who}")).color(t.ink(crate::st_view::brand::GREEN)))
                     .tip("Approvals and edits are made as this user.");
                 let out = ui
                     .button("Sign out")
@@ -305,8 +305,10 @@ impl ReviewView {
             .tip("The node or box this page watches, from its address.");
         if self.token_held {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("● token kept for this address").color(t.accent))
-                    .tip("Deploy, Save, Stop and Run send it; the node checks it on every write.");
+                ui.label(
+                    RichText::new("● token kept for this address").color(t.ink(crate::st_view::brand::GREEN)),
+                )
+                .tip("Deploy, Save, Stop and Run send it; the node checks it on every write.");
                 let out = ui
                     .button("Forget")
                     .tip("Drops the token from this browser. Watching goes on; writes stop.");

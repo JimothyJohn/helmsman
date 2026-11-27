@@ -44,6 +44,7 @@ struct BoxSeen {
     fault: Option<String>,
     notice: Option<String>,
     warned: Option<String>,
+    flash: Option<f64>,
 }
 
 // Each flag is its own fact (the node's token, watching a node, the
@@ -1676,13 +1677,7 @@ impl BoxView {
                 // Room for the scroll bar (a resizable panel grows to any
                 // row that overflows it).
                 ui.set_max_width(ui.available_width() - 12.0);
-                crate::help::heading(
-                    ui,
-                    chrome,
-                    &mut self.help.mode,
-                    self.agent.status.dot(),
-                    &self.agent.status.line(),
-                );
+                crate::help::heading(ui, chrome, self.agent.status.dot(), &self.agent.status.line());
                 ui.add_space(4.0);
                 match self.help.mode {
                     Mode::Code => {
@@ -1912,10 +1907,8 @@ impl BoxView {
         }
         if self.projects.deploy != self.seen.deploy {
             match &self.projects.deploy {
-                Deploy::Done(what) => {
-                    self.agent_pending = false;
-                    self.log.info(now, format!("Deployed: {what}"));
-                }
+                // The flash below logs it.
+                Deploy::Done(_) => self.agent_pending = false,
                 Deploy::Failed(why) => self.log.error(now, format!("Deploy failed: {why}")),
                 _ => {}
             }
@@ -1934,6 +1927,13 @@ impl BoxView {
                 self.log.error(now, format!("Fault: {f}"));
             }
             self.seen.fault = fault;
+        }
+        let flash = self.projects.flash.as_ref().map(|f| f.at);
+        if flash != self.seen.flash {
+            if let Some(f) = &self.projects.flash {
+                self.log.info(now, f.line.clone());
+            }
+            self.seen.flash = flash;
         }
         let notice = self.projects.notice.as_ref().map(|(n, _)| n.clone());
         if notice != self.seen.notice {
@@ -2476,7 +2476,7 @@ impl BoxView {
         let retry = |at: f64| (at - now).max(0.0).ceil();
         match self.state.link() {
             Link::Connecting => ("● connecting…".into(), t.muted),
-            Link::Connected => ("● connected".into(), t.accent),
+            Link::Connected => ("● connected".into(), t.ink(GREEN)),
             Link::SignIn => ("● sign in to watch".into(), t.fg),
             Link::Reconnecting { at, .. } => (format!("● reconnecting (retry in {}s)", retry(at)), t.fg),
             Link::Unreachable { at, .. } => {
@@ -3063,7 +3063,7 @@ impl Body for BoxView {
 
     fn has_notices(&self) -> bool {
         self.state.scan.as_ref().is_some_and(|s| s.fault.is_some())
-            || self.projects.deploy != Deploy::Idle
+            || !matches!(self.projects.deploy, Deploy::Idle | Deploy::Done(_))
             || self.projects.notice.is_some()
             || self.desk.problem.is_some()
             || self.on_box.problem.is_some()
@@ -3087,7 +3087,9 @@ impl Body for BoxView {
             );
         }
         match &self.projects.deploy {
-            Deploy::Idle => {}
+            // A deploy that went through is the save glyph's popup and a
+            // line in the log (Nick, 2026-11-26), not a notice.
+            Deploy::Idle | Deploy::Done(_) => {}
             Deploy::Saving => {
                 ui.label(RichText::new("saving…").color(t.muted));
             }
@@ -3102,10 +3104,6 @@ impl Body for BoxView {
             }
             Deploy::Deploying => {
                 ui.label(RichText::new("deploying…").color(t.muted));
-            }
-            Deploy::Done(what) => {
-                let r = ui.label(RichText::new(format!("✔ {what}")).color(t.accent));
-                chrome.hit("deployed", r.rect);
             }
             Deploy::Failed(why) => {
                 let why = format!("✖ {why}");
@@ -3950,10 +3948,10 @@ struct AgentDeploy {
 /// The Agent tab's Deploy (Nick, 2026-11-24: "there needs to be a deploy
 /// button on the agent tab as well ... make it pulse or something to
 /// indicate that it's required"): the Code tab's yellow arrow, with a ring
-/// that pulses while what the agent (or anyone) saved is not running, and
-/// a line that says so. Whether it was pressed.
+/// that pulses while what the agent (or anyone) saved is not running; the
+/// pulse is the whole reminder (Nick, 2026-11-26: no line beside it).
+/// Whether it was pressed.
 fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
-    let t = theme(ui);
     let where_to = if s.to_node { "the Skipper" } else { "the box" };
     let tip = match &s.ready {
         Ok(()) => format!(
@@ -3997,14 +3995,6 @@ fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
         );
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
-        let l = ui.label(
-            RichText::new(format!(
-                "The Agent's change is not running yet: Deploy runs it on {where_to}."
-            ))
-            .color(t.accent)
-            .size(crate::theme::BODY),
-        );
-        chrome.hit("agent deploy pending", l.rect);
     }
     r.clicked()
 }
