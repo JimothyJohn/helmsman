@@ -256,6 +256,9 @@ pub struct Chrome {
     /// Where the diagram was drawn this frame (the glyph buttons sit in
     /// its top-right corner).
     pub diagram: Rect,
+    /// The strip of run state and glyphs over the diagram's top-right
+    /// corner, as last drawn: the crumb leaves it its room.
+    pub glyph_strip: Rect,
     /// The find box over the ST pane, while open (Ctrl F).
     pub find: Option<crate::find::Find>,
     /// What the Agent's last change added and removed in the open file,
@@ -326,6 +329,7 @@ impl Default for Chrome {
             jump: None,
             hits: Vec::new(),
             diagram: Rect::NOTHING,
+            glyph_strip: Rect::NOTHING,
             find: None,
             st_marks: None,
             wrap: true,

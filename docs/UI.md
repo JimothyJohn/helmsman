@@ -79,8 +79,11 @@ The canvas must feel alive and professionally built. The theme basics stay
   FALSE stays flat grey.
 - **An I/O card at rest is its point** (Nick, 2026-11-27): icon, name and
   value on one line. Its three glyphs (code, diagram, Trend) show while the
-  pointer is over the card or it is open, so a closed card in the narrow
-  right pane keeps its room for the name and value. A simulated input's
+  pointer is over the card or it is open, drawn over the right end of the
+  first line on a backdrop of the card's fill (a soft fade at its left
+  edge). The head's layout never depends on hover: a switch or a number box
+  keeps its width as the pointer enters, and a click on a glyph goes to the
+  glyph, not to the control under it. A simulated input's
   icon is lit when on and dimmed when off, as an output's is.
 - **A dot grid** on the canvas, panned and zoomed with the diagram, one or
   two levels above the ground, fading out as the zoom gets small.

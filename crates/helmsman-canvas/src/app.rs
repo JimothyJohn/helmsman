@@ -1462,7 +1462,7 @@ impl App {
             });
 
         let mut save_at = None;
-        egui::Area::new(egui::Id::unique("glyphs"))
+        let strip = egui::Area::new(egui::Id::unique("glyphs"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at)
@@ -1609,6 +1609,7 @@ impl App {
                         });
                     });
             });
+        self.chrome.glyph_strip = strip.response.rect;
         let ctx = ui.ctx().clone();
         if let Some(at) = save_at {
             self.save_flash(&ctx, at, &mut hits);
@@ -2298,7 +2299,8 @@ impl App {
         };
         if compact {
             // A phone: the lamp and the name, the word in the tooltip.
-            let font = egui::FontId::monospace(crate::theme::BODY);
+            // Inter: a name and a state are not code or a live value.
+            let font = egui::FontId::proportional(crate::theme::BODY);
             let mut job = egui::text::LayoutJob::default();
             for (i, b) in banners.iter().enumerate() {
                 let dot = egui::TextFormat::simple(font.clone(), lamp(b));
@@ -2317,13 +2319,9 @@ impl App {
             for (i, b) in banners.iter().enumerate() {
                 let color = lamp(b);
                 ui.label(RichText::new("●").color(color)).tip(&b.tip);
-                let r = ui
-                    .label(RichText::new(&b.name).strong().monospace().color(t.fg))
-                    .tip(&b.tip);
+                let r = ui.label(RichText::new(&b.name).strong().color(t.fg)).tip(&b.tip);
                 hits.push((format!("monitor program {i}"), r.rect));
-                let w = ui
-                    .label(RichText::new(b.word).monospace().color(color))
-                    .tip(&b.tip);
+                let w = ui.label(RichText::new(b.word).color(color)).tip(&b.tip);
                 hits.push((format!("monitor state {i}"), w.rect));
             }
         });

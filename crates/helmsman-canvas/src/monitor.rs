@@ -1155,6 +1155,8 @@ enum Piece {
     Text(Pos2, Arc<Galley>),
     /// A lamp's dot: centre, radius; filled, or (stale) a ring.
     Dot(Pos2, f32, Option<Color32>),
+    /// The soft disc a lit lamp sits on: centre, radius, colour.
+    Halo(Pos2, f32, Color32),
 }
 
 /// A tile laid out for a width: what it draws, where its load lines went,
@@ -1192,7 +1194,7 @@ impl Laid {
             .iter()
             .filter_map(|p| match p {
                 Piece::Text(at, g) => Some(Rect::from_min_size(*at, g.size())),
-                Piece::Dot(..) => None,
+                Piece::Dot(..) | Piece::Halo(..) => None,
             })
             .collect()
     }
@@ -1274,11 +1276,18 @@ pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
                     v => (None, Some(crate::st_view::show(v))),
                 };
                 match dot {
+                    // Lit on a soft disc when on, dimmed when off, as a lamp
+                    // in the I/O tab is (Nick, 2026-11-27).
                     Some(on) if !stale => {
+                        let at = Pos2::new(pad + rad, mid);
+                        if on {
+                            l.pieces
+                                .push(Piece::Halo(at, rad * 1.6, GREEN.gamma_multiply(0.18)));
+                        }
                         l.pieces.push(Piece::Dot(
-                            Pos2::new(pad + rad, mid),
+                            at,
                             rad,
-                            Some(if on { GREEN } else { RED }),
+                            Some(if on { GREEN } else { RED.gamma_multiply(0.35) }),
                         ));
                     }
                     Some(_) => l.pieces.push(Piece::Dot(Pos2::new(pad + rad, mid), rad, None)),
@@ -1342,7 +1351,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool, laid: &Laid) -
             Piece::Text(at, g) => {
                 p.galley(r.min + at.to_vec2(), g.clone(), th.fg);
             }
-            Piece::Dot(c, rad, Some(fill)) => {
+            Piece::Dot(c, rad, Some(fill)) | Piece::Halo(c, rad, fill) => {
                 p.circle_filled(r.min + c.to_vec2(), *rad, *fill);
             }
             Piece::Dot(c, rad, None) => {

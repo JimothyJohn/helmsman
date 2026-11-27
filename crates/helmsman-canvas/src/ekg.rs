@@ -398,14 +398,17 @@ pub fn paint_lane(
         painter.rect_filled(band, CornerRadius::ZERO, t.accent.gamma_multiply(0.30 * lane.pop));
     }
     // The name, one row, cut with an ellipsis where it would run on into
-    // the trace.
+    // the trace. Inter (a name is not a live value). A BOOL lane's trace is
+    // green or grey whatever its palette colour, so its name is plain ink:
+    // "run" in red beside a green trace read as a fault.
+    let ink = if lane.kind == Kind::Bool { t.fg } else { lane.color };
     let mut job = egui::text::LayoutJob::simple_singleline(
         lane.name.to_ascii_lowercase(),
-        FontId::monospace(crate::theme::MIN_TEXT),
+        FontId::proportional(crate::theme::MIN_TEXT),
         if lane.pop > 0.0 {
-            t.fg.lerp_to_gamma(lane.color, 1.0 - lane.pop)
+            t.fg.lerp_to_gamma(ink, 1.0 - lane.pop)
         } else {
-            lane.color
+            ink
         },
     );
     job.wrap.max_width = lane.label_w - 10.0;
@@ -415,7 +418,7 @@ pub fn paint_lane(
     painter.galley(
         Pos2::new(rect.left() + 6.0, top + (height - name.size().y) / 2.0),
         name,
-        lane.color,
+        ink,
     );
     // Hairlines: the separator and the scale's lines are thin and faint.
     painter.line_segment(

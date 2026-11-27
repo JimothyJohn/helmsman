@@ -4055,7 +4055,7 @@ impl Body for PlaygroundView {
             v.assign = menus;
             v.icons
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
-            v.crumbs_ui(ui, &[]);
+            v.crumbs_ui(ui, &[], chrome.glyph_strip);
             let area = ui.available_rect_before_wrap();
             v.breaks.clone_from(&self.session.breaks);
             v.paused = self.session.paused_at();
@@ -4338,7 +4338,7 @@ impl PlaygroundView {
                             on_diagram: on_diagram.contains(&p.name.to_ascii_lowercase()),
                         };
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
-                            output_ui(ui, p, form == Form::Tile);
+                            output_ui(ui, p);
                         });
                         crate::assign_ui::row_menu(&card, chrome, &menus, &p.name, &mut asks, &mut chat);
                         asked.push((p.name.clone(), false, a));
@@ -5697,7 +5697,7 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             let c = crate::commit::number(
                 ui,
                 id,
-                &v.to_string(),
+                &helmsman_iec::shown_real(v),
                 "",
                 rect.size(),
                 &format!("{label} = {v}\n{TYPE_HINT}"),
@@ -5964,59 +5964,85 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
     let mut anchor: Option<egui::Response> = None;
     let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
     let gap = ui.spacing().item_spacing.x;
-    // What the control gets beside the glyph, all of it on one line
-    // (Nick, 2026-11-27): nothing wraps and nothing is wider than this.
+    // What is left beside the icon, all of it on one line (Nick,
+    // 2026-11-27): nothing wraps and nothing is wider than this. A switch
+    // or push button is its icon and its name; a number is its icon, its
+    // name (cut), a slider where there is room and its box at the right
+    // end, as wide as its text. The hover glyphs only ever overlay a name.
     let beside = (ui.available_width() - crate::glyphs::ROW - gap - 1.0).max(40.0);
-    // A button is that wide and no wider: its name is cut, never the row.
-    let size = Vec2::new(if tile { beside.min(TAP * 3.0) } else { beside }, TAP * 0.6);
-    // A number: its name, then its box, then a slider only where both
-    // still have their room beside it.
-    let boxed = Vec2::new((beside * 0.45).clamp(40.0, 84.0), TAP * 0.6);
+    let shown = match p.value {
+        Value::Real(r) => helmsman_iec::shown_real(r),
+        Value::Int(n) if p.widget == Some(Widget::Time) => format!("{} ms", n / 1_000_000),
+        v => v.to_string(),
+    };
+    let need = crate::commit::box_width(ui, &shown).min(beside - gap - 1.0);
+    let boxed = Vec2::new(need.max(40.0_f32.min(beside * 0.4)), TAP * 0.6);
     let rest = beside - boxed.x - gap;
     let slider = (!tile && rest >= 2.0 * 60.0 + gap).then(|| (rest - 60.0 - gap).min(100.0));
     let name_w = (rest - slider.map_or(0.0, |s| s + gap)).max(1.0);
     ui.spacing_mut().slider_width = slider.unwrap_or(40.0);
+    // What the card's hover glyphs must stay clear of at the right end:
+    // the slider and the box (see `io_cards::show`).
+    let is_number = matches!(p.widget, Some(Widget::Int { .. } | Widget::Real | Widget::Time));
+    crate::io_cards::reserve_right(
+        ui,
+        if is_number {
+            boxed.x + gap + slider.map_or(0.0, |s| s + gap)
+        } else {
+            0.0
+        },
+    );
     ui.horizontal(|ui| {
         ui.set_max_width(ui.available_width());
         let state = match p.value {
             Value::Bool(b) => Some(b),
             _ => None,
         };
-        crate::io_cards::state_glyph(ui, glyph, crate::glyphs::ROW, state_ink(&t, p.value), t.fg, state);
+        if !matches!(p.widget, Some(Widget::Push | Widget::Toggle)) {
+            crate::io_cards::state_glyph(ui, glyph, crate::glyphs::ROW, state_ink(&t, p.value), t.fg, state);
+        }
         match p.widget {
-            Some(Widget::Push) => {
+            Some(w @ (Widget::Push | Widget::Toggle)) => {
+                // The icon is the control (a push button is on while it
+                // is held); the name is plain text, coloured by state.
+                let push = w == Widget::Push;
                 let on = p.value == Value::Bool(true);
-                let b =
-                    egui::Button::new(
-                        RichText::new(&label)
-                            .strong()
-                            .color(if on { BLACK } else { t.muted }),
-                    )
-                    .fill(if on { GREEN } else { t.rule })
-                    .sense(Sense::click_and_drag());
-                let rest = format!("A push button: on while held. Click the card for its details.\n{place}");
-                let r = control_button(ui, b, size).on_hover_ui(|ui| named_tip(ui, &label, &rest));
-                out = Some(Value::Bool(r.is_pointer_button_down_on()));
-                anchor = Some(r);
-            }
-            Some(Widget::Toggle) => {
-                // Its name alone: the fill says on or off (Nick, 2026-11-27).
-                let on = p.value == Value::Bool(true);
-                let b =
-                    egui::Button::new(
-                        RichText::new(&label)
-                            .strong()
-                            .color(if on { BLACK } else { t.muted }),
-                    )
-                    .fill(if on { GREEN } else { t.rule });
-                let rest = format!(
-                    "A switch, {}: click to flip it. Click the card for its details.\n{place}",
-                    if on { "on" } else { "off" }
+                let sense = if push {
+                    Sense::click_and_drag()
+                } else {
+                    Sense::click()
+                };
+                let r = crate::io_cards::state_button(
+                    ui,
+                    glyph,
+                    crate::glyphs::ROW,
+                    state_ink(&t, p.value),
+                    t.fg,
+                    Some(on),
+                    sense,
                 );
-                let r = control_button(ui, b, size).on_hover_ui(|ui| named_tip(ui, &label, &rest));
-                if r.clicked() {
+                let rest = if push {
+                    format!("A push button: on while held. Click the card for its details.\n{place}")
+                } else {
+                    format!(
+                        "A switch, {}: click to flip it. Click the card for its details.\n{place}",
+                        if on { "on" } else { "off" }
+                    )
+                };
+                let r = r.on_hover_ui(|ui| named_tip(ui, &label, &rest));
+                if push {
+                    out = Some(Value::Bool(r.is_pointer_button_down_on()));
+                } else if r.clicked() {
                     out = Some(Value::Bool(!on));
                 }
+                let name = egui::Label::new(
+                    RichText::new(&label)
+                        .size(crate::theme::BODY)
+                        .color(state_ink(&t, p.value)),
+                )
+                .truncate()
+                .selectable(false);
+                ui.add(name).on_hover_ui(|ui| named_tip(ui, &label, &rest));
                 anchor = Some(r);
             }
             Some(Widget::Int { min, max }) => {
@@ -6069,7 +6095,10 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                     out = Some(Value::Real(v));
                 }
                 let id = egui::Id::unique(("io-real", &p.name));
-                let c = crate::commit::number(ui, id, &before.to_string(), "", boxed, TYPE_HINT);
+                // Three figures shown, the whole value on hover; typing
+                // still takes any number.
+                let hint = format!("{TYPE_HINT}\nExact value: {before}");
+                let c = crate::commit::number(ui, id, &helmsman_iec::shown_real(before), "", boxed, &hint);
                 if let Some(x) = crate::commit::real(&c)
                     && x.to_bits() != before.to_bits()
                 {
@@ -6107,12 +6136,6 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
     (out, anchor)
 }
 
-/// An input's button on its card: `size` and no more, on one line, its
-/// name cut to fit (the tooltip has it whole).
-fn control_button(ui: &mut egui::Ui, b: egui::Button<'_>, size: Vec2) -> egui::Response {
-    ui.add_sized(size, b.wrap_mode(egui::TextWrapMode::Truncate))
-}
-
 /// A row's name, where a right-click lands, `w` wide and cut to it: its
 /// tooltip has the whole name and where the point is.
 fn row_label(ui: &mut egui::Ui, label: &str, place: &str, w: f32) -> egui::Response {
@@ -6144,7 +6167,7 @@ fn named_tip(ui: &mut egui::Ui, label: &str, rest: &str) {
 }
 
 /// One output's first line on its card: a lamp (BOOL) or a readout.
-fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
+fn output_ui(ui: &mut egui::Ui, p: &Point) {
     let t = theme(ui);
     let on = p.value == Value::Bool(true);
     let name = match p.address() {
@@ -6160,8 +6183,9 @@ fn output_ui(ui: &mut egui::Ui, p: &Point, tile: bool) {
     // A lamp is green on and red off whatever its name says (Nick,
     // 2026-11-27); its name is muted while it is off.
     let color = if on { t.ink(GREEN) } else { t.muted };
-    // A tile has the lamp and the name; the glyph would take half of it.
-    let glyph = (!tile).then(|| crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
+    // A tile keeps its glyph too: it is the lamp, lit or dimmed (Nick,
+    // 2026-11-27: lamps green on, red off), as an input tile's icon is.
+    let glyph = Some(crate::glyph_lib::for_point(&p.name, false, p.ty == Ty::Bool));
     let state = (p.ty == Ty::Bool).then_some(on);
     crate::io_cards::value_with(ui, glyph, color, t.ink(crate::st_view::brand::RED), &text, state);
 }

@@ -39,8 +39,27 @@ use crate::tips::Tip;
 pub const BAR: f32 = 12.0;
 /// The narrowest a tile gets before the grid drops a column, pt: 88 since
 /// the side panes' ribbon (2026-11-26) left the right pane 185 pt, where
-/// two tiles of 96 no longer fit and the grid went to one a row.
-const TILE: f32 = 88.0;
+/// two tiles of 96 no longer fit and the grid went to one a row; 80 since
+/// the floating chrome's margins (2026-11-27) left it 169.
+const TILE: f32 = 80.0;
+
+/// The width of a card's glyph strip, pt: three glyphs and their gaps. An
+/// input's control leaves this much free at its right end, so the glyphs
+/// that show over it never cover a click target.
+#[must_use]
+pub fn strip_width() -> f32 {
+    3.0 * crate::glyphs::ROW * 0.85 + 2.0 * 2.0
+}
+
+fn reserve_id() -> egui::Id {
+    egui::Id::NULL.with("io card head reserve")
+}
+
+/// A head's controls at its right end, `w` wide: the hover glyphs are drawn
+/// left of them, over the name, never over a control.
+pub fn reserve_right(ui: &egui::Ui, w: f32) {
+    ui.data_mut(|d| d.insert_temp(reserve_id(), w));
+}
 
 /// One output of the program and what sets it, from the diagram alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -172,6 +191,34 @@ pub fn state_glyph(
     }
 }
 
+/// A BOOL's icon as the control of an input: [`state_glyph`]'s look on a
+/// rounded ground that eases in on hover and press, as the glyph buttons
+/// do. `sense` is a click for a switch, click and drag for a push button.
+pub fn state_button(
+    ui: &mut egui::Ui,
+    glyph: &'static str,
+    size: f32,
+    on_color: Color32,
+    off_color: Color32,
+    on: Option<bool>,
+    sense: Sense,
+) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
+    let ground = crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT);
+    ui.painter().rect_filled(rect, 5, ground);
+    crate::theme::focus_ring(ui, &r, rect, 5);
+    let ink = match on {
+        Some(false) => off_color.gamma_multiply(0.35),
+        _ => on_color,
+    };
+    if on == Some(true) {
+        ui.painter()
+            .circle_filled(rect.center(), size * 0.62, on_color.gamma_multiply(0.18));
+    }
+    crate::glyph_lib::paint(ui.painter(), rect, glyph, ink);
+    r
+}
+
 /// [`value`] with its own colour for the glyph while the point is off: a
 /// lamp is green on and red off (Nick, 2026-11-27), its name muted.
 pub fn value_with(
@@ -188,9 +235,28 @@ pub fn value_with(
         }
         // One line, cut at the card's edge with its whole text on hover
         // (Nick, 2026-11-27: the compact view on one line).
-        let label =
-            egui::Label::new(RichText::new(text).monospace().size(BODY).color(color)).selectable(false);
-        ui.add(label.truncate()).tip(text.to_string());
+        // A reading is its name (Inter, cut to what is left) and, at the
+        // card's right end, its value (mono, a slot as wide as its text,
+        // never cut): numeric columns are right-aligned. The hover has
+        // "name = value" whole.
+        if let Some((name, val)) = text.split_once(" = ") {
+            let slot = crate::theme::live_slot(ui, val, 0);
+            let room = (ui.available_width() - slot - ui.spacing().item_spacing.x).max(20.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(room, crate::glyphs::ROW),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_width(room);
+                    let label =
+                        egui::Label::new(RichText::new(name).size(BODY).color(color)).selectable(false);
+                    ui.add(label.truncate()).tip(text.to_string());
+                },
+            );
+            crate::theme::live(ui, val, color, 0).tip(text.to_string());
+        } else {
+            let label = egui::Label::new(RichText::new(text).size(BODY).color(color)).selectable(false);
+            ui.add(label.truncate()).tip(text.to_string());
+        }
     });
 }
 
@@ -344,7 +410,7 @@ pub fn show<R>(
         // Glyphs a little under the row's size so name and glyphs share
         // one line in the narrow right pane too (Nick, 2026-11-27).
         let side = crate::glyphs::ROW * 0.85;
-        let gap = ui.spacing().item_spacing.x;
+        let gap = 2.0;
         // The glyphs show while the pointer is over the card (where it was
         // drawn last frame, so they do not flicker as they appear), while
         // its details are open, and while one has keyboard focus (Nick,
@@ -357,11 +423,6 @@ pub fn show<R>(
         });
         let focused = ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false);
         let glyphs = row.open || hovered || focused;
-        let room = if glyphs {
-            (inner - 3.0 * side - 3.0 * gap).max(1.0)
-        } else {
-            inner.max(1.0)
-        };
         // The card's three glyphs: find in the code, show on the diagram,
         // put on the Trend.
         let mut glyph_row = |ui: &mut egui::Ui| {
@@ -408,22 +469,47 @@ pub fn show<R>(
             let has = code.has_focus() || diagram.has_focus() || trend.has_focus();
             ui.data_mut(|d| d.insert_temp(focus_id, has));
         };
-        // One line: the point (its glyph and name, cut to the room left)
-        // and its three glyphs beside it, in any pane (Nick, 2026-11-27).
-        let r = ui
-            .horizontal_top(|ui| {
-                let r = ui
-                    .allocate_ui_with_layout(Vec2::new(room, side), Layout::top_down(Align::Min), |ui| {
-                        ui.set_width(room);
-                        head(ui)
-                    })
-                    .inner;
-                if glyphs {
-                    glyph_row(ui);
-                }
-                r
-            })
-            .inner;
+        // The head always has the card's full width, so nothing moves when
+        // the pointer enters or leaves (Nick, 2026-11-27). The glyphs are
+        // drawn over the right end of that line, on a backdrop of the
+        // card's fill with a soft fade at its left edge; they come after
+        // the head, so their clicks win over the control under them.
+        ui.data_mut(|d| d.insert_temp(reserve_id(), 0.0_f32));
+        let head_out = ui.allocate_ui_with_layout(Vec2::new(inner, side), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(inner);
+            head(ui)
+        });
+        let r = head_out.inner;
+        if glyphs {
+            let line = head_out.response.rect;
+            let w = strip_width();
+            let line_right = line.right() - ui.data(|d| d.get_temp::<f32>(reserve_id())).unwrap_or(0.0);
+            let fade = 18.0;
+            let h = side.max(line.height().min(side + 6.0));
+            let x1 = line_right;
+            let x0 = x1 - w;
+            let back = Rect::from_min_max(egui::pos2(x0 - fade, line.top()), egui::pos2(x1, line.top() + h));
+            let solid = Rect::from_min_max(egui::pos2(x0, back.top()), back.right_bottom());
+            let clear = fill.gamma_multiply(0.0);
+            let mut mesh = egui::Mesh::default();
+            let (l, r_) = (back.left(), x0);
+            let (top, bot) = (back.top(), back.bottom());
+            mesh.colored_vertex(egui::pos2(l, top), clear);
+            mesh.colored_vertex(egui::pos2(r_, top), fill);
+            mesh.colored_vertex(egui::pos2(r_, bot), fill);
+            mesh.colored_vertex(egui::pos2(l, bot), clear);
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            ui.painter().add(egui::Shape::mesh(mesh));
+            ui.painter().rect_filled(solid, 0.0, fill);
+            let mut g = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(solid)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            g.spacing_mut().item_spacing.x = gap;
+            glyph_row(&mut g);
+        }
         if row.open {
             // The rest is in the details: the SIM badge (the dashed
             // outline says it on the card), the wiring, the links.

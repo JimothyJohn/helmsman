@@ -48,6 +48,23 @@ fn click_card(h: &mut Harness, key: &str) {
     h.wait(0.2);
 }
 
+/// The pointer on card `name`'s name, left of where its glyphs come up
+/// (docs/UI.md "An I/O card at rest is its point": they show only while
+/// the pointer is over the card or it is open).
+pub(super) fn hover_card(h: &mut Harness, name: &str) {
+    let card = h.rect(&format!("io card {name}"));
+    let at = eframe::egui::pos2(card.left() + card.width() * 0.3, card.top() + 12.0);
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.frame(vec![]);
+}
+
+/// A press of card `name`'s glyph `glyph` (`code`, `diagram` or `trend`)
+/// the way a user reaches it: onto the card, then onto the glyph.
+pub(super) fn press_glyph(h: &mut Harness, glyph: &str, name: &str) {
+    hover_card(h, name);
+    h.press(&format!("io {glyph} {name}"));
+}
+
 /// Nick, 2026-11-27: a compact card is one line, the point alone; what
 /// drives an output and what an input affects are in its details.
 #[test]
@@ -96,7 +113,7 @@ fn a_card_is_its_point_alone_and_its_details_say_every_link() {
 #[test]
 fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
     let mut h = sim_with(MIXER);
-    h.press("io code start");
+    press_glyph(&mut h, "code", "start");
     h.wait(0.3);
     assert!(h.app.chrome.showing(Pane::Code), "the Code tab is showing");
     let f = h.app.chrome.find.clone().expect("the find box is open");
@@ -104,7 +121,7 @@ fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
     let src = h.app.sim.as_ref().unwrap().proj.build_src();
     assert_eq!(f.all(&src).len(), 5, "not start_button; the comment counts");
     for want in [1, 2, 3, 4, 0] {
-        h.press("io code start");
+        press_glyph(&mut h, "code", "start");
         h.wait(0.3);
         assert_eq!(
             h.app.chrome.find.as_ref().unwrap().current,
@@ -112,7 +129,7 @@ fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
             "the next use, round again"
         );
     }
-    h.press("io code stop");
+    press_glyph(&mut h, "code", "stop");
     h.wait(0.3);
     let f = h.app.chrome.find.clone().unwrap();
     assert_eq!(
@@ -126,7 +143,7 @@ fn the_code_glyph_finds_the_whole_name_and_steps_through_its_uses() {
 fn the_diagram_glyph_lights_a_points_blocks_with_nothing_running() {
     let mut h = sim_with(MIXER);
     assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "stopped");
-    h.press("io diagram start");
+    press_glyph(&mut h, "diagram", "start");
     h.wait(0.6);
     let v = h.app.sim.as_ref().unwrap().viewer.as_ref().unwrap();
     let on = v.highlighted().expect("lit without a scan");
@@ -262,21 +279,14 @@ fn a_push_button_held_in_the_tab_stays_on_while_its_block_is_on_the_diagram() {
         "its block is on the diagram too: {:?}",
         v.on_map()
     );
-    // Of the two controls drawn under its name, the one on the card.
+    // The input's icon is its control (2026-11-27): held, the button is on.
     let card = h.rect("io card jog_button");
-    let control = h
-        .app
-        .chrome
-        .hits
-        .iter()
-        .find(|(k, r)| k == "input jog_button" && card.contains_rect(*r))
-        .map(|(_, r)| *r)
-        .expect("the control on the card");
+    let icon = icon(&h, "jog_button");
     assert!(
-        control.height() < 90.0,
-        "the button sits beside its glyph, a name that needs it on a second line: {control:?}"
+        card.contains_rect(icon) && icon.top() - card.top() < 16.0,
+        "the icon is on the card's first line: {icon:?} in {card:?}"
     );
-    let at = eframe::egui::pos2(control.right() - 30.0, control.center().y);
+    let at = icon.center();
     h.frame(vec![Event::PointerMoved(at)]);
     h.frame(vec![Harness::button(at, true)]);
     for _ in 0..10 {
@@ -322,17 +332,36 @@ fn a_right_click_on_a_card_chats_about_its_point_and_sends_nothing() {
 
 const DRIVE: &str = "PROGRAM p\nVAR_INPUT enable : BOOL; jog_button : BOOL; END_VAR\nVAR_OUTPUT motor : BOOL; END_VAR\nmotor := enable OR jog_button;\nEND_PROGRAM\n";
 
-/// Of the controls drawn under an input's name, the one on its card.
-fn control(h: &Harness, name: &str) -> eframe::egui::Rect {
+/// The point's icon on card `name`, which is an input's control since
+/// 2026-11-27 (a switch flips on a click of it, a push button is on while
+/// it is held): the picture at the card's left edge (the library glyphs
+/// are meshes on a texture other than the font's).
+pub(super) fn icon(h: &Harness, name: &str) -> eframe::egui::Rect {
+    use eframe::egui::{Rect, Shape, TextureId};
+    fn walk(s: &Shape, card: Rect, out: &mut Vec<Rect>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, card, out)),
+            Shape::Mesh(m) if m.texture_id != TextureId::default() => {
+                let mut r = Rect::NOTHING;
+                for v in &m.vertices {
+                    r.extend_with(v.pos);
+                }
+                if card.contains_rect(r) {
+                    out.push(r);
+                }
+            }
+            _ => {}
+        }
+    }
     let card = h.rect(&format!("io card {name}"));
-    let key = format!("input {name}");
-    h.app
-        .chrome
-        .hits
-        .iter()
-        .find(|(k, r)| *k == key && card.contains_rect(*r))
-        .map(|(_, r)| *r)
-        .expect("the control on the card")
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, card, &mut out);
+    }
+    out.into_iter()
+        .filter(|r| r.left() - card.left() <= 12.0)
+        .min_by(|a, b| a.left().total_cmp(&b.left()))
+        .unwrap_or_else(|| panic!("{name}: no icon at the card's left edge {card:?}"))
 }
 
 fn value(h: &Harness, name: &str) -> Option<helmsman_iec::Value> {
@@ -345,8 +374,8 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
     use helmsman_iec::Value::Bool;
     let mut h = sim_with(DRIVE);
     assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Stopped);
-    let at = control(&h, "enable");
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    let at = icon(&h, "enable");
+    h.click(at.center());
     h.wait(0.2);
     assert_eq!(
         value(&h, "enable"),
@@ -374,9 +403,9 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
     assert!(!h.has("idle note"));
     assert_eq!(value(&h, "motor"), Some(Bool(true)), "it started with enable on");
     // Running: a click is just a click.
-    let at = control(&h, "enable");
+    let at = icon(&h, "enable");
     h.wait(1.0);
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    h.click(at.center());
     h.wait(0.2);
     assert_eq!(value(&h, "enable"), Some(Bool(false)));
     assert_eq!(h.app.sim.as_ref().unwrap().notice, None, "no line while it runs");
@@ -384,8 +413,8 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
     h.app.sim.as_mut().unwrap().session.set_running(false);
     h.wait(1.0);
     assert_eq!(h.app.sim.as_ref().unwrap().session.state(), RunState::Paused);
-    let at = control(&h, "enable");
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    let at = icon(&h, "enable");
+    h.click(at.center());
     h.wait(0.2);
     let note = h.app.sim.as_ref().unwrap().notice.clone().expect("a quiet line");
     assert!(
@@ -407,8 +436,7 @@ fn an_input_set_while_stopped_is_the_start_state_and_a_quiet_line_says_nothing_r
 #[test]
 fn a_push_button_pressed_while_stopped_says_it_is_on_only_while_held() {
     let mut h = sim_with(DRIVE);
-    let at = control(&h, "jog_button");
-    let at = eframe::egui::pos2(at.right() - 30.0, at.center().y);
+    let at = icon(&h, "jog_button").center();
     h.frame(vec![Event::PointerMoved(at)]);
     h.frame(vec![Harness::button(at, true)]);
     h.wait(0.2);
@@ -615,7 +643,7 @@ fn fan_lit(h: &Harness) -> FanLit {
 #[test]
 fn the_diagram_glyph_lights_every_wire_of_a_point_and_every_use_it_feeds() {
     let mut h = sim_with(FAN);
-    h.press("io diagram start");
+    press_glyph(&mut h, "diagram", "start");
     h.wait(0.6);
     let (reads, wires, others, other_wires) = fan_lit(&h);
     assert!(reads.iter().all(|&l| l), "the read of start is lit: {reads:?}");
@@ -689,10 +717,11 @@ fn the_trend_glyph_pins_the_point_and_opens_the_trend_and_again_takes_it_off() {
     let mut h = sim_with(MIXER);
     h.app.chrome.trend = false;
     h.wait(0.2);
+    hover_card(&mut h, "level");
     assert!(h.has("io trend level"), "a graph glyph on the card");
     let src = h.app.sim.as_ref().unwrap().proj.build_src();
     let dirty = h.app.sim.as_ref().unwrap().proj.dirty();
-    h.press("io trend level");
+    press_glyph(&mut h, "trend", "level");
     h.wait(0.3);
     assert!(
         h.app.chrome.trend && !h.app.chrome.msgs,
@@ -703,7 +732,7 @@ fn the_trend_glyph_pins_the_point_and_opens_the_trend_and_again_takes_it_off() {
         "level is on the Trend: {:?}",
         h.app.chrome.hits
     );
-    h.press("io trend level");
+    press_glyph(&mut h, "trend", "level");
     h.wait(0.3);
     assert!(!h.has("trend lane level"), "again takes it off");
     // Nothing of it is an edit of the program.
@@ -775,7 +804,7 @@ fn the_diagram_glyph_pressed_again_frames_the_next_use_and_comes_round() {
     let mut seen = Vec::new();
     for _ in 0..4 {
         h.wait(1.0);
-        h.press("io diagram start");
+        press_glyph(&mut h, "diagram", "start");
         h.wait(1.0);
         seen.push(cam(&h));
     }
@@ -842,8 +871,8 @@ fn an_inputs_bool_is_green_when_on_and_grey_when_off() {
         "enable is off: flat grey, no red and no green {:?}",
         colours_in(&h, card)
     );
-    let at = control(&h, "enable");
-    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    let at = icon(&h, "enable");
+    h.click(at.center());
     h.wait(0.3);
     assert_eq!(value(&h, "enable"), Some(Bool(true)), "the switch turned it on");
     assert!(

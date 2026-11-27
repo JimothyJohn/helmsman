@@ -1958,51 +1958,80 @@ impl Viewer {
     /// "site › box › module" (from the host, `outer`), then the program
     /// and each instance down to the one shown, every part a link, and ↑
     /// for one level up. Returns the outer part clicked.
-    pub fn crumbs_ui(&mut self, ui: &mut egui::Ui, outer: &[String]) -> Option<usize> {
+    pub fn crumbs_ui(&mut self, ui: &mut egui::Ui, outer: &[String], strip: Rect) -> Option<usize> {
         let mut hit = None;
         let mut go = None;
         let t = theme(ui);
-        ui.horizontal_wrapped(|ui| {
-            let up = self.parent();
-            if ui
-                .add_enabled(up.is_some(), egui::Button::new("↑"))
-                .tip(if up.is_some() {
-                    "Up one level (Alt+↑)."
-                } else {
-                    "Up one level (Alt+↑): this is the program, the top."
-                })
-                .clicked()
-            {
-                go = up;
-            }
-            for (i, o) in outer.iter().enumerate() {
+        // The run state and controls are laid out first (`strip`, as last
+        // drawn); the crumb takes the room left of them, its last part cut
+        // with its whole text on hover (Nick, 2026-11-27).
+        let top = ui.cursor().top();
+        let room = if strip != Rect::NOTHING && strip.bottom() > top {
+            (strip.left() - 8.0 - ui.cursor().left()).min(ui.available_width())
+        } else {
+            ui.available_width()
+        }
+        .max(60.0);
+        ui.allocate_ui_with_layout(
+            Vec2::new(room, ui.spacing().interact_size.y),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                // Cut at the room's sides only: the row is taller than
+                // `interact_size`, and a clip to its height cut the crumb's
+                // lower half off.
+                let (mut clip, room) = (ui.clip_rect(), ui.max_rect());
+                clip.min.x = clip.min.x.max(room.min.x);
+                clip.max.x = clip.max.x.min(room.max.x);
+                ui.set_clip_rect(clip);
+                let up = self.parent();
                 if ui
-                    .link(RichText::new(o).color(t.muted))
-                    .tip(format!("Goes to {o}."))
+                    .add_enabled(up.is_some(), egui::Button::new("↑"))
+                    .tip(if up.is_some() {
+                        "Up one level (Alt+↑)."
+                    } else {
+                        "Up one level (Alt+↑): this is the program, the top."
+                    })
                     .clicked()
                 {
-                    hit = Some(i);
+                    go = up;
                 }
-                ui.label(RichText::new("›").color(t.muted));
-            }
-            let trail = self.trail();
-            for (j, &k) in trail.iter().enumerate() {
-                if j > 0 {
+                for (i, o) in outer.iter().enumerate() {
+                    if ui
+                        .link(RichText::new(o).color(t.muted))
+                        .tip(format!("Goes to {o}."))
+                        .clicked()
+                    {
+                        hit = Some(i);
+                    }
                     ui.label(RichText::new("›").color(t.muted));
                 }
-                let last = j + 1 == trail.len();
-                let text = RichText::new(&self.scopes[k].label);
-                let text = if last { text.strong().color(t.accent) } else { text };
-                let tip = if last {
-                    "The diagram shown now."
-                } else {
-                    "Shows this level's diagram."
-                };
-                if ui.link(text).tip(tip).clicked() {
-                    go = Some(k);
+                let trail = self.trail();
+                for (j, &k) in trail.iter().enumerate() {
+                    if j > 0 {
+                        ui.label(RichText::new("›").color(t.muted));
+                    }
+                    let last = j + 1 == trail.len();
+                    let label = &self.scopes[k].label;
+                    let text = RichText::new(label);
+                    let text = if last { text.strong().color(t.accent) } else { text };
+                    let tip = if last {
+                        format!("{label}\nThe diagram shown now.")
+                    } else {
+                        "Shows this level's diagram.".to_string()
+                    };
+                    let r = ui.add(
+                        egui::Label::new(text)
+                            .truncate()
+                            .show_tooltip_when_elided(false)
+                            .sense(Sense::click()),
+                    );
+                    let r = r.on_hover_cursor(egui::CursorIcon::PointingHand).tip(tip);
+                    if r.clicked() {
+                        go = Some(k);
+                    }
                 }
-            }
-        });
+            },
+        );
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp)) {
             go = go.or_else(|| self.parent());
         }
