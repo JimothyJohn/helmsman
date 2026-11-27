@@ -1,6 +1,6 @@
 # Keyboard
 
-CODESYS's default keys where no browser uses them, and nothing on a key a browser owns (Ctrl D bookmarks the page, Alt 1 is Firefox's first tab, F10 the toolbar), checked against Chrome, Edge, Firefox and Safari. The editor's own conventions stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F and Ctrl G, as in every editor on the web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. Every view has a key of one letter, the first of its name; it works whenever you are not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, . and , jump along it. Help › Show hotkeys writes each key beside its button.
+CODESYS's default keys where no browser uses them, and nothing on a key a browser owns (Ctrl D bookmarks the page, Alt 1 is Firefox's first tab, F10 the toolbar), checked against Chrome, Edge, Firefox and Safari. The editor's own conventions stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F and Ctrl G, as in every editor on the web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. Every view has a key of one letter (Help has ?); it works whenever you are not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, . and , jump along it. Help › Show hotkeys writes each key beside its button.
 
 | key | does | CODESYS command on that key |
 |---|---|---|
@@ -33,16 +33,17 @@ CODESYS's default keys where no browser uses them, and nothing on a key a browse
 | E | The Editor screen; on the Editor it flips to the Monitor |  |
 | M | The Monitor screen; on the Monitor it flips to the Editor |  |
 | P | The box's Proposals screen |  |
-| D | The Describe tab |  |
-| A | The Describe tab |  |
-| S | The Code tab (the Structured Text) |  |
+| A | The Agent tab, its instruction field ready to type in |  |
+| C | The Code tab (the Structured Text) |  |
 | I | The I/O tab |  |
-| V | The Devices tab (the I/O map's devices and points) |  |
+| D | The Devices tab (the I/O map's devices and points) |  |
 | F | The Files tab |  |
-| L | The Help tab |  |
-| G | The Messages, the bottom panel's tab beside the Trend |  |
+| Shift ? | The Help tab |  |
+| L | The Log, the bottom panel's tab beside the Trend |  |
 | T | The trend along the bottom |  |
+| Z | Fit the diagram: all of it, or the selected blocks centred |  |
 | H | The Describe tab's history: the newest instruction and its answer, then Back and Forward |  |
+| Space | Run or stop the program. On a machine it asks first ("Stop the machine?"; Enter or Space confirms, Esc cancels). Space held while you drag pans the diagram and does not run or stop | |
 | Alt ↑ | Up one level in the diagram | |
 | . , | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (with the pointer over the diagram) | |
 

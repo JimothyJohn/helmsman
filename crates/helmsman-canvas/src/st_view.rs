@@ -2141,6 +2141,11 @@ impl Viewer {
         self.jumped = None;
     }
 
+    /// The Z key: what the fit glyph does, in the view `area`.
+    pub fn fit(&mut self, area: Rect, now: f64) {
+        self.fit_view(area, now);
+    }
+
     /// The fit glyph: the whole diagram in view, or with blocks selected,
     /// those blocks centred and as large as the view takes them (up to
     /// [`FOCUS_MAX`]).

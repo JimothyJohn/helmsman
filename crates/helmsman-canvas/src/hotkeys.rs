@@ -99,6 +99,8 @@ pub enum Action {
     Proposals,
     /// The Describe tab, in its history: the newest instruction and answer.
     History,
+    /// Fit the diagram: all of it, or the selected blocks centred.
+    Fit,
 }
 
 /// One shortcut: the action, its keys and the CODESYS command the keys
@@ -233,30 +235,34 @@ pub const TABLE: &[Hotkey] = &[
     view(Action::Editor, Key::E),
     view(Action::Monitor, Key::M),
     view(Action::Proposals, Key::P),
-    view(Action::Describe, Key::D),
-    // Nick, 2026-11-26: A for the Agent tab too, its field ready to type in.
+    // Nick, 2026-11-26: A for the Agent tab (D is the Devices'), its field
+    // ready to type in.
     view(Action::Describe, Key::A),
-    view(Action::St, Key::S),
+    view(Action::St, Key::C),
     view(Action::Io, Key::I),
-    view(Action::Devices, Key::V),
+    view(Action::Devices, Key::D),
     view(Action::Files, Key::F),
-    view(Action::HelpTab, Key::L),
-    view(Action::Messages, Key::G),
+    Hotkey {
+        action: Action::HelpTab,
+        keys: KeyboardShortcut::new(Modifiers::SHIFT, Key::Questionmark),
+        codesys: "",
+        mac: true,
+    },
+    view(Action::Messages, Key::L),
     view(Action::Trend, Key::T),
-    // Not a view: the Describe tab's history (H for history).
+    // Not views: Fit (the diagram's fit glyph) and the Describe tab's
+    // history (H for history).
+    view(Action::Fit, Key::Z),
     view(Action::History, Key::H),
 ];
 
 /// Every view a user switches to, in the order the letters were given out
-/// (Nick, 2026-11-25: every view's key is its name's first letter, unless
-/// typing in a field): the screens, then the left pane's tabs in their
-/// row, then the Messages and the Trend. A name whose first letter an
-/// earlier view holds takes the next free letter of its own name:
-/// Devices (D is Describe's) takes V, since E is the Editor's, and
-/// Messages (M is the Monitor's) takes G, since E and S are taken and A
-/// went to Describe as the Agent tab (Nick, 2026-11-26: A opens it with
-/// its field ready to type in; D still does too). The keys are in
-/// [`TABLE`] as plain letters; a test keeps the two in step.
+/// (Nick, 2026-11-26): the screens (Editor, Monitor, Proposals), then the
+/// left pane's tabs in their row (Agent A, Code C, I/O I, Devices D, Files
+/// F), then Help (`?`, the one view whose name has no free letter), the Log
+/// (L) and the Trend (T). Z (fit the diagram), H (the Agent's history) and
+/// Space (run or stop) are keys but no views. The keys are in [`TABLE`] as
+/// plain letters; a test keeps the two in step.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const VIEWS: &[(Action, &str)] = &[
     (Action::Editor, "Editor"),
@@ -268,7 +274,7 @@ pub const VIEWS: &[(Action, &str)] = &[
     (Action::Devices, "Devices"),
     (Action::Files, "Files"),
     (Action::HelpTab, "Help"),
-    (Action::Messages, "Messages"),
+    (Action::Messages, "Log"),
     (Action::Trend, "Trend"),
 ];
 
@@ -285,7 +291,8 @@ impl Hotkey {
     /// A bare letter: a view's key, which a text field takes first.
     #[must_use]
     pub fn plain(&self) -> bool {
-        self.keys.modifiers == Modifiers::NONE && self.keys.logical_key.name().len() == 1
+        (self.keys.modifiers == Modifiers::NONE && self.keys.logical_key.name().len() == 1)
+            || (self.keys.modifiers == Modifiers::SHIFT && self.keys.logical_key == Key::Questionmark)
     }
 }
 
@@ -523,16 +530,17 @@ const fn does(action: Action) -> &'static str {
         Action::Find => "Find in the Structured Text (Enter: next, Esc: close)",
         Action::FindNext => "The next match",
         Action::FindPrevious => "The previous match",
-        Action::Describe => "The Describe tab",
+        Action::Describe => "The Agent tab, its instruction field ready to type in",
         Action::HelpTab => "The Help tab",
         Action::Io => "The I/O tab",
-        Action::Messages => "The Messages, the bottom panel's tab beside the Trend",
+        Action::Messages => "The Log, the bottom panel's tab beside the Trend",
         Action::Editor => "The Editor screen; on the Editor it flips to the Monitor",
         Action::Monitor => "The Monitor screen; on the Monitor it flips to the Editor",
         Action::Proposals => "The box's Proposals screen",
         Action::History => {
             "The Describe tab's history: the newest instruction and its answer, then Back and Forward"
         }
+        Action::Fit => "Fit the diagram: all of it, or the selected blocks centred",
         Action::Restart | Action::Upload | Action::Download => "",
     }
 }
@@ -574,7 +582,7 @@ pub fn markdown() -> String {
          checked against Chrome, Edge, Firefox and Safari. The editor's own conventions \
          stay: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F and Ctrl G, as in every editor on the \
          web. **Ctrl is ⌘ on a Mac.** Every menu item shows its key. \
-         Every view has a key of one letter, the first of its name; it works whenever you are \
+         Every view has a key of one letter (Help has ?); it works whenever you are \
          not typing in a field, and with no Ctrl, Alt or ⌘ held. Over the diagram, \
          . and , jump along it. Help › Show hotkeys writes each key beside its \
          button.\n\n\
@@ -593,6 +601,11 @@ pub fn markdown() -> String {
         };
         let _ = writeln!(out, "| {keys} | {d} | {codesys} |");
     }
+    out.push_str(
+        "| Space | Run or stop the program. On a machine it asks first (\"Stop the machine?\"; \
+         Enter or Space confirms, Esc cancels). Space held while you drag pans the diagram and \
+         does not run or stop | |\n",
+    );
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
     out.push_str(
         "| . , | The next or the previous function block call, IF, CASE or loop on the diagram, \
@@ -621,7 +634,16 @@ pub fn short(ctx: &egui::Context, action: Action) -> String {
     TABLE
         .iter()
         .find(|h| h.action == action && h.plain())
-        .map_or_else(|| compact(&label(ctx, action)), |h| ctx.format_shortcut(&h.keys))
+        .map_or_else(
+            || compact(&label(ctx, action)),
+            |h| {
+                if h.keys.logical_key == Key::Questionmark {
+                    "?".to_string()
+                } else {
+                    ctx.format_shortcut(&h.keys)
+                }
+            },
+        )
 }
 
 /// A chord in the few characters a superscript has room for: the
@@ -658,10 +680,24 @@ pub fn pressed_views(ctx: &egui::Context, diagram: bool) -> Vec<Action> {
                 return true;
             };
             let diagram_key = matches!(key, Key::Period | Key::Comma);
-            if !modifiers.is_none() || (diagram && diagram_key) {
+            if modifiers.alt
+                || modifiers.ctrl
+                || modifiers.command
+                || modifiers.mac_cmd
+                || (diagram && diagram_key)
+            {
                 return true;
             }
-            match TABLE.iter().find(|h| h.plain() && h.keys.logical_key == *key) {
+            // `?` is Shift and the question mark (some platforms say Slash).
+            let key = if *key == Key::Slash && modifiers.shift {
+                Key::Questionmark
+            } else {
+                *key
+            };
+            match TABLE
+                .iter()
+                .find(|h| h.plain() && h.keys.logical_key == key && h.keys.modifiers.shift == modifiers.shift)
+            {
                 Some(h) => {
                     out.push(h.action);
                     false
@@ -1013,10 +1049,19 @@ mod tests {
         }
     }
 
+    /// The modifier a view's key is pressed with: `?` is Shift's.
+    fn held(a: Action) -> Modifiers {
+        if a == Action::HelpTab {
+            Modifiers::SHIFT
+        } else {
+            Modifiers::NONE
+        }
+    }
+
     fn plain_keys(action: Action) -> Vec<Key> {
         TABLE
             .iter()
-            .filter(|h| h.action == action && h.keys.modifiers == Modifiers::NONE)
+            .filter(|h| h.action == action && h.plain())
             .map(|h| h.keys.logical_key)
             .collect()
     }
@@ -1030,7 +1075,7 @@ mod tests {
         for s in [Screen::Editor, Screen::Monitor, Screen::Proposals] {
             views.push((screen_action(s), format!("{s:?}")));
         }
-        views.push((Action::Messages, "Messages".into()));
+        views.push((Action::Messages, "Log".into()));
         views.push((Action::Trend, "Trend".into()));
         for (a, name) in &views {
             let entry = VIEWS.iter().find(|(v, _)| v == a);
@@ -1053,21 +1098,24 @@ mod tests {
             let keys = plain_keys(*a);
             assert_eq!(keys.len(), 1, "{name}: {keys:?}");
             let letter = keys[0].name();
-            assert_eq!(letter.chars().count(), 1);
+            assert!(letter.chars().count() == 1 || *a == Action::HelpTab);
             assert!(
-                name.to_ascii_lowercase().contains(&letter.to_ascii_lowercase()),
+                matches!(*a, Action::HelpTab | Action::Describe)
+                    || name.to_ascii_lowercase().contains(&letter.to_ascii_lowercase()),
                 "{name}'s key {letter} is not a letter of its name"
             );
         }
         let plain: Vec<_> = TABLE.iter().filter(|h| h.plain()).collect();
-        assert_eq!(plain.len(), VIEWS.len(), "a plain key that is no view");
+        // Fit and the Agent's history have a plain key and are no view.
+        assert_eq!(plain.len(), VIEWS.len() + 2, "a plain key that is no view");
         for h in plain {
             assert!(
-                VIEWS.iter().any(|(a, _)| *a == h.action),
+                matches!(h.action, Action::Fit | Action::History)
+                    || VIEWS.iter().any(|(a, _)| *a == h.action),
                 "{:?} is plain but no view",
                 h.action
             );
-            assert_eq!(h.keys.modifiers, Modifiers::NONE);
+            assert_eq!(h.keys.modifiers, held(h.action));
         }
         let mut letters: Vec<_> = VIEWS.iter().map(|(a, _)| plain_keys(*a)[0]).collect();
         letters.sort_by_key(|k| k.name());
@@ -1082,14 +1130,15 @@ mod tests {
             (Action::Editor, Key::E),
             (Action::Monitor, Key::M),
             (Action::Proposals, Key::P),
-            (Action::Describe, Key::D),
-            (Action::St, Key::S),
+            (Action::Describe, Key::A),
+            (Action::St, Key::C),
             (Action::Io, Key::I),
-            (Action::Devices, Key::V),
+            (Action::Devices, Key::D),
             (Action::Files, Key::F),
-            (Action::HelpTab, Key::L),
-            (Action::Messages, Key::A),
+            (Action::Messages, Key::L),
             (Action::Trend, Key::T),
+            (Action::Fit, Key::Z),
+            (Action::History, Key::H),
         ];
         for (a, k) in want {
             assert_eq!(plain_keys(a), [k], "{a:?}");
@@ -1120,7 +1169,7 @@ mod tests {
         for (a, name) in VIEWS {
             let key = plain_keys(*a)[0];
             assert_eq!(
-                views_in(vec![down(Modifiers::NONE, key)], false),
+                views_in(vec![down(held(*a), key)], false),
                 (vec![*a], 0),
                 "{name}"
             );
@@ -1138,6 +1187,9 @@ mod tests {
         ] {
             for (a, name) in VIEWS {
                 let key = plain_keys(*a)[0];
+                if m == held(*a) {
+                    continue;
+                }
                 assert_eq!(
                     views_in(vec![down(m, key)], false),
                     (vec![], 1),
@@ -1179,9 +1231,10 @@ mod tests {
             [vec![Action::Files], vec![], vec![]],
             "a held key does not repeat the switch"
         );
-        assert!(
-            views_in(vec![down(Modifiers::NONE, Key::Z)], false).0.is_empty(),
-            "Z is no view"
+        assert_eq!(
+            views_in(vec![down(Modifiers::NONE, Key::Z)], false).0,
+            [Action::Fit],
+            "Z fits the diagram"
         );
         assert!(views_in(vec![down(Modifiers::NONE, Key::F8)], false).0.is_empty());
     }
@@ -1207,7 +1260,7 @@ mod tests {
         for (a, _) in VIEWS {
             let key = plain_keys(*a)[0];
             assert_eq!(
-                views_in(vec![down(Modifiers::NONE, key)], true),
+                views_in(vec![down(held(*a), key)], true),
                 (vec![*a], 0),
                 "{key:?} over the diagram"
             );
@@ -1316,7 +1369,12 @@ mod tests {
         full.textures_delta.clear();
         for (a, name) in VIEWS {
             let key = plain_keys(*a)[0];
-            assert_eq!(short(&ctx, *a), key.name().to_ascii_uppercase(), "{name}");
+            let want = if *a == Action::HelpTab {
+                "?".to_string()
+            } else {
+                key.name().to_ascii_uppercase()
+            };
+            assert_eq!(short(&ctx, *a), want, "{name}");
         }
         assert_eq!(short(&ctx, Action::Files), "F");
         for a in [Action::RunStop, Action::Save, Action::Step, Action::Deploy] {
@@ -1342,6 +1400,10 @@ mod tests {
         for (a, name) in VIEWS {
             let key = plain_keys(*a)[0];
             let letter = key.name();
+            if *a == Action::HelpTab {
+                assert!(md.contains("| Shift ? |"), "no row for Help's ?:\n{md}");
+                continue;
+            }
             assert!(
                 md.lines()
                     .any(|l| l.starts_with('|') && l.contains(&format!("| {letter} |"))
