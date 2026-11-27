@@ -7675,6 +7675,57 @@ mod reviewing {
         assert_eq!(b.jar.session(), None, "the box cleared the cookie");
     }
 
+    /// Only the browser build signs in through an HTML form its password
+    /// manager can save (Nick, 2026-11-26); natively the Proposals screen
+    /// keeps its own fields, and nothing there asks for the browser's form.
+    #[test]
+    fn natively_the_proposals_screen_signs_in_with_its_own_fields() {
+        let b = Bench::new();
+        let mut accounts = helmsman_plc::policy::account::Accounts::default();
+        accounts
+            .add(
+                "alice",
+                helmsman_plc::policy::Role::Engineer,
+                "alice-pass-31337",
+                1,
+                [1; 16],
+            )
+            .unwrap();
+        accounts.save(b.state_dir()).unwrap();
+        let mut h = proposals();
+        h.size = Vec2::new(1400.0, 2000.0);
+        h.frame(vec![]);
+        pump(&mut h, &b);
+        let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
+        for k in ["user", "password", "login"] {
+            assert!(keys.contains(&k.to_string()), "no {k}: {keys:?}");
+        }
+        assert!(
+            !keys.iter().any(|k| k == "open sign in"),
+            "the browser's button on native: {keys:?}"
+        );
+        assert!(!rv(&mut h).open_login);
+
+        // A refusal stays on the screen's fields.
+        type_into(&mut h, "user", "alice");
+        type_into(&mut h, "password", "not-alices-pass");
+        click(&mut h, "login");
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.signed_in(), None);
+        assert!(!rv(&mut h).open_login, "a refusal asked for the browser's form");
+        let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
+        assert!(keys.contains(&"password".to_string()), "{keys:?}");
+
+        // The right password signs in there.
+        rv(&mut h).user_input.clear();
+        type_into(&mut h, "user", "alice");
+        type_into(&mut h, "password", "alice-pass-31337");
+        click(&mut h, "login");
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.signed_in().as_deref(), Some("alice (engineer)"));
+        assert!(!rv(&mut h).open_login);
+    }
+
     #[test]
     fn the_screen_without_a_box_says_so_and_survives_clicks_everywhere() {
         let mut h = proposals();
