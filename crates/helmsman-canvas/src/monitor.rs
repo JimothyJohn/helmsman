@@ -1116,7 +1116,10 @@ impl Monitor {
         // width between them, each up to twice the least width, where a
         // four-column grid left half the screen empty.
         let cols = (((width + gap) / (min + gap)).floor() as usize).clamp(1, tiles.len().max(1));
-        let w = ((width - gap * (cols - 1) as f32) / cols as f32).min(min * 2.0);
+        // All in one row (one tile, since the status card went to the
+        // header: 2026-11-26), they share the whole width.
+        let w = (width - gap * (cols - 1) as f32) / cols as f32;
+        let w = if tiles.len() > cols { w.min(min * 2.0) } else { w };
         for row in tiles.chunks(cols) {
             let laid: Vec<Laid> = row.iter().map(|t| layout_tile(ui, t, k, w)).collect();
             let h = laid.iter().map(|l| l.height).fold(TAP * 2.0 * k, f32::max);

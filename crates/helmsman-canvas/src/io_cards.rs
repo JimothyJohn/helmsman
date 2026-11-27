@@ -203,6 +203,10 @@ pub struct Row<'a> {
     pub trended: bool,
 }
 
+/// The least width a card's first line keeps beside its glyphs, points;
+/// under it the glyphs go on a row of their own.
+const HEAD_MIN: f32 = 150.0;
+
 /// What was asked of a card this frame.
 #[allow(clippy::struct_excessive_bools)] // independent flags, as `Chrome`'s are
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -427,53 +431,72 @@ pub fn show<R>(
         let side = crate::glyphs::ROW;
         let gap = ui.spacing().item_spacing.x;
         let room = (inner - 3.0 * side - 3.0 * gap).max(1.0);
-        let r = ui
-            .horizontal_top(|ui| {
+        // The card's three glyphs: find in the code, show on the diagram,
+        // put on the Trend.
+        let mut glyph_row = |ui: &mut egui::Ui| {
+            let code = crate::glyphs::button_sized(
+                ui,
+                Icon::Code,
+                side,
+                true,
+                false,
+                &format!("Finds {name} in the code. Click again for its next use."),
+            );
+            chrome.hit(format!("io code {name}"), code.rect);
+            asked.code = code.clicked();
+            let diagram = crate::glyphs::button_sized(
+                ui,
+                Icon::Diagram,
+                side,
+                true,
+                false,
+                &format!("Shows {name} on the diagram: every block that reads or writes it."),
+            );
+            chrome.hit(format!("io diagram {name}"), diagram.rect);
+            asked.diagram = diagram.clicked();
+            // Nick, 2026-11-26: a graph glyph puts the point on the
+            // Trend at the bottom (on while it is there).
+            let trend = crate::glyphs::button_sized(
+                ui,
+                Icon::Trend,
+                side,
+                true,
+                row.trended,
+                &if row.trended {
+                    format!("Takes {name} off the Trend.")
+                } else {
+                    format!("Adds {name} to the Trend at the bottom.")
+                },
+            );
+            chrome.hit(format!("io trend {name}"), trend.rect);
+            asked.trend = trend.clicked();
+        };
+        // Beside the first line while that leaves it room; in a narrow
+        // pane (the right one's 236 pt) on a row of their own under it,
+        // so a push button keeps its glyph and name on one line (the
+        // third glyph squeezed it into a column, 2026-11-26).
+        let r = if room >= HEAD_MIN {
+            ui.horizontal_top(|ui| {
                 let r = ui
                     .allocate_ui_with_layout(Vec2::new(room, side), Layout::top_down(Align::Min), |ui| {
                         ui.set_width(room);
                         head(ui)
                     })
                     .inner;
-                let code = crate::glyphs::button_sized(
-                    ui,
-                    Icon::Code,
-                    side,
-                    true,
-                    false,
-                    &format!("Finds {name} in the code. Click again for its next use."),
-                );
-                chrome.hit(format!("io code {name}"), code.rect);
-                asked.code = code.clicked();
-                let diagram = crate::glyphs::button_sized(
-                    ui,
-                    Icon::Diagram,
-                    side,
-                    true,
-                    false,
-                    &format!("Shows {name} on the diagram: every block that reads or writes it."),
-                );
-                chrome.hit(format!("io diagram {name}"), diagram.rect);
-                asked.diagram = diagram.clicked();
-                // Nick, 2026-11-26: a graph glyph puts the point on the
-                // Trend at the bottom (on while it is there).
-                let trend = crate::glyphs::button_sized(
-                    ui,
-                    Icon::Trend,
-                    side,
-                    true,
-                    row.trended,
-                    &if row.trended {
-                        format!("Takes {name} off the Trend.")
-                    } else {
-                        format!("Adds {name} to the Trend at the bottom.")
-                    },
-                );
-                chrome.hit(format!("io trend {name}"), trend.rect);
-                asked.trend = trend.clicked();
+                glyph_row(ui);
                 r
             })
-            .inner;
+            .inner
+        } else {
+            let r = ui
+                .allocate_ui_with_layout(Vec2::new(inner, side), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(inner);
+                    head(ui)
+                })
+                .inner;
+            ui.horizontal(|ui| glyph_row(ui));
+            r
+        };
         if sim {
             badge(ui, chrome, row);
         }

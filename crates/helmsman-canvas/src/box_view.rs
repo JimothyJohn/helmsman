@@ -1813,7 +1813,10 @@ impl BoxView {
     fn exchange_steps(&self) -> Option<crate::instruct::Steps> {
         let ex: Vec<&crate::history_ui::RevisionRow> =
             self.projects.history.iter().filter(|r| r.page).collect();
-        if ex.is_empty() || self.instruct.busy() {
+        // An edit of your own puts the arrows away while you are on the
+        // live file (docs/help/agent.md): a step would replace it.
+        let own_edit = self.history_at.is_none() && self.projects.dirty();
+        if ex.is_empty() || self.instruct.busy() || own_edit {
             return None;
         }
         let k = self.history_at.and_then(|n| ex.iter().position(|r| r.n == n));

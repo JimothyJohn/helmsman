@@ -2497,6 +2497,11 @@ impl PlaygroundView {
             return None;
         }
         let at = self.exchange_at.filter(|n| self.shows_revision(*n));
+        // An edit of your own puts the arrows away while you are on the
+        // live file (docs/help/agent.md): a step would replace it.
+        if at.is_none() && self.proj.dirty() {
+            return None;
+        }
         // The exchange shown; none while live (and past the newest).
         let k = at.and_then(|n| ex.iter().position(|r| r.n == n));
         let tip = |r: &SimRevision, way: &str| {
