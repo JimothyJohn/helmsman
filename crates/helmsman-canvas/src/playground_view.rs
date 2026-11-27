@@ -5492,7 +5492,9 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
         Some(Widget::Toggle) => {
             let on = p.value == Value::Bool(true);
             let b = egui::Button::new(
-                RichText::new(format!("{label} {}", if on { "TRUE" } else { "FALSE" }))
+                // The state alone: the block already has the name, and the
+                // two together read 7 pt (2026-11-27).
+                RichText::new(if on { "TRUE" } else { "FALSE" })
                     .strong()
                     .size(size)
                     .color(if on { BLACK } else { t.muted }),
