@@ -13,7 +13,7 @@ use helmsman_iec::{Ty, Value};
 use crate::arrange::Layers;
 use crate::claude::{Chat, Phase, Proxy, Request};
 use crate::editor::{self, Body, Chrome, Tab};
-use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
+use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, SimRevision, Storage};
 use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WARN, WHITE, YELLOW};
@@ -4680,6 +4680,7 @@ impl PlaygroundView {
         // The head sits at the newest scan; stopped, it stands still.
         let sweep = crate::ekg::Sweep::new(trend.window_ms, trend.history.last_t().unwrap_or(0));
         let now = ui.input(|i| i.time);
+        let label_w = crate::ekg::label_width(&painter, trend.signals.iter());
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
@@ -4691,11 +4692,18 @@ impl PlaygroundView {
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let number = trend
-                .history
-                .last_value(name)
-                .filter(|v| v.is_finite())
-                .map(helmsman_iec::shown_real);
+            let value = trend.history.last_value(name).filter(|v| v.is_finite());
+            let kind = self
+                .session
+                .outputs()
+                .chain(self.session.inputs())
+                .find(|p| p.name == *name)
+                .map_or(crate::ekg::Kind::Real, |p| match p.ty {
+                    Ty::Bool => crate::ekg::Kind::Bool,
+                    Ty::Time => crate::ekg::Kind::Time,
+                    ty if ty.is_int() => crate::ekg::Kind::Int,
+                    _ => crate::ekg::Kind::Real,
+                });
             crate::ekg::paint_lane(
                 &painter,
                 &t,
@@ -4704,7 +4712,10 @@ impl PlaygroundView {
                 &crate::ekg::Lane {
                     name,
                     color: lane_color(&t, chrome, name, k),
-                    number,
+                    value,
+                    kind,
+                    unit: None,
+                    label_w,
                     pop: trend.flashes.strength(name, now),
                 },
                 &sweep,
@@ -4876,11 +4887,13 @@ pub fn lane_handles(
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let lane_at = |y: f32| (((y - rect.top()) / lane).floor().max(0.0) as usize).min(n - 1);
     let accent = theme(ui).accent;
+    let label_w = crate::ekg::label_width(ui.painter(), names.iter());
     let mut moved = None;
     for (k, name) in names.iter().enumerate() {
         #[allow(clippy::cast_precision_loss)]
         let top = rect.top() + lane * k as f32;
-        let handle = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(LANE_HANDLE_W, lane));
+        let handle = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(label_w, lane));
+        // The name is cut in a narrow column: the tip carries it whole.
         let r = ui
             .interact(
                 handle,
@@ -4888,7 +4901,10 @@ pub fn lane_handles(
                 Sense::click_and_drag(),
             )
             .on_hover_cursor(egui::CursorIcon::Grab)
-            .tip("Click to pick this signal's colour. Drag up or down to move it to another lane.");
+            .tip(format!(
+                "{}. Click to pick its colour. Drag up or down to move it to another lane.",
+                name.to_ascii_lowercase()
+            ));
         chrome.hit(format!("trend lane {}", name.to_ascii_lowercase()), handle);
         let picked = chrome.color(name).unwrap_or(k) % TREND.len();
         let mut pick = None;
@@ -5014,6 +5030,7 @@ pub fn scale_labels(
     top: f32,
     lane: f32,
     (lo, hi, step): (f64, f64, f64),
+    kind: crate::ekg::Kind,
 ) {
     let x = rect.right() - 4.0;
     for (v, y, align) in [
@@ -5023,7 +5040,7 @@ pub fn scale_labels(
         painter.text(
             Pos2::new(x, y),
             align,
-            tick_label(v, step),
+            crate::ekg::axis_text(kind, v, (lo, hi, step)),
             FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );

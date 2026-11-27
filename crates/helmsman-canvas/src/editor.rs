@@ -195,7 +195,7 @@ pub const RIGHT_W: f32 = 236.0;
 /// the trend is the whole bottom and taller): the signals' row and the
 /// slider take about 80 pt, which leaves six lanes about 40 pt each, and
 /// at 1280x800 the diagram keeps about 430 pt above it.
-pub const BOTTOM_H: f32 = 320.0;
+pub const BOTTOM_H: f32 = 288.0;
 /// How many trend colour picks a browser keeps.
 pub const MAX_COLORS: usize = 64;
 
