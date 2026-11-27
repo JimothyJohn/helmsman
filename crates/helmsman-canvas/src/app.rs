@@ -806,6 +806,12 @@ impl App {
                 self.chrome.show(crate::editor::Pane::Claude);
                 self.chrome.focus_describe = true;
             }
+            Action::History => {
+                self.chrome.show(crate::editor::Pane::Claude);
+                if let Some(w) = self.workspace() {
+                    w.go_history();
+                }
+            }
             Action::Io => self.chrome.show(crate::editor::Pane::Io),
             Action::Messages => self.chrome.toggle_messages(),
             Action::Trend => self.chrome.toggle_trend(),
@@ -1009,7 +1015,8 @@ impl App {
             | Action::Messages
             | Action::Editor
             | Action::Monitor
-            | Action::Proposals => self.view_key(a),
+            | Action::Proposals
+            | Action::History => self.view_key(a),
         }
     }
 

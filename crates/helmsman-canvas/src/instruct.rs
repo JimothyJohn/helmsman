@@ -499,6 +499,10 @@ pub struct Instruct {
     /// The prompt the arrows last put in the box ([`Self::show_step`]):
     /// while the box still holds it, the next step may replace it.
     pub stepped: Option<String>,
+    /// The box and the outcome as they were before the arrows (or H) went
+    /// into History, put back when they come out again
+    /// ([`Self::leave_steps`]).
+    pub held: Option<(String, Option<Outcome>)>,
     /// The instruction last sent from the box, so it is never lost to
     /// Enter (Nick, 2026-11-24): it comes back into the empty box on its
     /// own when it ended with nothing written, and with the Up key at
@@ -605,6 +609,7 @@ impl Instruct {
             return Err(why);
         }
         let instruction = std::mem::take(&mut self.draft).trim().to_string();
+        self.held = None;
         let text = if plan {
             crate::steps::plan_request(&instruction, false)
         } else {
@@ -1393,7 +1398,7 @@ impl Instruct {
     /// (Nick, 2026-11-23: the arrows restore both the prompt and its
     /// output): the instruction of its History `page` in the box and what
     /// came of it under it; a revision that was a plain save says `what`.
-    /// A draft the engineer typed since is theirs and stays.
+    /// What the engineer had typed is held ([`Self::leave_steps`]).
     pub fn show_step(&mut self, page: Option<&str>, what: &str) {
         let field = |key: &str| {
             page.and_then(|p| p.lines().find_map(|l| l.strip_prefix(key)))
@@ -1402,10 +1407,12 @@ impl Instruct {
                 .map(str::to_string)
         };
         let prompt = field(INSTRUCTION).unwrap_or_default();
-        if self.draft.trim().is_empty() || self.stepped.as_deref() == Some(self.draft.as_str()) {
-            self.draft.clone_from(&prompt);
-            self.stepped = Some(prompt);
+        // What was in the box and under it comes back on leaving.
+        if self.held.is_none() {
+            self.held = Some((std::mem::take(&mut self.draft), self.outcome.take()));
         }
+        self.draft.clone_from(&prompt);
+        self.stepped = Some(prompt);
         let mut o = Outcome::new(
             Kind::Applied,
             field("Result: ").unwrap_or_else(|| {
@@ -1417,6 +1424,17 @@ impl Instruct {
         );
         o.why = field("Why: ");
         self.outcome = Some(o);
+    }
+
+    /// Out of History: the box holds what the engineer left in it and the
+    /// outcome is the one before the arrows. Nothing to do when the arrows
+    /// were not used.
+    pub fn leave_steps(&mut self) {
+        if let Some((draft, outcome)) = self.held.take() {
+            self.draft = draft;
+            self.outcome = outcome;
+            self.stepped = None;
+        }
     }
 
     /// A value was set by hand on the diagram and saved
@@ -2081,8 +2099,15 @@ impl Versions {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Steps {
     pub back: Option<(u32, String)>,
+    /// `Some((LIVE, _))`: the arrow goes back to the live state.
     pub forward: Option<(u32, String)>,
+    /// The revision on show, for the info button between the arrows.
+    pub shown: Option<u32>,
 }
+
+/// The revision number a Forward arrow carries when it goes back to the
+/// live state, past the newest revision with an exchange.
+pub const LIVE: u32 = u32::MAX;
 
 /// The answer under way: how long it has taken and how long it usually
 /// takes. Nick, 2026-11-13, wanted to see the change being made as it
@@ -2884,14 +2909,16 @@ fn buttons_ui(
     let count = 1
         + usize::from(v.versions.is_some())
         + if v.steps.is_some() {
-            2
+            3
         } else {
             usize::from(s.undo().is_some())
         };
     let gap = ui.spacing().item_spacing.x;
     #[allow(clippy::cast_precision_loss)]
     let wide = ((ui.available_width() - gap * (count as f32 - 1.0)) / count as f32)
-        .clamp(crate::st_view::TAP, crate::glyphs::ACTION_W);
+        // Five of them (the arrows with their info button) are narrower
+        // than a tap target to stay in the pane at its default width.
+        .clamp(30.0, crate::glyphs::ACTION_W);
     ui.horizontal(|ui| {
         if v.versions.is_some() {
             let on = s.versions_open;
@@ -2906,7 +2933,7 @@ fn buttons_ui(
             }
         }
         if let Some(steps) = &v.steps {
-            for (key, icon, to, end) in [
+            for (k, (key, icon, to, end)) in [
                 (
                     "agent back",
                     crate::glyphs::Icon::Back,
@@ -2919,7 +2946,25 @@ fn buttons_ui(
                     &steps.forward,
                     "Forward: this is the newest revision.",
                 ),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                // The info button sits between the arrows.
+                if k == 1 {
+                    let r = crate::glyphs::action_wide(ui, crate::glyphs::Icon::Info, steps.shown.is_some(), false, wide)
+                        .tip(if steps.shown.is_some() {
+                            "Details: this revision's instruction, answer and code in a window, to look at or restore."
+                        } else {
+                            "Details: step Back to a revision first, then see its instruction, answer and code here."
+                        });
+                    chrome.hit("agent info", r.rect);
+                    if r.clicked()
+                        && let Some(n) = steps.shown
+                    {
+                        act = Some(Act::Details(n));
+                    }
+                }
                 let r = crate::glyphs::action_wide(ui, icon, to.is_some(), false, wide)
                     .tip(to.as_ref().map_or(end, |(_, tip)| tip.as_str()));
                 chrome.hit(key, r.rect);

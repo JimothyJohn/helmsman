@@ -151,6 +151,9 @@ pub struct PlaygroundView {
     pub agent_change: Option<crate::agent_marks::AgentChange>,
     /// The revision the History tab runs, when it is not the newest.
     pub history_at: Option<u32>,
+    /// The revision the Describe tab's arrows show, the newest included
+    /// (`history_at` is clear there).
+    pub exchange_at: Option<u32>,
     /// Its shared default layout (the project's) and this browser's
     /// tweaks (`arrange.rs`).
     pub layers: Layers,
@@ -321,6 +324,7 @@ impl PlaygroundView {
             viewer: None,
             agent_change: None,
             history_at: None,
+            exchange_at: None,
 
             layers: Layers::load(tweaks),
             fresh: false,
@@ -2484,7 +2488,62 @@ impl PlaygroundView {
         Some(crate::instruct::Steps {
             back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
             forward: tip(k + 1, "Forward"),
+            shown: None,
         })
+    }
+
+    /// The Describe tab's arrows: through the revisions that carry an
+    /// exchange (an instruction and what came of it), newest last; past
+    /// the newest the tab is live again. `None` while an answer is under
+    /// way, and while there is no exchange to go back to.
+    fn exchange_steps(&self) -> Option<crate::instruct::Steps> {
+        let revs = self.proj.revisions();
+        let ex: Vec<_> = revs.iter().filter(|r| r.page.is_some()).collect();
+        if ex.is_empty() || self.instruct.busy() {
+            return None;
+        }
+        let at = self.exchange_at.filter(|n| self.shows_revision(*n));
+        // The exchange shown; none while live (and past the newest).
+        let k = at.and_then(|n| ex.iter().position(|r| r.n == n));
+        let tip = |r: &SimRevision, way: &str| {
+            (
+                r.n,
+                format!(
+                    "{way}: the instruction and the answer of revision {}, {}. The project runs as it was then; Saving keeps it.",
+                    r.n, r.what
+                ),
+            )
+        };
+        let back = match k {
+            Some(0) => None,
+            Some(j) => Some(tip(ex[j - 1], "Back")),
+            None => Some(tip(ex[ex.len() - 1], "Back")),
+        };
+        let forward = k.map(|j| {
+            ex.get(j + 1).map_or_else(
+                || {
+                    (
+                        crate::instruct::LIVE,
+                        "Forward: back to the project and the box as you left them.".to_string(),
+                    )
+                },
+                |r| tip(r, "Forward"),
+            )
+        });
+        Some(crate::instruct::Steps {
+            back,
+            forward,
+            shown: k.map(|j| ex[j].n),
+        })
+    }
+
+    /// H: into the Describe tab's history, at the newest exchange.
+    pub fn open_history(&mut self) {
+        if self.exchange_at.is_none()
+            && let Some(n) = self.exchange_steps().and_then(|s| s.back).map(|(n, _)| n)
+        {
+            self.show_revision(n);
+        }
     }
 
     /// A checked answer into the open project: unsaved edits are saved
@@ -2711,6 +2770,17 @@ impl PlaygroundView {
     /// Save keeps it as the newest; the newest is a step away.
     pub fn show_revision(&mut self, n: u32) {
         let revs = self.proj.revisions();
+        // Past the newest exchange: the newest revision, and the tab as
+        // the engineer left it.
+        if n == crate::instruct::LIVE {
+            if let Some(last) = revs.last().map(|r| r.n) {
+                self.show_revision(last);
+            }
+            self.instruct.leave_steps();
+            self.exchange_at = None;
+            return;
+        }
+        self.exchange_at = Some(n);
         let Some(k) = revs.iter().position(|r| r.n == n) else {
             return;
         };
@@ -4370,7 +4440,7 @@ impl PlaygroundView {
                 blocked: self.chat.route().err().map(str::to_string),
                 undo_blocked: self.undo_blocked(),
                 decided: std::collections::BTreeMap::new(),
-                steps: self.steps(),
+                steps: self.exchange_steps(),
                 room_below: Some(0.0),
                 progress: self.progress(ctx.input(|i| i.time)),
                 card: self.card.clone(),
@@ -5506,6 +5576,10 @@ impl Workspace for PlaygroundView {
         };
         self.session.toggle_break(id);
         true
+    }
+
+    fn go_history(&mut self) {
+        self.open_history();
     }
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
