@@ -756,7 +756,8 @@ impl BoxView {
         if let Err(why) = self.writable() {
             return Some(why);
         }
-        if !self.agent.status.can_send() {
+        if !self.agent.status.can_send() || matches!(self.agent.status, crate::box_agent::Status::Offline(_))
+        {
             return Some(self.agent.status.line());
         }
         if self.agent_files().is_none() {
@@ -1673,8 +1674,7 @@ impl BoxView {
         }
     }
 
-    /// The Describe tab: its heading (the agent's state as a dot), then
-    /// the shared tab (changing the program).
+    /// The Describe tab: the shared tab (changing the program).
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::instruct::Act;
         // Where the diagram's selection is being used: a click here keeps it.
@@ -1712,8 +1712,6 @@ impl BoxView {
                 // Room for the scroll bar (a resizable panel grows to any
                 // row that overflows it).
                 ui.set_max_width(ui.available_width() - 12.0);
-                crate::help::heading(ui, chrome, self.agent.status.dot(), &self.agent.status.line());
-                ui.add_space(4.0);
                 let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
                 deploy_go = deploy_row(ui, chrome, &deploy_state);
                 let view = crate::design_ui::EntryView {

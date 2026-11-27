@@ -106,6 +106,8 @@ impl Status {
     /// online, red offline or without a relay, grey while unknown. Its
     /// tooltip is [`Self::line`].
     #[must_use]
+    // 2026-11-26: the tab shows no dot now (Nick); its tests keep it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const fn dot(&self) -> Color32 {
         use crate::st_view::brand::{GREEN, RED, STEEL};
         match self {

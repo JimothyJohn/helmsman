@@ -27,7 +27,7 @@
 // Natively nothing carries the answers back but the tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use eframe::egui::{self, RichText, Vec2};
+use eframe::egui::{self, RichText};
 use serde_json::{Value as Json, json};
 
 use crate::box_agent::{Incoming, Request};
@@ -319,26 +319,6 @@ pub struct View {
 pub enum Act {
     Ask,
     Stop,
-}
-
-/// The Agent tab's heading: the dot for the agent's state at the right
-/// (`dot`, its words on hover). Nick, 2026-11-26: no mode toggle and no
-/// title; the dot alone says the agent is online.
-pub fn heading(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, dot: egui::Color32, dot_tip: &str) {
-    use crate::glyphs;
-    // One row of the dot's height: a bare right-to-left layout takes all
-    // the height below it and pushed the tab's controls off the page.
-    let side = glyphs::ROW * 0.6;
-    ui.allocate_ui_with_layout(
-        Vec2::new(ui.available_width(), side),
-        egui::Layout::right_to_left(egui::Align::Center),
-        |ui| {
-            let (rect, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
-            let r = r.tip(dot_tip.to_string());
-            chrome.hit("agent status", r.rect);
-        },
-    );
 }
 
 /// The question, Ask or Stop, and the answer: the diagnosis and the issue
