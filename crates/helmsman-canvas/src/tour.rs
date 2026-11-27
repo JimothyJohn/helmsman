@@ -6,8 +6,8 @@
 //!
 //! `/playground/?tour` starts it, as does Help › Take the tour. The steps
 //! are the core loop (copy the Blink example under a name, change its
-//! time, deploy, watch the output, read the trend), then the Agent tab,
-//! then a closing card.
+//! time, deploy, watch the output, read the trend), then the Describe
+//! tab, then a closing card.
 //!
 //! The logic is [`Tour`]: a step and what the app showed when the step
 //! began ([`Seen`]), advanced by [`Tour::observe`] and the card's buttons
@@ -254,7 +254,7 @@ impl Tour {
                 Step::Edit => &["st editor", "pane code", "left"],
                 Step::Deploy => &["file deploy", "bar file", "bar menu"],
                 Step::Watch => &["io outputs", "tab io"],
-                Step::Trend => &["trend window", "trend tab"],
+                Step::Trend => &["trend window", "bottom trend"],
                 Step::Agent => &["agent instruction", "tab claude"],
             }
         };
@@ -278,7 +278,7 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
             "A short tour",
             format!(
                 "{} steps through the playground: copy an example, change it, deploy it, watch it run, \
-                 then hand a change to the agent. Each step moves on when you do what it asks. \
+                 then describe a change in words. Each step moves on when you do what it asks. \
                  The program runs in this page and nothing reaches a controller.",
                 spelled(Step::ACTIONS)
             ),
@@ -286,7 +286,8 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
         Step::OpenBlink => (
             "Open the Blink example",
             "Blink flips a lamp output every 500 ms with a timer that restarts itself. The examples \
-             are read-only, so click Blink in Files to make a copy of your own."
+             are read-only: open Files (the folder tab, or press F) and click blink to make a copy \
+             of your own."
                 .into(),
         ),
         Step::Name => (
@@ -297,8 +298,8 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
         ),
         Step::Edit => (
             "Change the blink time",
-            "In the Code tab, change T#500ms to T#200ms. The editor checks the program as you type \
-             and marks an error on its line."
+            "In the Code tab (the < > tab, or press C), change T#500ms to T#200ms. The editor checks \
+             the program as you type and marks an error on its line."
                 .into(),
         ),
         Step::Deploy => (
@@ -310,21 +311,21 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
         ),
         Step::Watch => (
             "Watch the output",
-            "The lamp now flips at the rate you set, live under Outputs on the I/O tab. Click lamp \
-             there, or a block in the diagram, and the diagram marks the logic that drives it. A \
-             program with inputs gets a switch for each one on the same tab."
+            "The lamp now flips at the rate you set, live under Outputs on the I/O tab (press I). Click \
+             the diagram glyph on the lamp's card, or a block in the diagram, and the diagram marks \
+             the logic that drives it. A program with inputs gets a switch for each one on the same tab."
                 .into(),
         ),
         Step::Trend if !seen.trend_open => (
             "Read the trend",
-            "The trend runs along the bottom of the Editor. Open it with View › Trend (Alt+2), then \
-             drag its window slider."
+            "The Trend is a tab at the bottom of the Editor, beside the Log. Open it with its graph \
+             tab or by pressing T, then drag its window slider."
                 .into(),
         ),
         Step::Trend => (
             "Read the trend",
-            "The trend draws lamp over time, one step per flip. Drag the window slider to zoom in \
-             time, or click a signal's name to pin it or take it off."
+            "The Trend, along the bottom, draws lamp over time, one step per flip. Drag \
+             the window slider to zoom in time, or click a signal's name to pin it or take it off."
                 .into(),
         ),
         Step::Agent => (
@@ -333,9 +334,9 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
         ),
         Step::Done => (
             "That is the whole loop",
-            "You made an example your own, changed it, deployed it and watched it run. The help \
-             pages go further: the tests written with each change and how they gate \
-             Deploy, remote I/O in Devices, and the keyboard shortcuts."
+            "You made an example your own, changed it, deployed it and watched it run. The Help tab \
+             (?) and the help pages go further: the tests written with each change and how they \
+             gate Deploy, remote I/O in Devices, and the keyboard shortcuts."
                 .into(),
         ),
     }
@@ -346,12 +347,12 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
 #[must_use]
 pub fn agent_step(free: bool) -> &'static str {
     if free {
-        "The Describe tab changes the program from an instruction in plain words. The answer is \
+        "The Describe tab (press A) changes the program from an instruction in plain words. The answer is \
          compiled and tested before it is written into the file. In the playground it is free \
          to try. Ask for a change, for example \"keep the lamp on for \
          1 s and off for 2 s\", or skip this step."
     } else {
-        "The Describe tab changes the program from an instruction in plain words. The answer is \
+        "The Describe tab (press A) changes the program from an instruction in plain words. The answer is \
          compiled and tested before it is written into the file. Ask for a change, for example \
          \"keep the lamp on for 1 s and off for 2 s\", or skip this step."
     }

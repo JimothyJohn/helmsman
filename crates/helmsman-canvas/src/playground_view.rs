@@ -3377,14 +3377,14 @@ impl PlaygroundView {
             picked: self
                 .viewer
                 .as_ref()
-                .filter(|v| v.pick.is_some() || v.because.is_some())
-                .map(|v| format!("{:?} {:?}", v.pick, v.because)),
+                .filter(|v| v.pick.is_some() || v.because.is_some() || v.shown_signal().is_some())
+                .map(|v| format!("{:?} {:?} {:?}", v.pick, v.because, v.shown_signal())),
             trend: hash(&|h| {
                 trend.window_ms.hash(h);
                 trend.signals.hash(h);
             }),
             asks: self.chat.seq(),
-            trend_open: chrome.trend,
+            trend_open: chrome.trend && !chrome.msgs,
         }
     }
 }
