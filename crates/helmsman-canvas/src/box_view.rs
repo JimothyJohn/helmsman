@@ -4119,7 +4119,7 @@ impl Body for BoxView {
                     "This box".to_string(),
                     self.state.selected.clone().unwrap_or_default(),
                 ];
-                if v.crumbs_ui(ui, &outer).is_some() {
+                if v.crumbs_ui(ui, &outer, chrome.glyph_strip).is_some() {
                     v.open(0);
                 }
                 area = ui.available_rect_before_wrap();

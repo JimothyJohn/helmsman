@@ -1462,7 +1462,7 @@ impl App {
             });
 
         let mut save_at = None;
-        egui::Area::new(egui::Id::unique("glyphs"))
+        let strip = egui::Area::new(egui::Id::unique("glyphs"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at)
@@ -1609,6 +1609,7 @@ impl App {
                         });
                     });
             });
+        self.chrome.glyph_strip = strip.response.rect;
         let ctx = ui.ctx().clone();
         if let Some(at) = save_at {
             self.save_flash(&ctx, at, &mut hits);

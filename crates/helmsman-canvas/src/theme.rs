@@ -538,6 +538,20 @@ pub fn check(ui: &mut egui::Ui, on: &mut bool, text: impl Into<egui::WidgetText>
     r
 }
 
+/// The width [`live`] takes for `text` in a slot of `chars` digits.
+#[must_use]
+pub fn live_slot(ui: &egui::Ui, text: &str, chars: usize) -> f32 {
+    let font = egui::FontId::monospace(MONO);
+    ui.fonts_mut(|f| {
+        let a = f
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x;
+        let b = f.layout_no_wrap("0".repeat(chars), font, Color32::WHITE).size().x;
+        a.max(b)
+    })
+}
+
 /// A live number (a clock, a value) in the mono face, right-aligned in a
 /// slot as wide as `chars` digits, so it does not jitter or move what is
 /// beside it as its figures change (Nick, 2026-11-27: mono is for code and
