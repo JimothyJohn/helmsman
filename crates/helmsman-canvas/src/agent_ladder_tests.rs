@@ -1176,11 +1176,13 @@ fn agent_ladder() {
     assert_eq!(passed, all.len(), "see {}", setup.out.display());
 }
 
-/// Records the front door's first run (`crate::front`, TODO.md
-/// `front-door-recorded-run`): gives the Agent the front door's instruction
-/// for a new project beside the tank's `plant.sim`, as the page would, and
-/// keeps the program it lands only if every proof of the front door is
-/// green on it. Writes `assets/front/main.st` and `assets/front/recorded.txt`.
+/// Records the tank example's program (`crate::front`, once the front
+/// door's machine; TODO.md `front-door-recorded-run`): gives the Agent the
+/// tank's instruction for a new project beside the tank's `plant.sim`, as
+/// the page would, and keeps the program it lands only if every proof of
+/// the tank is green on it. Writes `assets/front/main.st` (the front door
+/// that showed when and how it was written is gone, 2026-11-27, and with it
+/// `recorded.txt`).
 ///
 /// ```text
 /// HELMSMAN_LADDER_URL=<the free chat's address> \
@@ -1258,15 +1260,6 @@ fn front_door_recording() {
     );
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/front");
     std::fs::write(dir.join("main.st"), &text).expect("write main.st");
-    let day = std::env::var("HELMSMAN_RECORDED_ON").expect("HELMSMAN_RECORDED_ON: today's date, 2026-11-15");
-    std::fs::write(
-        dir.join("recorded.txt"),
-        format!(
-            "on: {day}\nrequests: {calls}\nseconds: {:.0}\n",
-            started.elapsed().as_secs_f64()
-        ),
-    )
-    .expect("write recorded.txt");
     println!(
         "recorded in {calls} requests, {:.0} s",
         started.elapsed().as_secs_f64()
