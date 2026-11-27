@@ -620,44 +620,50 @@ Each menu item prints its key. Reserved, not built (TODO card
 
 ## Monitor (phone to wall TV; replaces Andon)
 
-- **Top:** status tiles: running or faulted, then one tile per top-level
-  instance with its key outputs, green or red. The scan period and
-  counts are too low level for the wall: hidden unless an engineer turns
-  "Scan detail" on (card `monitor-scan-time`).
+- **Header (Nick, 2026-11-26):** each program's name with its state's
+  lamp (green running, red faulted, yellow held, grey stopped or stale)
+  and the state in a word, where the Editor shows its own status. The
+  tooltip has the fault, who stopped it and, with "Scan detail" on, the
+  scan period, counts and load (card `monitor-scan-time`): too low level
+  for the wall otherwise.
+- **Content:** the device picker first, then the tile of the program's
+  outputs and one tile per top-level instance with its key outputs,
+  green or red. No status card.
+- **Bottom:** the Editor's own Messages and Trend panel, one open or
+  shut state and one tab between the two screens.
 - **Tap a tile:** the same tiles one level down (that instance's instances
-  and outputs). Back and breadcrumbs go up; the full diagram is one tap
-  away.
+  and outputs). The breadcrumbs go up; there is no Back button and no
+  "Open diagram" (the header's Editor | Monitor switch is the way out).
 - **Watch only, but for an engineer's Stop and Restart.** In the
   simulation the header carries the transport (run or stop, step,
   restart) and the same keys as the Editor (Nick, 2026-11-01). On a box,
   an engineer signed in gets Stop or Run and Restart there (no step):
   they act on the program shown, or on every program at the top level,
   through the box's audited routes (card `monitor-box-run-stop`, Nick
-  2026-11-06). A stopped program's tile says STOPPED, "outputs at safe
-  values" and who stopped it. For anyone else the Monitor writes
+  2026-11-06). A stopped program's header says STOPPED, and its tooltip
+  "outputs at safe values" and who stopped it. For anyone else the Monitor writes
   nothing. The Editor's glyph strip carries the same Stop or Run and
   Restart for every program the box runs; no key does it on a box.
 
-As built (step 3): a group per PROGRAM (a module on a box), each with its
-status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
+As built (step 3): a group per PROGRAM (a module on a box), its status
+in the header (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
 period and count only while an engineer is signed in and this browser's
 "Scan detail" is on, kept with the Editor's layout), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
-`monitor-lamp-polarity`), a number its value. "Open diagram" opens the
-Editor's diagram at the level shown. Stale data is never a colour: a
+`monitor-lamp-polarity`), a number its value. Stale data is never a colour: a
 program with no new scan for 3 s, or every program while the box is out
 of reach, goes grey with "stale" and the age, under a red NO DATA banner
 when the box itself is the problem; a stopped simulation is grey too.
 
 Scan load (card `scan-stats`): on a box, "Scan detail" also puts three
-lines on each status tile, each with a tooltip on what it means and
+lines in the program's header tooltip, each saying what it means and
 what is normal: the scan time (average and peak over the module's last
 1000 scans; the tooltip adds the p99 and the shortest), the jitter (how
 late each scan started after its deadline, the same way), and the
 overruns with how long ago the last one was. An overrun in the last
-minute shows on the tile for everyone, in yellow, Scan detail or not.
+minute shows there for everyone, Scan detail or not.
 The simulation runs in the page on no real clock and shows none of
 these.
 Phones (under 600 points wide), `?monitor` and the old `?andon` open on
