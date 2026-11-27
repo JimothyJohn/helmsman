@@ -575,6 +575,7 @@ fn asked(ui: &mut egui::Ui, chrome: &mut Chrome, t: &crate::theme::Theme, f: &Fr
     chrome.hit("front recorded", r.rect);
     ui.add_space(4.0);
     let fold = egui::CollapsingHeader::new(RichText::new("The program").color(t.fg).size(BODY))
+        .icon(crate::theme::fold_icon)
         .id_salt("front program")
         .show(ui, |ui| {
             ui.label(

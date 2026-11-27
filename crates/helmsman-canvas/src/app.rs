@@ -1233,74 +1233,73 @@ impl App {
         let panel = egui::Panel::top("header")
             .frame(crate::theme::float_frame(ui))
             .show(ui, |ui| {
-            let size = Vec2::new(ui.available_width(), HEADER_H);
-            let t = theme(ui);
-            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // The wordmark is the way to the site (the About window links
-                // it, on a phone).
-                if !narrow {
-                    let mark = Self::wordmark(ui, t.accent).tip(format!("Opens {SITE_URL} in a new tab."));
-                    hits.push(("mark".to_string(), mark.rect));
-                    if mark.clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
-                    }
-                }
-                self.menus(ui, engineer, waiting, &mut hits);
-                if !narrow {
-                    ui.separator();
-                    self.actions(ui, &mut hits);
-                }
-                // The right-hand group, laid out from the window's edge
-                // leftwards (the order below is right to left).
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // ? keeps the very corner (Nick, 2026-11-01: in place
-                    // of the ⋯, whose items are the View menu's and About's).
-                    let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
-                    hits.push(("help".to_string(), m.rect));
-                    if m.clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
-                    }
-                    self.login_button(ui, &mut hits);
-                    self.screen_toggle(ui, &mut hits);
-                    if let Some(n) = waiting.filter(|n| *n > 0) {
-                        let b =
-                            egui::Button::new(RichText::new(format!("{n} waiting")).strong().color(BLACK))
-                                .fill(YELLOW);
-                        let r = ui
-                            .add(b)
-                            .tip("Proposals waiting for an approver. Click to review them.");
-                        hits.push(("proposals waiting".to_string(), r.rect));
-                        if r.clicked() {
-                            self.screen = Screen::Proposals;
+                let size = Vec2::new(ui.available_width(), HEADER_H);
+                let t = theme(ui);
+                ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // The wordmark is the way to the site (the About window links
+                    // it, on a phone).
+                    if !narrow {
+                        let mark =
+                            Self::wordmark(ui, t.accent).tip(format!("Opens {SITE_URL} in a new tab."));
+                        hits.push(("mark".to_string(), mark.rect));
+                        if mark.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
                         }
                     }
-                    ui.separator();
-                    self.dirty_mark(ui, &mut hits);
-                    if self.source == Source::Sim && !narrow {
-                        ui.label(RichText::new("simulation").color(t.muted))
-                            .tip("The program runs in this page. Nothing reaches a controller.");
+                    self.menus(ui, engineer, waiting, &mut hits);
+                    if !narrow {
+                        ui.separator();
+                        self.actions(ui, &mut hits);
                     }
-                    // A phone signed out has a letter's room left here:
-                    // "T…" says nothing, so the title waits for room.
-                    if narrow && self.screen == Screen::Monitor {
-                        // Where the title would be: the programs' lamps and
-                        // names, elided to what is left of the row.
-                        self.monitor_status(ui, &mut hits, true);
-                    } else if !narrow || ui.available_width() >= TITLE_ROOM {
-                        let r = ui
-                            .add(
-                                egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
-                                    .truncate(),
+                    // The right-hand group, laid out from the window's edge
+                    // leftwards (the order below is right to left).
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // ? keeps the very corner (Nick, 2026-11-01: in place
+                        // of the ⋯, whose items are the View menu's and About's).
+                        let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
+                        hits.push(("help".to_string(), m.rect));
+                        if m.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
+                        }
+                        self.login_button(ui, &mut hits);
+                        self.screen_toggle(ui, &mut hits);
+                        if let Some(n) = waiting.filter(|n| *n > 0) {
+                            let b = egui::Button::new(
+                                RichText::new(format!("{n} waiting")).strong().color(BLACK),
                             )
-                            .tip("The open project.");
-                        hits.push(("title".to_string(), r.rect));
-                    }
-                    m.rect
+                            .fill(YELLOW);
+                            let r = ui
+                                .add(b)
+                                .tip("Proposals waiting for an approver. Click to review them.");
+                            hits.push(("proposals waiting".to_string(), r.rect));
+                            if r.clicked() {
+                                self.screen = Screen::Proposals;
+                            }
+                        }
+                        ui.separator();
+                        self.dirty_mark(ui, &mut hits);
+                        if self.source == Source::Sim && !narrow {
+                            ui.label(RichText::new("simulation").color(t.muted))
+                                .tip("The program runs in this page. Nothing reaches a controller.");
+                        }
+                        // A phone signed out has a letter's room left here:
+                        // "T…" says nothing, so the title waits for room.
+                        if narrow && self.screen == Screen::Monitor {
+                            // Where the title would be: the programs' lamps and
+                            // names, elided to what is left of the row.
+                            self.monitor_status(ui, &mut hits, true);
+                        } else if !narrow || ui.available_width() >= TITLE_ROOM {
+                            let r = ui
+                                .add(egui::Label::new(RichText::new(&title).strong().color(t.fg)).truncate())
+                                .tip("The open project.");
+                            hits.push(("title".to_string(), r.rect));
+                        }
+                        m.rect
+                    })
+                    .inner
                 })
                 .inner
-            })
-            .inner
-        });
+            });
         hits.push(("header".to_string(), panel.response.rect));
         let menu_at = panel.inner;
         if let Some(r) = &mut self.review
@@ -1527,10 +1526,18 @@ impl App {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             if let Some((text, color, tip)) = &status {
-                                let r = ui
-                                    .label(RichText::new(text).monospace().strong().color(*color))
-                                    .tip(tip);
-                                hits.push(("state".to_string(), r.rect));
+                                // The state in words is Inter; its clock is a
+                                // live value, mono at a fixed width.
+                                let (word, clock) = text.split_once(" · ").unwrap_or((text.as_str(), ""));
+                                let w = ui.label(RichText::new(word).strong().color(*color));
+                                let mut rect = w.rect;
+                                if !clock.is_empty() {
+                                    let c = crate::theme::live(ui, clock, *color, 8);
+                                    rect = rect.union(c.rect);
+                                    c.tip(tip);
+                                }
+                                w.tip(tip);
+                                hits.push(("state".to_string(), rect));
                             }
                             let mut g =
                                 |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {

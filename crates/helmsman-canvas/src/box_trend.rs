@@ -496,7 +496,7 @@ impl BoxTrend {
                 let key = name.to_ascii_lowercase();
                 let mut on = self.checked.contains(&key);
                 let r = ui
-                    .put(at, egui::Checkbox::without_text(&mut on))
+                    .put(at, |ui: &mut egui::Ui| crate::theme::check(ui, &mut on, ""))
                     .tip("Tick to move, color or remove this signal with the others ticked.");
                 chrome.hit(format!("trend check {key}"), r.rect);
                 if r.changed() {
@@ -530,9 +530,7 @@ impl BoxTrend {
         let mut pick = None;
         ui.horizontal_wrapped(|ui| {
             let mut v = all;
-            let r = ui
-                .checkbox(&mut v, "All")
-                .tip("Tick every signal on the trend, or none.");
+            let r = crate::theme::check(ui, &mut v, "All").tip("Tick every signal on the trend, or none.");
             chrome.hit("trend check all", r.rect);
             if r.changed() {
                 self.checked = if v {

@@ -1999,7 +1999,7 @@ impl Viewer {
                     ui.label(RichText::new("›").color(t.muted));
                 }
                 let last = j + 1 == trail.len();
-                let text = RichText::new(&self.scopes[k].label).monospace();
+                let text = RichText::new(&self.scopes[k].label);
                 let text = if last { text.strong().color(t.accent) } else { text };
                 let tip = if last {
                     "The diagram shown now."

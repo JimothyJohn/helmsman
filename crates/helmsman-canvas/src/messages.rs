@@ -280,7 +280,13 @@ impl Log {
                 // Its icon and count (Nick, 2026-11-13: icons, not words),
                 // in its colour while the level is listed, grey while it
                 // is left out; a click switches it.
-                let ink = if self.show[k] { color } else { theme(ui).muted };
+                // A count of nothing is never coloured (Nick, 2026-11-27: no
+                // red ring on ⊗ 0).
+                let ink = if self.show[k] && counts[k] > 0 {
+                    color
+                } else {
+                    theme(ui).muted
+                };
                 let r = level_toggle(ui, icon, counts[k], ink, self.show[k]).tip(format!(
                     "{}: {} of them. Click to {} them.",
                     capital(name),
@@ -521,10 +527,9 @@ fn level_toggle(ui: &mut egui::Ui, icon: Icon, count: usize, ink: Color32, on: b
         FILTER_ICON.max(galley.size().y) + 2.0 * pad,
     );
     let (rect, r) = ui.allocate_exact_size(size, Sense::click());
-    if r.hovered() {
-        let tint = ui.style().interact(&r).bg_fill;
-        ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
-    }
+    let tint = crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT);
+    ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
+    crate::theme::focus_ring(ui, &r, rect, 4);
     let icon_rect = Rect::from_min_size(
         Pos2::new(rect.left() + pad, rect.center().y - FILTER_ICON / 2.0),
         Vec2::splat(FILTER_ICON),
@@ -535,7 +540,7 @@ fn level_toggle(ui: &mut egui::Ui, icon: Icon, count: usize, ink: Color32, on: b
     if on {
         ui.painter().hline(
             (rect.left() + pad)..=(rect.right() - pad),
-            rect.bottom() - 1.0,
+            crate::theme::px(ui, rect.bottom() - 1.0),
             Stroke::new(2.0, ink),
         );
     }

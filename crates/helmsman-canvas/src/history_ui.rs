@@ -467,6 +467,7 @@ fn fold(
     add: impl FnOnce(&mut egui::Ui),
 ) {
     let r = egui::CollapsingHeader::new(RichText::new(title).size(BODY).strong())
+        .icon(crate::theme::fold_icon)
         .id_salt(("history-fold", n, title))
         .default_open(false)
         .show(ui, add);
@@ -682,6 +683,7 @@ pub fn modal_against(
                         continue;
                     }
                     let r = egui::CollapsingHeader::new(head)
+                        .icon(crate::theme::fold_icon)
                         .id_salt(("history-diff", n, name.as_str()))
                         .default_open(new + gone <= OPEN_DIFF_LINES)
                         .show(ui, |ui| diff_rows(ui, &diffed));
