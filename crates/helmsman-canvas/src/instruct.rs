@@ -3340,10 +3340,17 @@ fn pending_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, p: &Pending
         .add(egui::Label::new(RichText::new(p.summary.size_line()).color(t.fg)).wrap())
         .tip("How much it changes. One step is at most 8 blocks or 30 lines.");
     chrome.hit("agent pending size", r.rect);
-    let r = ui
-        .add(egui::Label::new(RichText::new(p.summary.outputs_line()).color(t.fg)).wrap())
-        .tip("The outputs whose logic changes.");
-    chrome.hit("agent pending outputs", r.rect);
+    if let Some(note) = p.summary.note() {
+        let r = ui
+            .add(egui::Label::new(RichText::new(note).color(t.ink(crate::st_view::brand::WARN))).wrap())
+            .tip("Only the line cap applies to this change.");
+        chrome.hit("agent pending note", r.rect);
+    } else {
+        let r = ui
+            .add(egui::Label::new(RichText::new(p.summary.outputs_line()).color(t.fg)).wrap())
+            .tip("The outputs whose logic changes.");
+        chrome.hit("agent pending outputs", r.rect);
+    }
     let refusal = p.summary.refusal();
     if let Some(why) = &refusal {
         let r = ui

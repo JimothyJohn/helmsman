@@ -342,6 +342,9 @@ impl Sheet {
     }
 }
 
+/// The height of the diagram on the sheet, points.
+const DIAGRAM_H: f32 = 260.0;
+
 /// What the sheet asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Act {
@@ -359,10 +362,13 @@ pub struct Context<'a> {
     pub forbidden: Option<String>,
     /// The build's problems, when it did not build.
     pub problems: &'a [crate::projects::Diag],
+    /// The diagram of the first changed module, marked against what runs
+    /// (the Show Changes viewer): read-only, with no scan on it.
+    pub diagram: Option<&'a mut crate::st_view::Viewer>,
 }
 
 /// The sheet, over the page.
-pub fn ui(ctx: &egui::Context, chrome: &mut Chrome, sheet: &Sheet, c: &Context<'_>) -> Option<Act> {
+pub fn ui(ctx: &egui::Context, chrome: &mut Chrome, sheet: &Sheet, c: &mut Context<'_>) -> Option<Act> {
     let mut act = None;
     let m = egui::Modal::new(egui::Id::unique("deploy-sheet")).show(ctx, |ui| {
         let t = crate::theme::theme(ui);
@@ -389,7 +395,7 @@ pub fn ui(ctx: &egui::Context, chrome: &mut Chrome, sheet: &Sheet, c: &Context<'
             .id_salt("deploy-sheet-body")
             .max_height((screen.height() - 260.0).max(120.0))
             .auto_shrink([false, true])
-            .show(ui, |ui| body(ui, chrome, sheet, c, blocked.as_deref()));
+            .show(ui, |ui| body(ui, chrome, sheet, &mut *c, blocked.as_deref()));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             let can = blocked.is_none();
@@ -422,7 +428,7 @@ pub fn ui(ctx: &egui::Context, chrome: &mut Chrome, sheet: &Sheet, c: &Context<'
     act
 }
 
-fn body(ui: &mut egui::Ui, chrome: &mut Chrome, sheet: &Sheet, c: &Context<'_>, blocked: Option<&str>) {
+fn body(ui: &mut egui::Ui, chrome: &mut Chrome, sheet: &Sheet, c: &mut Context<'_>, blocked: Option<&str>) {
     use crate::st_view::brand::{GREEN, RED};
     let t = crate::theme::theme(ui);
     // A build that failed says why and stops here.
@@ -506,6 +512,21 @@ fn body(ui: &mut egui::Ui, chrome: &mut Chrome, sheet: &Sheet, c: &Context<'_>, 
                     .color(t.fg),
             )
             .wrap(),
+        );
+    }
+    if let Some(v) = c.diagram.as_deref_mut() {
+        ui.add_space(4.0);
+        let size = egui::vec2(ui.available_width(), DIAGRAM_H);
+        let r = ui
+            .allocate_ui(size, |ui| {
+                ui.set_min_size(size);
+                v.canvas(ui, None);
+            })
+            .response;
+        chrome.hit("deploy sheet diagram", r.rect);
+        ui.label(
+            RichText::new("The diagram, marked against the program the box runs: green added, red removed.")
+                .color(t.muted),
         );
     }
     for m in &report.removed {

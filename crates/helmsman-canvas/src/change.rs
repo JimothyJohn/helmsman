@@ -47,6 +47,9 @@ pub struct Summary {
     /// Why the diagram could not be worked out, when it could not: what
     /// the change touches is then unknown and the change is refused.
     pub unknown: Option<String>,
+    /// The file as it is does not compile: its blocks and outputs cannot
+    /// be compared, so only the line cap holds.
+    pub old_broken: bool,
 }
 
 impl Summary {
@@ -72,11 +75,26 @@ impl Summary {
     #[must_use]
     pub fn size_line(&self) -> String {
         let (b, l) = (self.blocks(), self.lines());
+        if self.old_broken {
+            return format!("{l} line{}", if l == 1 { "" } else { "s" });
+        }
         format!(
             "{b} block{}, {l} line{}",
             if b == 1 { "" } else { "s" },
             if l == 1 { "" } else { "s" }
         )
+    }
+
+    /// What cannot be said about this change, if anything.
+    #[must_use]
+    pub const fn note(&self) -> Option<&'static str> {
+        if self.old_broken {
+            Some(
+                "The file as it is does not compile, so its blocks and outputs can't be compared: check the change line by line.",
+            )
+        } else {
+            None
+        }
     }
 
     /// "switches MOTOR, LAMP", or that no output changes.
@@ -389,6 +407,10 @@ pub fn summarize(
             return (s, None);
         }
     };
+    if !old_src.trim().is_empty() && crate::review::lower_source(&old_src, sizes).is_err() {
+        s.old_broken = true;
+        return (s, Some(drawn));
+    }
     let (added, removed, changed) = drawn.diff.counts();
     (s.blocks_added, s.blocks_removed, s.blocks_changed) = (added, removed, changed);
     let moved = tainted(
@@ -576,6 +598,24 @@ mod tests {
         let new = src.replace("IF a THEN", "IF a AND b THEN");
         let s = summarize(&files(src), &files(&new), "main.st", SIZES, &[]).0;
         assert_eq!(s.outputs, vec!["X".to_string()], "{s:?}");
+    }
+
+    #[test]
+    fn a_file_that_does_not_compile_is_held_to_the_line_cap_only() {
+        let broken = "PROGRAM p\nthis is not st\n";
+        let s = summarize(&files(broken), &files(BASE), "main.st", SIZES, &[]).0;
+        assert!(s.old_broken && s.unknown.is_none(), "{s:?}");
+        assert_eq!(s.blocks(), 0);
+        assert_eq!(s.outputs.len(), 0);
+        assert!(s.size_line().ends_with("lines") && !s.size_line().contains("block"));
+        assert!(s.note().is_some());
+        assert_eq!(s.refusal(), None, "{s:?}");
+        let big = BASE.repeat(4);
+        let s = summarize(&files(broken), &files(&big), "main.st", SIZES, &[]).0;
+        assert!(
+            s.unknown.is_some(),
+            "a proposed file that does not lower is still refused"
+        );
     }
 
     #[test]

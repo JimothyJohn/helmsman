@@ -71,6 +71,8 @@ pub struct BoxView {
     /// The change held in the Agent tab, drawn while Show Changes is on
     /// ([`crate::change_ui`]); the box keeps running the program it runs.
     shown_change: Option<crate::change_ui::Shown>,
+    /// The Deploy sheet's diagram: the source it draws and its viewer.
+    sheet_diagram: Option<(String, crate::st_view::Viewer)>,
     /// The Trend tab: pinned signals from the box's history.
     pub trend: BoxTrend,
     /// The way to the agent the box runs (`POST /api/chat`).
@@ -403,6 +405,7 @@ impl BoxView {
             view: None,
             agent_change: None,
             shown_change: None,
+            sheet_diagram: None,
             layers: Layers::load(tweaks),
             generation: 0,
             wants_sim: false,
@@ -3119,6 +3122,7 @@ impl BoxView {
     /// The Deploy sheet, "What changes on the machine", while it is open.
     fn sheet_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
         if self.projects.sheet.is_none() {
+            self.sheet_diagram = None;
             return;
         }
         // The project's text as it is now, to compare with what runs.
@@ -3147,13 +3151,40 @@ impl BoxView {
         };
         sheet.compute(&files, sizes);
         let sheet = sheet.clone();
-        let c = crate::deploy_sheet::Context {
+        // The diagram of the first module that changes, once the report is in.
+        let want = sheet.report.as_ref().and_then(|r| {
+            let f = r
+                .files
+                .iter()
+                .find(|f| f.counts() != (0, 0) && !f.file.ends_with("(removed)"))?;
+            let new = files.get(&f.file)?.clone();
+            let old = match &sheet.running {
+                crate::deploy_sheet::Running::Is { modules, .. } => {
+                    modules.get(&f.module).cloned().unwrap_or_default()
+                }
+                _ => String::new(),
+            };
+            Some((old, new))
+        });
+        match want {
+            Some((old, new)) if self.sheet_diagram.as_ref().is_none_or(|(src, _)| *src != new) => {
+                self.sheet_diagram = crate::change::draw(&old, &new, sizes).ok().map(|d| {
+                    let mut v = crate::st_view::Viewer::new(&new, d.new);
+                    v.baseline = d.old.map(std::rc::Rc::new);
+                    (new, v)
+                });
+            }
+            None => self.sheet_diagram = None,
+            Some(_) => {}
+        }
+        let mut c = crate::deploy_sheet::Context {
             busy,
             failed: failed.as_deref(),
             forbidden,
             problems: &problems,
+            diagram: self.sheet_diagram.as_mut().map(|(_, v)| v),
         };
-        match crate::deploy_sheet::ui(ctx, chrome, &sheet, &c) {
+        match crate::deploy_sheet::ui(ctx, chrome, &sheet, &mut c) {
             Some(crate::deploy_sheet::Act::Deploy) => self.projects.deploy(),
             Some(crate::deploy_sheet::Act::Cancel) => self.projects.close_sheet(),
             None => {}
