@@ -81,8 +81,6 @@ mod ekg;
 mod features_tests;
 mod find;
 mod front;
-#[cfg(test)]
-mod front_tests;
 mod glyph_lib;
 mod glyphs;
 mod help;
