@@ -164,23 +164,11 @@ only go down.
   state, which on a box says the protocol a device by its profile is
   reached over and whether the link is slow (2026-11-12); on a box the
   open project's `io.map`, else the map the box runs; under the map's
-  devices, "On the network": Scan asks the box for one scan on every
-  protocol (`POST /api/devices/discover`; the simulation answers with its
-  simulated E1213; since 2026-11-11 the request asks EtherNet/IP, Modbus
-  and, where the build has it, PROFINET, and answers `found`, one entry
-  per device however many protocols it answered on, which the tab reads,
-  with the older `devices` list as the fallback for an older box) and
-  lists every device that answered by vendor and model, with whether a
-  map device binds it and what the public device library knows of it
-  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
-  then by vendor and model text; `--devices-index` points a box at
-  another). **Add by click** (2026-11-12, PROTOCOLS.md step 3): a device
-  the library knows, whose entry names a profile (`NAME.device`), offers
-  Add: a small form asks one thing, the device's name, and says how many
-  channels it has; Add copies the profile into the project as
-  `NAME.device` (the box fetches and checks it, `GET
-  /api/devices/library`; the simulation carries its E1213's) and writes
-  `device NAME device:PROFILE IDENTITY` with the identity the scan saw.
+  devices, a **+** opens the New device form (Nick, 2026-11-26: "On the
+  network", Scan, Scan and add, the IP address Ask and Advanced are gone;
+  until then Scan listed what answered, `POST /api/devices/discover`, and
+  Add by click wrote a library device as `device NAME device:PROFILE
+  IDENTITY`).
   No signal is written and no protocol, address, byte order or cycle
   time is asked. **A device's I/O is added one point at a time**
   (`device_io.rs`, Nick, 2026-11-15: every channel is available, and
@@ -198,12 +186,12 @@ only go down.
   the variable stays). A device with signals the program has no variable
   for (every channel, as Add wrote them until 2026-11-15) offers Remove N
   unused, which asks first. The New device and Edit forms hold settings
-  only: Edit is the name alone unless Advanced is on, and Save writes
+  only: Edit is the name and the address (2026-11-26), and Save writes
   the device's signals back as they were. The agent's listing in the
   playground names the channels not added (`device_io::describe_free`);
-  the box's `list_devices` does not yet. A device the library does
-  not know says so and offers Advanced, and, on a box with an agent, a
-  button **Build from vendor file…** (`device_vendor.rs`, Nick,
+  the box's `list_devices` does not yet. The New device form
+  has, on a box with an agent, **From the vendor's file…** (on a found
+  device the library did not know until 2026-11-26) (`device_vendor.rs`, Nick,
   2026-11-15). It picks the vendor's file (an EDS, an IODD, a PDF manual
   or a text file: text up to 1 MB, a PDF up to 2 MB), posts it to the box
   as a drop-in (`POST /api/dropins`, the file name cut to `A-Z a-z 0-9 . _ -`
@@ -254,8 +242,7 @@ only go down.
   the stored console password (write-only, the field never shows a value)
   and Change the console's password. Everyone else sees the controls
   disabled with the reason as the tooltip. Errors are the box's own words.
-  **Advanced** (a tick box beside
-  Scan, off by default, remembered in the browser) is the older way: a
+  A
   right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
   and settings, written as one `device` line of `io.map`; Import device…

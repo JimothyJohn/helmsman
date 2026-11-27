@@ -252,7 +252,7 @@ const TIP_LIMIT: usize = 110;
 /// its explanation to the Help pages (docs/help) and lower this number; it
 /// never goes up, and the test fails when it is higher than the count so
 /// that the next person lowers it.
-const TIP_OFFENDERS: usize = 33;
+const TIP_OFFENDERS: usize = 30;
 
 /// The string literals in `stmt`, as the program sees them: `\n` a
 /// newline, a `\` at a line's end joins the next line.

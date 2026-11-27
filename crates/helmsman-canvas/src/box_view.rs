@@ -294,8 +294,6 @@ impl BoxView {
         self.instruct = crate::instruct::Instruct::default();
         self.agent_pending = false;
         self.projects.deploy = Deploy::Idle;
-        self.devices_ui.add_note = None;
-        self.devices_ui.ask_note = None;
         self.history_at = None;
         self.fresh = Some(name);
     }
@@ -503,8 +501,6 @@ impl BoxView {
                     let found = crate::devices::hosts(&self.devices_ui.found);
                     self.projects.scanned(found);
                 }
-                PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
-                PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::Wiring(device) => self.devices_ui.wiring_answer(&device, a.status, &a.body),
                 PCall::FindWired => {
@@ -2044,6 +2040,24 @@ impl BoxView {
         }
     }
 
+    /// Whether Edit › Edit map… is on: the box reports a Skipper's I/O
+    /// map, with or without projects, whether or not the Devices tab has
+    /// been drawn.
+    #[must_use]
+    pub const fn can_edit_map(&self) -> bool {
+        self.state.io_map_node
+    }
+
+    /// Edit › Edit map…: the Skipper's I/O map in its window.
+    pub fn edit_map(&mut self) {
+        self.devices_ui.node_map.set_context(
+            self.state.io_map_node,
+            self.session.is_some(),
+            self.state.io_map.as_deref(),
+        );
+        self.devices_ui.node_map.open_window();
+    }
+
     /// One frame of the Editor.
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
@@ -3341,40 +3355,40 @@ impl Body for BoxView {
             if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
                 self.project_act(a);
             }
-            ui.separator();
-            ui.label(RichText::new("Running").strong().color(t.muted))
-                .tip("The modules the box runs now, each a program. Click one to see it live.");
         }
-        let mut chosen = None;
-        let modules = self.state.modules.clone();
-        if modules.is_empty() {
-            ui.label(RichText::new(self.waiting()).color(t.muted));
-        }
-        for m in &modules {
-            let selected = self.state.selected.as_deref() == Some(m.name.as_str());
-            let arrow = if selected { "▾" } else { "▸" };
-            let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans)).color(
-                if m.state == "faulted" {
-                    crate::theme::theme(ui).ink(RED)
-                } else {
-                    t.fg
-                },
-            );
-            let r = ui.selectable_label(selected, text);
-            chrome.hit(format!("module {}", m.name), r.rect);
-            let r = match &m.fault {
-                Some(f) => r.tip(format!("Faulted: {f}")),
-                None => r.tip("A module: its state and scans so far. Click to open its diagram."),
-            };
-            if r.clicked() {
-                chosen = Some(m.name.clone());
+        // A box with projects lists no modules here: its Files tab is the
+        // project's (Nick, 2026-11-26: the Running section went).
+        if !self.has_projects() {
+            let mut chosen = None;
+            let modules = self.state.modules.clone();
+            if modules.is_empty() {
+                ui.label(RichText::new(self.waiting()).color(t.muted));
             }
-            if selected && let Some(v) = &mut self.view {
-                ui.indent(("box-tree", &m.name), |ui| v.tree_ui(ui));
+            for m in &modules {
+                let selected = self.state.selected.as_deref() == Some(m.name.as_str());
+                let arrow = if selected { "▾" } else { "▸" };
+                let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
+                    .color(if m.state == "faulted" {
+                        crate::theme::theme(ui).ink(RED)
+                    } else {
+                        t.fg
+                    });
+                let r = ui.selectable_label(selected, text);
+                chrome.hit(format!("module {}", m.name), r.rect);
+                let r = match &m.fault {
+                    Some(f) => r.tip(format!("Faulted: {f}")),
+                    None => r.tip("A module: its state and scans so far. Click to open its diagram."),
+                };
+                if r.clicked() {
+                    chosen = Some(m.name.clone());
+                }
+                if selected && let Some(v) = &mut self.view {
+                    ui.indent(("box-tree", &m.name), |ui| v.tree_ui(ui));
+                }
             }
-        }
-        if let Some(name) = chosen {
-            self.state.select(&name);
+            if let Some(name) = chosen {
+                self.state.select(&name);
+            }
         }
         // The blank space under it all: a right-click offers a new project
         // (and a paste into the open one).
@@ -3515,25 +3529,8 @@ impl Body for BoxView {
             self.session.is_some(),
             self.state.io_map.as_deref(),
         );
-        self.devices_ui.node_map.row(ui, chrome);
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
-            Some(crate::devices::DeviceAct::Scan) => {
-                self.devices_ui.scan = crate::devices::Scan::Running;
-                self.projects.discover();
-            }
-            Some(crate::devices::DeviceAct::Ask(address)) => {
-                self.devices_ui.ask_note = Some(format!("Asking {address}…"));
-                self.projects.ask(address);
-            }
-            Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
-            Some(crate::devices::DeviceAct::OpenMap) => {
-                self.projects.open_file(helmsman_project::IO_MAP);
-                chrome.show_code();
-            }
-            Some(crate::devices::DeviceAct::Library { vendor, product }) => {
-                self.projects.library(vendor, product);
-            }
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)

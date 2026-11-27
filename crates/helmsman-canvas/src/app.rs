@@ -1876,6 +1876,24 @@ impl App {
                 {
                     w.undo(&ctx, true);
                 }
+                // The box's, projects or not (a Skipper's page may have none).
+                let map = self.source == Source::Box
+                    && self.boxv.as_ref().is_some_and(crate::box_view::BoxView::can_edit_map);
+                if map {
+                    ui.separator();
+                    if menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "edit map",
+                        "Edit map…",
+                        false,
+                        "",
+                        "Opens the I/O map this Skipper runs in a window: edit it, check its devices, download it.",
+                    ) && let Some(b) = self.boxv.as_mut()
+                    {
+                        b.edit_map();
+                    }
+                }
                 ui.separator();
                 if menu_item_keyed(
                     ui,

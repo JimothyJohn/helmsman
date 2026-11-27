@@ -19,11 +19,6 @@ const RED: egui::Color32 = egui::Color32::from_rgb(255, 110, 100);
 const WIDTH: f32 = 520.0;
 
 impl DevicesUi {
-    /// Opens the form on `d`.
-    pub fn open(&mut self, d: NewDevice) {
-        self.adding = Some(d);
-    }
-
     /// The form. Returns the wiring once Add is pressed with rows that pass.
     pub fn form_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
         let mut d = self.adding.clone()?;
@@ -46,6 +41,9 @@ impl DevicesUi {
             let simple = d.editing.is_some() && !chrome.advanced;
             fields(ui, chrome, &mut d, &eds_files, simple);
             if d.editing.is_none() {
+                ui.add_space(6.0);
+                let target = crate::device_vendor::Target::new(d.endpoint.trim(), 0, 0, "");
+                self.vendor.show_row(ui, chrome, &target);
                 ui.add_space(6.0);
                 ui.add(
                     egui::Label::new(
@@ -120,13 +118,6 @@ impl DevicesUi {
     /// name, the channels it will get once the profile came, Add or
     /// Cancel. Returns what Add writes once the name passes.
     pub fn quick_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
-        // Scan and add fills the form itself: its Add, nothing to show.
-        if let Some(add) = self.add_next.take() {
-            return Some(DeviceAct::Quick(add));
-        }
-        if self.add_all.is_some() {
-            return None;
-        }
         let mut q = self.quick.clone()?;
         let mut out = None;
         let mut done = false;
@@ -335,8 +326,8 @@ impl DevicesUi {
 
 /// Name, protocol, address, then the protocol's settings: one grid,
 /// labels on the left, and the device's io.map line under it. `simple`
-/// (an edit with Advanced off): the name alone; how the device is
-/// reached stays as it is.
+/// (an edit with Advanced off): the name and the address; the protocol
+/// and the timing stay as they are.
 fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: &[String], simple: bool) {
     let t = theme(ui);
     egui::Grid::new("device-fields")
@@ -350,22 +341,21 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
                 .tip(name_tip);
             chrome.hit("device name", n.rect);
             ui.end_row();
-            if simple {
-                return;
-            }
-            ui.label("Protocol").tip("How the controller talks to the device.");
-            ui.horizontal_wrapped(|ui| {
-                for (k, (driver, title, _, _)) in PROTOCOLS.iter().enumerate() {
-                    let r = ui
-                        .add(egui::Button::selectable(d.protocol == k, *title))
-                        .tip(format!("{title}, over Ethernet. Fills in its usual settings."));
-                    chrome.hit(format!("device {driver}"), r.rect);
-                    if r.clicked() {
-                        d.set_protocol(k);
+            if !simple {
+                ui.label("Protocol").tip("How the controller talks to the device.");
+                ui.horizontal_wrapped(|ui| {
+                    for (k, (driver, title, _, _)) in PROTOCOLS.iter().enumerate() {
+                        let r = ui
+                            .add(egui::Button::selectable(d.protocol == k, *title))
+                            .tip(format!("{title}, over Ethernet. Fills in its usual settings."));
+                        chrome.hit(format!("device {driver}"), r.rect);
+                        if r.clicked() {
+                            d.set_protocol(k);
+                        }
                     }
-                }
-            });
-            ui.end_row();
+                });
+                ui.end_row();
+            }
             let hint = PROTOCOLS.get(d.protocol).map_or("", |p| p.2);
             let addr_tip = format!(
                 "The device's IP address, e.g. {hint}, or its identity (mac=… or cip=…) so a new address never loses it."
@@ -376,6 +366,9 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
                 .tip(&addr_tip);
             chrome.hit("device endpoint", e.rect);
             ui.end_row();
+            if simple {
+                return;
+            }
             let driver = d.driver();
             for s in schema(driver) {
                 ui.label(s.label).tip(s.tip);
@@ -425,15 +418,6 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
             }
         });
     if simple {
-        ui.add(
-            egui::Label::new(
-                RichText::new(
-                    "How it is reached (protocol, address, timing) is under Advanced on the Devices tab.",
-                )
-                .color(t.muted),
-            )
-            .wrap(),
-        );
         return;
     }
     if let Err(e) = check_settings(d.driver(), &d.params) {

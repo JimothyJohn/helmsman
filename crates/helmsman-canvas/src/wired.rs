@@ -495,15 +495,6 @@ impl Library {
         }
     }
 
-    /// The Scan: the found devices get their library matches from the
-    /// index already read, or once it comes.
-    pub fn scan(&mut self, ui: &mut DevicesUi) {
-        match &self.index {
-            Some(index) => ui.attach_library(index),
-            None => self.want_index(),
-        }
-    }
-
     /// The picker's search: answered at once from the index read, else
     /// once it comes ([`Self::index_answer`]).
     pub fn search(&mut self, ui: &mut DevicesUi) {

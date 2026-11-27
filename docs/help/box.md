@@ -76,8 +76,7 @@ Devices), so the handling can be tested before it reaches the box.
 ## A Skipper's map
 
 On a page opened with a Skipper's address (`?box=http://192.168.3.55:8080`),
-the Devices tab has a **Skipper map** row.
-**Edit map…** opens the map in a window. Change it there, then press
+**Edit map…** in the Edit menu opens the map in a window. Change it there, then press
 **Check devices**: the Skipper asks every device in the map from its own
 network port and the window lists each one as answered, with how long it
 took, or not answered, with the reason. Nothing is written to a device.

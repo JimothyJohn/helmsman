@@ -4281,16 +4281,21 @@ fn a_proposed_profile_is_shown_renamed_and_saved_into_the_open_project_on_a_real
     );
 }
 
-// ---- the vendor's file for the agent, on the Devices tab ----
+// ---- the vendor's file for the agent, from the New device form ----
 
-/// A found device the library lacks, on the tab of a real box.
-fn unknown_found() -> crate::devices::Found {
-    let mut f = crate::devices::Found::simulated_e1213(&helmsman_project::iomap::MapText::default());
-    f.address = "192.168.3.77".into();
-    f.library = None;
-    f.mapped = None;
-    f.simulated = false;
-    f
+/// The New device form opened by the + under the devices, with
+/// 192.168.3.77 typed as its address (Nick, 2026-11-26).
+fn vendor_form(h: &mut Harness) {
+    h.press("devices add");
+    h.wait(0.2);
+    let at = h.rect("device endpoint").center();
+    h.click(at);
+    h.frame(vec![Event::Text("192.168.3.77".into())]);
+    h.frame(vec![]);
+    assert!(
+        h.app.chrome.rect("vendor file").is_some(),
+        "the form has the button"
+    );
 }
 
 #[test]
@@ -4303,9 +4308,7 @@ fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
     let mut h = Harness::new(v, session);
     h.press("pane devices");
     h.wait(0.3);
-    h.bv().devices_ui.found = vec![unknown_found()];
-    h.bv().devices_ui.scan = crate::devices::Scan::Done;
-    h.frame(vec![]);
+    vendor_form(&mut h);
     assert_eq!(
         b.json("/api/dropins"),
         serde_json::json!([]),
@@ -4313,7 +4316,7 @@ fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
     );
 
     // The button opens the picker; the file arrives as the browser reads it.
-    h.press("vendor file 192.168.3.77");
+    h.press("vendor file");
     assert!(h.bv().devices_ui.vendor.is_picking());
     let eds = "$ EZ-EDS\n[File]\n  DescText = \"Acme Rio\";\n[Device]\n  ProdName = \"Rio\";\n";
     h.bv()
@@ -4354,7 +4357,12 @@ fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
         "the file's name stays out of the message"
     );
     assert!(
-        h.app.chrome.rect("vendor note 192.168.3.77").is_some(),
+        ask.message.contains("It answers at 192.168.3.77."),
+        "the typed address: {}",
+        ask.message
+    );
+    assert!(
+        h.app.chrome.rect("vendor note").is_some(),
         "the note beside the button"
     );
 }
@@ -4369,11 +4377,9 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     let mut h = Harness::new(v, session);
     h.press("pane devices");
     h.wait(0.3);
-    h.bv().devices_ui.found = vec![unknown_found()];
-    h.bv().devices_ui.scan = crate::devices::Scan::Done;
-    h.frame(vec![]);
+    vendor_form(&mut h);
     // Bytes that are not UTF-8: the box says so (422).
-    h.press("vendor file 192.168.3.77");
+    h.press("vendor file");
     h.bv()
         .devices_ui
         .vendor
@@ -4392,7 +4398,7 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
         "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent."
     );
     // Control characters inside: 422 as well.
-    h.press("vendor file 192.168.3.77");
+    h.press("vendor file");
     h.bv().devices_ui.vendor.picked("ctl.eds", b"a\x07b".to_vec());
     pump_until(&b, &jar, &mut h, "the second refusal", |h| {
         h.bv()
@@ -4411,7 +4417,7 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     );
     // A signed-out page: the box answers 401, in words.
     jar.set(None);
-    h.press("vendor file 192.168.3.77");
+    h.press("vendor file");
     h.bv().devices_ui.vendor.picked("ok.eds", b"fine".to_vec());
     pump_until(&b, &jar, &mut h, "the 401", |h| {
         h.bv()
@@ -5449,12 +5455,10 @@ fn file_new_project_opens_a_saved_starter_program() {
     // also be cleared and the state reset").
     h.bv().instruct.draft = "make the lamp blink".into();
     h.bv().projects.deploy = crate::box_projects::Deploy::Failed("the last one's".into());
-    h.bv().devices_ui.add_note = Some("Scan and add: added rio.".into());
     new_project(&mut h, "fresh");
     h.wait(0.1);
     assert_eq!(h.bv().instruct.draft, "", "the Agent starts empty");
     assert_eq!(h.bv().projects.deploy, crate::box_projects::Deploy::Idle);
-    assert_eq!(h.bv().devices_ui.add_note, None);
     assert_eq!(
         h.bv().waiting(),
         "fresh has not run yet. Deploy it to see it here.",

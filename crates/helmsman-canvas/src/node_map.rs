@@ -574,23 +574,11 @@ impl NodeMapUi {
         }
     }
 
-    /// The Devices tab's row: where the Skipper's map is opened.
-    pub fn row(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        if !self.skipper {
-            return;
+    /// Edit › Edit map…: opens the map's window.
+    pub fn open_window(&mut self) {
+        if self.skipper {
+            self.open = true;
         }
-        let t = theme(ui);
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Skipper map").strong().color(t.muted))
-                .tip("The I/O map this Skipper runs: edit it, check its devices, download it.");
-            let b = ui
-                .button("Edit map…")
-                .tip("Opens the map in a window, where the Skipper can ask each device in it.");
-            chrome.hit("node map open", b.rect);
-            if b.clicked() {
-                self.open = true;
-            }
-        });
     }
 
     /// The window, while open.

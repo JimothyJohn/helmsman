@@ -143,13 +143,6 @@ pub enum PCall {
     /// `POST /api/devices/discover`: the Devices tab's Scan (answered by
     /// the view, not here).
     Discover,
-    /// `POST /api/devices/discover?address=A`: the Devices tab's Ask, one
-    /// address (the text is the validated IPv4 address, for the answer's
-    /// note).
-    Ask(String),
-    /// `GET /api/devices/library?vendor=&product=`: a found device's
-    /// profile for the quick form (answered by the view, not here).
-    Library,
     /// `GET /api/devices/library?wired=VENDOR/MODEL`: what the library
     /// knows of the sensor or actuator a point is wired to (answered by
     /// the view, not here).
@@ -970,26 +963,6 @@ impl BoxProjects {
             "POST",
             "/api/devices/discover?fresh=1".into(),
             &json!({}),
-        ));
-    }
-
-    /// Asks the box about the one device at `address` (the Devices tab's
-    /// Ask), for a device that does not answer the scan's broadcast.
-    pub fn ask(&mut self, address: std::net::Ipv4Addr) {
-        self.queue.push(PReq::json(
-            PCall::Ask(address.to_string()),
-            "POST",
-            format!("/api/devices/discover?address={address}"),
-            &json!({}),
-        ));
-    }
-
-    /// Asks the box for the library's entry on a found device, its
-    /// profile text with it (the Devices tab's Add).
-    pub fn library(&mut self, vendor: u16, product: u16) {
-        self.queue.push(PReq::get(
-            PCall::Library,
-            format!("/api/devices/library?vendor={vendor}&product={product}"),
         ));
     }
 
@@ -2669,8 +2642,6 @@ impl BoxProjects {
             | PCall::SavePins
             | PCall::Trend
             | PCall::Discover
-            | PCall::Ask(_)
-            | PCall::Library
             | PCall::Wired(_)
             | PCall::FindWired
             | PCall::Wiring(_)
