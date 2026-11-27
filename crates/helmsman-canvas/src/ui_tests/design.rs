@@ -267,6 +267,15 @@ fn a_design_is_read_kept_and_built_a_batch_at_a_time_without_the_pane_growing() 
         ],
     );
     assert!(h.small_text().is_empty(), "{:?}", h.small_text());
+    // The narrow page holds the pane too (it shrinks to the page less
+    // 40 pt, c325d99c): its edge is on the page.
+    inside_page(&h, &["left"]);
+    assert!(
+        h.rect("left").right() <= h.size.x - 40.0 + 8.0,
+        "the pane leaves the page 40 pt: {:?} on {:?}",
+        h.rect("left"),
+        h.size
+    );
     assert!(
         h.drew("## Machine") || h.drew("What the line is"),
         "the first section is shown"
@@ -279,7 +288,16 @@ fn a_design_is_read_kept_and_built_a_batch_at_a_time_without_the_pane_growing() 
     h.wait(0.2);
     h.size = Vec2::new(1400.0, 1180.0);
     h.wait(0.3);
-    // The card, at the default width.
+    // The page was narrowed and widened again: the pane may have shrunk
+    // to that page, but it never grew. From here on it does not move.
+    let narrowed = h.rect("left");
+    assert!(
+        narrowed.right() <= left.right() + 0.5,
+        "the left pane grew from {left:?} to {narrowed:?}"
+    );
+    inside_page(&h, &["left"]);
+    let left = narrowed;
+    // The card, at the width the pane has.
     assert!(
         h.has("design card") && h.has("design summary"),
         "{:?}",

@@ -47,6 +47,9 @@ const MAX_ISSUE: usize = 128 * 1024;
 pub enum Mode {
     #[default]
     Code,
+    // No way into it since the Agent tab lost its toggle (2026-11-26);
+    // feat/help-tab gives it a tab of its own and drops this allow.
+    #[allow(dead_code)]
     Help,
 }
 
@@ -328,67 +331,24 @@ pub enum Act {
     Stop,
 }
 
-impl Mode {
-    /// The heading of the Agent tab in this mode.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::Code => "Change the program",
-            Self::Help => "Get help",
-        }
-    }
-}
-
-/// The Agent tab's heading (Nick, 2026-11-08): a dot for the agent's
-/// state (`dot`, its words on hover), the mode's name, and at the right
-/// a toggle of two glyphs, < > for changing the program and ? for help,
-/// the one in use tinted.
-pub fn heading(
-    ui: &mut egui::Ui,
-    chrome: &mut crate::editor::Chrome,
-    mode: &mut Mode,
-    dot: egui::Color32,
-    dot_tip: &str,
-) {
-    use crate::glyphs::{self, Icon};
-    let t = crate::theme::theme(ui);
-    ui.horizontal(|ui| {
-        let (rect, r) = ui.allocate_exact_size(Vec2::splat(glyphs::ROW * 0.6), egui::Sense::hover());
-        ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
-        let r = r.tip(dot_tip.to_string());
-        chrome.hit("agent status", r.rect);
-        // The title is capped to the room left of the toggle: a resizable
-        // panel grows to any row that overflows it.
-        let room = ui.available_width() - 2.0 * glyphs::ROW - 2.0 - 2.0 * ui.spacing().item_spacing.x;
-        ui.scope(|ui| {
-            ui.set_max_width(room.max(40.0));
-            ui.add(egui::Label::new(RichText::new(mode.title()).strong().color(t.fg)).truncate())
-                .tip("What Helmsman does here. The toggle at the right switches it.");
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            for (m, icon, key, tip) in [
-                (
-                    Mode::Help,
-                    Icon::Help,
-                    "agent mode help",
-                    "Get help: say what went wrong, or ask how to do something. Helmsman looks at this box's messages and devices, tells you what is likely wrong and writes an issue you can copy to report it, or answers your question from the help pages.",
-                ),
-                (
-                    Mode::Code,
-                    Icon::Code,
-                    "agent mode code",
-                    "Change the program: say what it should do. Helmsman changes the open file and checks the change before it is written.",
-                ),
-            ] {
-                let r = glyphs::button_sized(ui, icon, glyphs::ROW, true, *mode == m, tip);
-                chrome.hit(key, r.rect);
-                if r.clicked() {
-                    *mode = m;
-                }
-            }
-        });
-    });
+/// The Agent tab's heading: the dot for the agent's state at the right
+/// (`dot`, its words on hover). Nick, 2026-11-26: no mode toggle and no
+/// title; the dot alone says the agent is online.
+pub fn heading(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, dot: egui::Color32, dot_tip: &str) {
+    use crate::glyphs;
+    // One row of the dot's height: a bare right-to-left layout takes all
+    // the height below it and pushed the tab's controls off the page.
+    let side = glyphs::ROW * 0.6;
+    ui.allocate_ui_with_layout(
+        Vec2::new(ui.available_width(), side),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let (rect, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::hover());
+            ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
+            let r = r.tip(dot_tip.to_string());
+            chrome.hit("agent status", r.rect);
+        },
+    );
 }
 
 /// The question, Ask or Stop, and the answer: the diagnosis and the issue

@@ -433,6 +433,19 @@ pub struct Pending {
     pub offered: bool,
 }
 
+/// A save or a deploy that went through ([`BoxProjects::flash`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flash {
+    /// The popup's word: "Saved" or "Deployed".
+    pub word: &'static str,
+    /// What the log says.
+    pub line: String,
+    pub at: f64,
+}
+
+/// How long the save glyph's popup stays, seconds.
+pub const FLASH_S: f64 = 2.5;
+
 /// Everything the Editor knows about the box's projects.
 #[derive(Debug, Default)]
 // Each flag is its own fact (available, ended, deployed, to the node).
@@ -451,6 +464,10 @@ pub struct BoxProjects {
     pub conflict: Option<String>,
     /// A one-line note: what happened, or why not (`true`: an error).
     pub notice: Option<(String, bool)>,
+    /// The last save or deploy that went through: a word for the popup
+    /// beside the save glyph, the log's line and when (page time). Nick,
+    /// 2026-11-26: a popup for a couple of seconds, not a note.
+    pub flash: Option<Flash>,
     /// An upload waiting for "Replace".
     pub pending: Option<Pending>,
     /// A 401 said the box no longer knows this page's session.
@@ -1505,7 +1522,7 @@ impl BoxProjects {
             },
             "PUT",
             file_url(&project, file),
-            &json!({ "text": text, "version": version, "page": page }),
+            &json!({ "text": text, "version": version, "page": page, "what": crate::instruct::asked(page) }),
         ));
         o.current = Some(file.to_string());
         // Each scenario a new file (`version: null`: only if no file of
@@ -2507,6 +2524,17 @@ impl BoxProjects {
                         "{project} is running: {mods} (snapshot {}){red}",
                         short(snap)
                     ));
+                    // The popup under the save glyph and the log's line;
+                    // a red requirement test is said in the line.
+                    self.flash = Some(Flash {
+                        word: "Deployed",
+                        line: if red.is_empty() {
+                            format!("Deployed {project}.")
+                        } else {
+                            format!("Deployed {project}{red}.")
+                        },
+                        at: self.now,
+                    });
                     self.running = Some(project);
                     self.deployed = true;
                     self.relist();
@@ -2544,7 +2572,12 @@ impl BoxProjects {
                     if let Some((m, t)) = sent {
                         m.base = t;
                     }
-                    self.deploy = Deploy::Done(format!("{name} is running the version deployed from here."));
+                    self.deploy = Deploy::Done(format!("{name} deployed."));
+                    self.flash = Some(Flash {
+                        word: "Deployed",
+                        line: format!("Deployed {name}."),
+                        at: self.now,
+                    });
                     self.deployed = true;
                 } else {
                     if a.status == 422 {
@@ -2752,7 +2785,12 @@ impl BoxProjects {
         if self.deploy == Deploy::Saving {
             self.check();
         } else if !matches!(&self.notice, Some((_, true))) {
-            self.note(format!("Saved {project}."), false);
+            self.clear_notice();
+            self.flash = Some(Flash {
+                word: "Saved",
+                line: format!("Saved {project}."),
+                at: self.now,
+            });
         }
     }
 

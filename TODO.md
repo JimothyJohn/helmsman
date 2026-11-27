@@ -1016,6 +1016,13 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-26
   by: claude-session 50f6a24e
 
+- [ ] **Point names per device, for when every device has an `enabled`** — Since feat/short-point-names a point the I/O tab adds is named by its channel alone (`di_00`, `enabled`); the device's name goes in front only when that name is taken. Nick, 2026-11-26: names like `enabled` and `di` will be common to many devices on one network, so this will need doing properly. The likely shape: the program reads a point through its device (`motor.enabled`), one structure per device, so a device rename changes one name and points stay short. That changes how the box, the Skipper (32-character names) and the compiler bind points, so it is a design before it is code.
+  result: two devices with the same channel names sit in one project without prefixed names, and a device rename touches one name in the program
+  difficulty: high
+  id: point-names-per-device
+  asked: 2026-11-26
+  by: session e16d1c3b
+
 ## Canvas overhaul (interview 2026-11-21)
 
 Nick's notes, 2026-11-21: turn the node map into 3D with height as abstraction, dive into blocks, bloom, fast snap navigation, device-library graphics on connections, and convert technical drawings (panel layouts, CAD, DXF, schematics) into matched components, "starting now". Decided in the interview that day: (1) one 3D stack for every level: plant and devices on top, programs and POUs in the middle, the ST diagram's blocks at the bottom; a dive goes down a level; (2) rendered by egui on glow with our own GL pass through a paint callback (camera, picking, two-pass bloom), no engine crate and no backend change; (3) for engineers and demos first: 3D on a desktop GPU, the 2D view kept reachable and tested; (4) two tracks at once: drawings now, and the 3D canvas, then navigation, then device graphics; (5) dive: a fly-through by default and a free orbit over the whole stack as a second mode, both offered; (6) drawings start with ASCII DXF panel layouts, read by a small reader of our own (no new crate, wasm-safe), built against DXFs vendors publish for parts already in the library; (7) a drawing gives devices matched to the library with a draft io.map, their placement in the 3D map and its wiring as connections; (8) a part not in the library or matching more than one record is shown and the engineer decides: never a guessed model; (9) device graphics are line art per device family in the canvas's own style (the library has no images, and vendor photos are not ours to publish); (10) first milestone: the playground's example in 3D behind a toggle, 2D still the default.

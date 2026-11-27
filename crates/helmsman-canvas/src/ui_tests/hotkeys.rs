@@ -227,7 +227,7 @@ fn a_tab_wears_the_letter_its_key_has() {
         ("pane devices", Action::Devices, "V"),
         ("pane code", Action::St, "S"),
         ("tab claude", Action::Describe, "D"),
-        ("messages fold", Action::Messages, "A"),
+        ("bottom messages", Action::Messages, "A"),
     ] {
         // A tab on either side of the page has its own hit name.
         let r = if h.has(hit) {
@@ -329,7 +329,7 @@ fn a_letter_does_what_a_click_on_its_tab_does() {
         (Key::S, "pane code", Some(Pane::Code)),
         (Key::V, "pane devices", Some(Pane::Devices)),
         (Key::F, "pane files", Some(Pane::Files)),
-        (Key::A, "messages fold", None),
+        (Key::A, "bottom messages", None),
     ] {
         // From the tab already shown a click keeps it and a key toggles it
         // (as the Alt+Shift chords do): compared only from another tab.
@@ -340,7 +340,10 @@ fn a_letter_does_what_a_click_on_its_tab_does() {
             let (mut k, mut c) = (Harness::new(App::sim()), Harness::new(App::sim()));
             for h in [&mut k, &mut c] {
                 h.app.chrome.show(start);
-                h.app.chrome.msgs = target.is_some();
+                // The bottom panel open on the Trend: A and a click on
+                // its Messages tab both bring the Messages up.
+                h.app.chrome.trend = true;
+                h.app.chrome.msgs = false;
                 h.wait(0.3);
             }
             let hit = if c.has(hit) { hit } else { "pane claude" };
@@ -358,19 +361,32 @@ fn a_letter_does_what_a_click_on_its_tab_does() {
 }
 
 #[test]
+/// Nick, 2026-11-26: the Messages and the Trend are the two tabs of the
+/// bottom panel (`chrome.trend`: the panel is open; `chrome.msgs`: it shows
+/// the Messages). A and T each open the panel on their tab, or shut it
+/// when their tab is the one showing.
 fn a_and_t_toggle_the_messages_and_the_trend() {
     let mut h = Harness::new(App::sim());
     h.app.chrome.msgs = false;
     h.app.chrome.trend = false;
     h.wait(0.2);
+    let open = |h: &Harness| (h.app.chrome.trend, h.app.chrome.msgs);
     h.key(Modifiers::NONE, Key::A);
-    assert!(h.app.chrome.msgs && !h.app.chrome.trend);
+    assert_eq!(open(&h), (true, true), "A opens the shut panel on the Messages");
     h.key(Modifiers::NONE, Key::A);
-    assert!(!h.app.chrome.msgs);
+    assert!(!h.app.chrome.trend, "A again shuts it");
     h.key(Modifiers::NONE, Key::T);
-    assert!(h.app.chrome.trend && !h.app.chrome.msgs);
+    assert_eq!(open(&h), (true, false), "T opens the shut panel on the Trend");
+    h.key(Modifiers::NONE, Key::A);
+    assert_eq!(open(&h), (true, true), "A over the Trend shows the Messages");
     h.key(Modifiers::NONE, Key::T);
-    assert!(!h.app.chrome.trend);
+    assert_eq!(open(&h), (true, false), "T over the Messages shows the Trend");
+    h.key(Modifiers::NONE, Key::T);
+    assert!(!h.app.chrome.trend, "T again shuts it");
+    // What the keys did is what the panel draws.
+    h.key(Modifiers::NONE, Key::A);
+    h.wait(0.2);
+    assert!(h.has("bottom trend") && h.has("bottom messages"));
 }
 
 #[test]
@@ -549,30 +565,53 @@ fn a_letter_with_ctrl_cmd_alt_or_shift_switches_nothing() {
 }
 
 #[test]
-fn over_the_diagram_w_a_s_d_e_q_stay_its_own_but_the_other_letters_work() {
+/// Nick, 2026-11-26: over the diagram only . and , are its own (they
+/// jump along it); every view letter works there as anywhere else, the
+/// old pan and jump keys W A S D E Q among them.
+fn over_the_diagram_only_period_and_comma_stay_its_own_and_every_letter_works() {
     let mut h = Harness::new(App::sim());
     h.app.chrome.show(Pane::Code);
+    h.app.chrome.trend = true;
+    h.app.chrome.msgs = false;
     h.wait(0.3);
     let d = h.app.chrome.diagram;
     assert!(d.is_positive());
     h.frame(vec![Event::PointerMoved(d.center())]);
     h.frame(vec![]);
     let before = state(&h);
-    for key in [Key::D, Key::S, Key::E, Key::A] {
-        h.key(Modifiers::NONE, key);
-        assert_eq!(state(&h), before, "{key:?} over the diagram is the diagram's");
-    }
+    let pick = |h: &Harness| super::sim_view(h).pick;
+    assert_eq!(pick(&h), None);
+    h.key(Modifiers::NONE, Key::Period);
+    h.wait(0.5);
+    assert!(pick(&h).is_some(), ". over the diagram jumps to a stop");
+    h.key(Modifiers::NONE, Key::Comma);
+    h.wait(0.5);
+    assert!(pick(&h).is_some(), ", over the diagram jumps to a stop");
+    assert_eq!(state(&h), before, ". and , switch no view");
+    h.key(Modifiers::NONE, Key::D);
+    assert!(h.app.chrome.showing(Pane::Claude), "D works over the diagram");
+    h.key(Modifiers::NONE, Key::S);
+    assert!(h.app.chrome.showing(Pane::Code), "S works over the diagram");
+    h.key(Modifiers::NONE, Key::A);
+    assert!(
+        h.app.chrome.trend && h.app.chrome.msgs,
+        "A works over the diagram"
+    );
+    h.key(Modifiers::NONE, Key::T);
+    assert!(
+        h.app.chrome.trend && !h.app.chrome.msgs,
+        "T works over the diagram"
+    );
     h.key(Modifiers::NONE, Key::F);
     assert!(h.app.chrome.showing(Pane::Files), "F works over the diagram");
-    let trend = h.app.chrome.trend;
-    h.key(Modifiers::NONE, Key::T);
-    assert_ne!(h.app.chrome.trend, trend, "T works over the diagram");
-    // Off the diagram, D is Describe again.
-    let side = h.rect("left");
-    h.frame(vec![Event::PointerMoved(side.center())]);
+    h.frame(vec![Event::PointerMoved(h.app.chrome.diagram.center())]);
     h.frame(vec![]);
-    h.key(Modifiers::NONE, Key::D);
-    assert!(h.app.chrome.showing(Pane::Claude));
+    h.key(Modifiers::NONE, Key::E);
+    assert_eq!(
+        h.app.screen,
+        Screen::Monitor,
+        "E works over the diagram (on the Editor it flips to the Monitor)"
+    );
 }
 
 #[test]
@@ -606,13 +645,16 @@ fn the_letter_of_the_tab_already_showing_keeps_it_as_a_click_does() {
             "{key:?} on the tab already showing changed something"
         );
     }
-    // Messages and the Trend are not tabs of the pane: their letters toggle.
-    let mut h = Harness::new(App::sim());
-    let (m, t) = (h.app.chrome.msgs, h.app.chrome.trend);
-    h.key(Modifiers::NONE, Key::A);
-    h.key(Modifiers::NONE, Key::T);
-    assert_eq!((h.app.chrome.msgs, h.app.chrome.trend), (!m, !t));
-    h.key(Modifiers::NONE, Key::A);
-    h.key(Modifiers::NONE, Key::T);
-    assert_eq!((h.app.chrome.msgs, h.app.chrome.trend), (m, t));
+    // Messages and the Trend are the bottom panel's tabs: the letter of
+    // the one showing shuts the panel, and brings it back on that tab.
+    for (key, msgs) in [(Key::A, true), (Key::T, false)] {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.trend = true;
+        h.app.chrome.msgs = msgs;
+        h.wait(0.2);
+        h.key(Modifiers::NONE, key);
+        assert!(!h.app.chrome.trend, "{key:?} on its own tab shuts the panel");
+        h.key(Modifiers::NONE, key);
+        assert_eq!((h.app.chrome.trend, h.app.chrome.msgs), (true, msgs), "{key:?}");
+    }
 }
