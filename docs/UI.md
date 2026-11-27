@@ -561,6 +561,54 @@ The canvas must feel alive and professionally built. The theme basics stay
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
 
+## Show Changes (Nick, 2026-11-27)
+
+"When a change is deployed things can go absolutely haywire … We really
+need to ensure the user knows EXACTLY what they're doing before making
+changes and that the changes aren't supposed to be huge." Progress is
+incremental: one small, understood step at a time, the start of written,
+staged and slowly implemented specs.
+
+- **A described change is held, never written on arrival.** A green answer
+  (checked by `verify::check` as before) becomes the pending change:
+  nothing is written, saved, run or deployed. The Agent tab shows its
+  reason, its size ("3 blocks, 12 lines") and every output whose logic it
+  changes by name ("switches MOTOR, LAMP"), then Show Changes, Apply and
+  Discard. Send is off while a change is pending ("Apply or Discard the
+  change first"). A pending change lives in the page; a reload drops it.
+- **Show Changes** puts the proposed version on screen without running it:
+  the Code tab shows the proposed file read-only with its lines marked as a
+  diff draws (`+` green tint, `−` red tint), and the canvas shows the
+  proposed diagram with blocks marked as Proposals marks them (added,
+  changed, removed), with no live values, since it is not running. A
+  banner over the canvas says "Proposed change, not applied: the machine
+  runs the current program", with Show current, Apply and Discard. The
+  machine (the simulation or the box) keeps running the current program
+  the whole time.
+- **One step is small.** The Agent is told to make the smallest change that
+  does the one thing asked. A change can't be applied when it adds,
+  changes or removes more than 8 blocks or 30 lines, or when it changes
+  the logic of an output the instruction does not name (by its name, any
+  case, `_` or space, or by the block in focus). Apply is off and the tab
+  says why: "Too big for one step: 12 blocks, 48 lines (one step is at most
+  8 blocks or 30 lines). Ask for part of it." or "It changes VALVE, which
+  the instruction does not name. Name it, or ask for less."
+- **Apply** writes it as before: in the simulation one revision that runs
+  at once; on a box the project's file (a PUT), which runs only once
+  deployed. Apply refuses if the file changed since Send. Discard drops it
+  and changes nothing. Undo after Apply stays as it is.
+- **Deploy on a box opens "What changes on the machine"** and never deploys
+  straight from the button or Ctrl Shift Enter. The sheet compares the
+  project with the program the box runs now: each file's diff, the
+  diagram diff with its counts, every output whose logic changes by name,
+  the checks and, where the policy needs one, the replay's result (run
+  before the sheet shows), the tier and who may apply it. Deploy on the
+  sheet sends it; Cancel changes nothing. When nothing differs it says
+  the box already runs this program and Deploy is off. Deploy in the
+  simulation (the page's own program) is unchanged.
+- **Later, not now:** running the proposed program in a trial simulation
+  beside the live one before it is applied.
+
 ## Projects
 
 - A project is a folder of free-form `.st` files that compile together; one
