@@ -71,8 +71,9 @@ against inputs you set yourself. It is what the playground is, and what
 a box's page falls back to when no box answers.</p>
 <p>New to it? The <a
 href="https://helmsman.advin.io/playground/?tour">guided tour</a> copies
-the Blink example, changes it, deploys it and reads its trend, with each
-step pointing at the control it is about.</p>
+the Blink example, changes it, deploys it, watches the output, reads its
+trend and describes a change in words, with each step pointing at the
+control it is about.</p>
 <h2 id="running">Running</h2>
 <p>A project opens running. The glyphs over the diagram run or pause it
 (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), stop it (<kbd>Shift</kbd>
@@ -89,7 +90,7 @@ the program runs again.</p>
 program takes another path through its statements, and shows that scan.
 A timer's elapsed time counting up does not count as a change, so a step
 lands on the scan where the timer's output turns on. If nothing changes
-in 60 seconds of program time, the step stops there and the Messages say
+in 60 seconds of program time, the step stops there and the Log says
 so.</p>
 <img src="img/monitor-stopped.png" alt="The Monitor's header with the program paused: run, stop, step and restart beside the crumbs." width="700">
 
@@ -100,7 +101,7 @@ stops the one before.</p>
 (or <strong>Edit › Breakpoint</strong>): a red dot marks it. The next
 scan that reaches the block stops just before it runs, the simulation
 stops with it, and the diagram and every value show the scan as it stood
-at that moment. The block is framed in orange and the Messages name its
+at that moment. The block is framed in orange and the Log names its
 line. <kbd>F8</kbd> runs the rest of that scan. <kbd>Ctrl</kbd>
 <kbd>Enter</kbd> goes on to the next stop: the same block's next pass in
 a loop, another breakpoint, or the next scan. An input you change while
@@ -265,8 +266,8 @@ alt="The trend: three pinned signals, the Window slider, a lane each with its sc
 <p>A program that divides by zero, runs past its watchdog, or writes an
 output out of range <strong>faults</strong>: it stops at the statement
 that did it, outputs go to their safe values, the state reads
-<code>faulted</code> in red and the Messages record what happened. Run
-or Step restarts it.</p>
+<code>faulted</code> in red and the Log records what happened. Run or
+Step restarts it.</p>
 </main>
 </div>
 <footer><div class="wrap">Helmsman Factory Automation · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>

@@ -6,16 +6,18 @@
 //! with no scan needed: the first output an input affects, the first
 //! signal that drives an output, and "…" when there are more.
 //!
-//! Everything else is one gesture away. A double-click on the card (or a
-//! click on the "…") opens its details in place: every source in three
-//! groups that tell apart at a glance (signals read from outside, state
-//! the program keeps from one scan to the next, the function blocks it
-//! reads), the wiring in full and how often the name is in the code. The
-//! two glyphs at the card's right go to the point: `< >` finds it in the
-//! code, and again steps to its next use ([`crate::find::Find::name`]);
-//! the diagram glyph lights every block that reads or writes it and
-//! frames them ([`crate::st_view::Viewer::show_signal`]). A tap on an
-//! output's card lights the path that sets it, as before.
+//! Everything else is one gesture away. A click on the card (or on the
+//! "…") opens its details in place, and another closes them (Nick,
+//! 2026-11-26; a double-click before): every source in three groups that
+//! tell apart at a glance (signals read from outside, state the program
+//! keeps from one scan to the next, the function blocks it reads), the
+//! wiring in full and how often the name is in the code. The three glyphs
+//! at the card's right go to the point: `< >` finds it in the code, and
+//! again steps to its next use ([`crate::find::Find::name`]); the diagram
+//! glyph lights every block that reads or writes it, frames the first
+//! use, and again the next ([`crate::st_view::Viewer::show_signal`]); the
+//! graph glyph puts it on the Trend. A click on an output's card also
+//! lights the path that sets it, and on an input's, where it is.
 //!
 //! The tab shows its cards one to a row, or as tiles (the list and grid
 //! glyphs at its top), and Inputs and Outputs each fold away behind the
@@ -35,8 +37,10 @@ use crate::tips::Tip;
 
 /// What the tab leaves free at its right for the scroll bar, pt.
 pub const BAR: f32 = 12.0;
-/// The narrowest a tile gets before the grid drops a column, pt.
-const TILE: f32 = 96.0;
+/// The narrowest a tile gets before the grid drops a column, pt: 88 since
+/// the side panes' ribbon (2026-11-26) left the right pane 185 pt, where
+/// two tiles of 96 no longer fit and the grid went to one a row.
+const TILE: f32 = 88.0;
 
 /// One output of the program and what sets it, from the diagram alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -197,7 +201,13 @@ pub struct Row<'a> {
     /// Still simulated (a SIM badge and a dashed outline) or on a device
     /// (solid, naming it); `None` when the point is neither.
     pub designation: Option<Designation>,
+    /// It is on the Trend: its trend glyph shows on.
+    pub trended: bool,
 }
+
+/// The least width a card's first line keeps beside its glyphs, points;
+/// under it the glyphs go on a row of their own.
+const HEAD_MIN: f32 = 150.0;
 
 /// What was asked of a card this frame.
 #[allow(clippy::struct_excessive_bools)] // independent flags, as `Chrome`'s are
@@ -213,6 +223,8 @@ pub struct Asked {
     pub diagram: bool,
     /// Simulate the input as a device.
     pub simulate: bool,
+    /// Put it on the Trend, or take it off.
+    pub trend: bool,
 }
 
 /// An output's first line, or an input's where it has no control: its
@@ -398,7 +410,6 @@ pub fn show<R>(
     let was: Option<Rect> = ui.data(|d| d.get_temp(id));
     let resp = ui.interact(was.unwrap_or(Rect::NOTHING), id, Sense::click());
     let mut asked = Asked::default();
-    let mut glyphs = Rect::NOTHING;
     let (fill, stroke) = look(row.tile, row.selected, &t);
     let sim = row.designation.as_ref().is_some_and(Designation::is_simulated);
     // A simulated card's outline is dashed, drawn over the frame below.
@@ -421,39 +432,73 @@ pub fn show<R>(
         }
         let side = crate::glyphs::ROW;
         let gap = ui.spacing().item_spacing.x;
-        let room = (inner - 2.0 * side - 2.0 * gap).max(1.0);
-        let r = ui
-            .horizontal_top(|ui| {
+        let room = (inner - 3.0 * side - 3.0 * gap).max(1.0);
+        // The card's three glyphs: find in the code, show on the diagram,
+        // put on the Trend.
+        let mut glyph_row = |ui: &mut egui::Ui| {
+            let code = crate::glyphs::button_sized(
+                ui,
+                Icon::Code,
+                side,
+                true,
+                false,
+                &format!("Finds {name} in the code. Click again for its next use."),
+            );
+            chrome.hit(format!("io code {name}"), code.rect);
+            asked.code = code.clicked();
+            let diagram = crate::glyphs::button_sized(
+                ui,
+                Icon::Diagram,
+                side,
+                true,
+                false,
+                &format!("Shows {name} on the diagram: every block that reads or writes it."),
+            );
+            chrome.hit(format!("io diagram {name}"), diagram.rect);
+            asked.diagram = diagram.clicked();
+            // Nick, 2026-11-26: a graph glyph puts the point on the
+            // Trend at the bottom (on while it is there).
+            let trend = crate::glyphs::button_sized(
+                ui,
+                Icon::Trend,
+                side,
+                true,
+                row.trended,
+                &if row.trended {
+                    format!("Takes {name} off the Trend.")
+                } else {
+                    format!("Adds {name} to the Trend at the bottom.")
+                },
+            );
+            chrome.hit(format!("io trend {name}"), trend.rect);
+            asked.trend = trend.clicked();
+        };
+        // Beside the first line while that leaves it room; in a narrow
+        // pane (the right one's 236 pt) on a row of their own under it,
+        // so a push button keeps its glyph and name on one line (the
+        // third glyph squeezed it into a column, 2026-11-26).
+        let r = if room >= HEAD_MIN {
+            ui.horizontal_top(|ui| {
                 let r = ui
                     .allocate_ui_with_layout(Vec2::new(room, side), Layout::top_down(Align::Min), |ui| {
                         ui.set_width(room);
                         head(ui)
                     })
                     .inner;
-                let code = crate::glyphs::button_sized(
-                    ui,
-                    Icon::Code,
-                    side,
-                    true,
-                    false,
-                    &format!("Finds {name} in the code. Click again for its next use."),
-                );
-                chrome.hit(format!("io code {name}"), code.rect);
-                asked.code = code.clicked();
-                let diagram = crate::glyphs::button_sized(
-                    ui,
-                    Icon::Diagram,
-                    side,
-                    true,
-                    false,
-                    &format!("Shows {name} on the diagram: every block that reads or writes it."),
-                );
-                chrome.hit(format!("io diagram {name}"), diagram.rect);
-                asked.diagram = diagram.clicked();
-                glyphs = code.rect.union(diagram.rect);
+                glyph_row(ui);
                 r
             })
-            .inner;
+            .inner
+        } else {
+            let r = ui
+                .allocate_ui_with_layout(Vec2::new(inner, side), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(inner);
+                    head(ui)
+                })
+                .inner;
+            ui.horizontal(|ui| glyph_row(ui));
+            r
+        };
         if sim {
             badge(ui, chrome, row);
         }
@@ -502,22 +547,18 @@ pub fn show<R>(
     } else if row.designation.is_some() {
         chrome.hit(format!("io solid {name}"), rect);
     }
-    // A double-click anywhere on the card but its two glyphs, its control
-    // included (a switch flipped twice is where it was).
-    let double = ui.rect_contains_pointer(rect)
-        && ui.input(|i| {
-            i.pointer.button_double_clicked(egui::PointerButton::Primary)
-                && i.pointer.interact_pos().is_some_and(|p| !glyphs.contains(p))
-        });
-    asked.details |= double;
+    // One click on the card (not on its glyphs or its control, which are
+    // in front of it) opens or closes its details: its dependencies and
+    // its device (Nick, 2026-11-26; a double-click before).
     asked.tapped = resp.clicked();
+    asked.details |= asked.tapped;
     let what = if row.open {
-        "Double-click to close its details."
+        "Click to close its details."
     } else {
-        "Double-click for its details."
+        "Click for its details: what it drives and its device."
     };
     let tip = if row.input {
-        format!("{name}: {what}\n{}", row.place)
+        format!("{name}: shows where it is on the diagram. {what}\n{}", row.place)
     } else {
         format!(
             "Click to light what drives {name} on the diagram. {what}\n{}",

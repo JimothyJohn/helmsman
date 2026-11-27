@@ -393,6 +393,8 @@ fn note_of(m: &Json) -> Option<Note> {
 
 impl DevicesUi {
     /// Opens the walkthrough on `device`.
+    // 2026-11-26: Wire it is off until it works (Nick); its tests keep it.
+    #[allow(dead_code)]
     pub fn open_wire_it(&mut self, device: &str) {
         self.wire.open = Some(device.to_string());
     }

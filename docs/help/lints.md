@@ -62,7 +62,7 @@ HELMSMAN-L2.
 
 ## Where the findings show
 
-- In the editor, in the list under the code, and in the Messages.
+- In the editor, in the list under the code, and in the Log.
   A finding that holds the code says so on its row.
 - In the answer: a finding the answer adds is sent back to Helmsman for another try. A finding the project already had is not blamed
   on the answer.

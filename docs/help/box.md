@@ -76,8 +76,7 @@ Devices), so the handling can be tested before it reaches the box.
 ## A Skipper's map
 
 On a page opened with a Skipper's address (`?box=http://192.168.3.55:8080`),
-the Devices tab has a **Skipper map** row.
-**Edit map…** opens the map in a window. Change it there, then press
+**Edit map…** in the Edit menu opens the map in a window. Change it there, then press
 **Check devices**: the Skipper asks every device in the map from its own
 network port and the window lists each one as answered, with how long it
 took, or not answered, with the reason. Nothing is written to a device.
@@ -104,20 +103,25 @@ overwriting theirs. Edits still need an engineer signed in to be saved.
 ## The Monitor
 
 The **Monitor** (the Editor | Monitor toggle, or View › Monitor) is the
-watch-only screen for a phone, a tablet or a wall display: one tile per
-program with its state and its lamps, green TRUE, red FALSE, and a tap
-into each block instance. A phone opens on the Monitor. "Open diagram"
-on a tile goes to that level in the Editor. An engineer can turn on
+watch-only screen for a phone, a tablet or a wall display. The header
+names each program with a lamp and its state: green running, red
+faulted, yellow held, grey stopped (and grey whatever it was while the
+data is stale); hover it for a fault's text or who stopped it. Under it
+the page starts with the device picker, then a tile of each program's
+outputs, green TRUE, red FALSE, and a tap into each block instance (the
+crumbs above the tiles go back up). A phone opens on the Monitor. The
+The Log and the Trend are along the bottom, the Editor's own panel.
+An engineer can turn on
 **Scan detail** (View) to see each program's scan period and counts,
 how long its scan takes, how late each scan starts (jitter) and its
-overruns, each with a tooltip on what is normal; they are hidden
+overruns in the tooltip of the program's lamp; they are hidden
 otherwise. An overrun in the last minute shows in yellow for everyone.
 
 Signed in as an engineer, the Monitor's header also has **Stop** and
 **Restart** for the program on the box: the one shown, or every program
 from the top level. Stop holds the program: it stops scanning and its
-outputs go to their safe values, and its tile says STOPPED with who
-stopped it. The same button then reads **Run** and starts it again where
+outputs go to their safe values, and the header says STOPPED, with who
+stopped it in its tooltip. The same button then reads **Run** and starts it again where
 it left off. Restart starts it again from its initial values. A deploy
 leaves a stopped program stopped; a box that restarts starts everything.
 The box records each one in its audit log, and anyone not signed in as
@@ -139,7 +143,7 @@ a function block is not kept yet: the check warns and the program still
 runs (declare the instance RETAIN in the program instead). More than
 65,536 RETAIN values in one program is refused.
 
-![The Monitor: a tile per program with its state, and a tile of its outputs.](img/monitor.png)
+![The Monitor: the program and its state in the header, the device picker, a tile of its outputs, and the Log and Trend below.](img/monitor.png)
 
 ## HTTPS
 

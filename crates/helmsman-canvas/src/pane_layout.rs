@@ -70,7 +70,7 @@ pub struct PaneLayout {
     pub left: bool,
     pub right: bool,
     pub trend: bool,
-    /// The Messages under the left pane's tab are open.
+    /// The bottom panel shows its Messages tab, not the Trend.
     pub msgs: bool,
     pub sizes: Sizes,
 }
@@ -131,7 +131,7 @@ pub struct Preset {
 /// The ready-made layouts, the page's first arrangement among them.
 #[must_use]
 pub fn presets() -> Vec<Preset> {
-    use Pane::{Claude, Code, Devices, Files, Io};
+    use Pane::{Claude, Code, Devices, Files, Help, Io};
     let base = PaneLayout::default();
     vec![
         Preset {
@@ -143,7 +143,7 @@ pub fn presets() -> Vec<Preset> {
             name: "Programming",
             tip: "The Describe tab on the left and the code on the right, with the trend along the bottom.",
             layout: PaneLayout {
-                lefts: vec![Claude, Files],
+                lefts: vec![Claude, Files, Help],
                 rights: vec![Code, Io, Devices],
                 pane: Claude,
                 side: Code,
@@ -159,7 +159,7 @@ pub fn presets() -> Vec<Preset> {
             name: "Commissioning",
             tip: "The devices on the left and the live I/O on the right, with the trend along the bottom.",
             layout: PaneLayout {
-                lefts: vec![Devices, Files, Claude, Code],
+                lefts: vec![Devices, Files, Claude, Code, Help],
                 rights: vec![Io],
                 pane: Devices,
                 side: Io,

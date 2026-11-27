@@ -124,6 +124,19 @@ impl Harness {
         p
     }
 
+    /// An empty point low on the diagram's right, clear of the corner's
+    /// pan, zoom and fit glyphs (four 44 pt glyphs in the bottom-right
+    /// corner since the lamp fixture went, 2026-11-26) and of every block.
+    fn far_corner(&self) -> Pos2 {
+        let a = self.area();
+        let p = Pos2::new(a.right() - 260.0, a.bottom() - 8.0);
+        assert!(
+            self.all_blocks().iter().all(|(_, r)| !r.expand(30.0).contains(p)),
+            "the far corner is empty"
+        );
+        p
+    }
+
     /// A press at `from`, moved in steps to `to`, released there, with
     /// `button` and the modifiers held.
     fn pull(&mut self, from: Pos2, to: Pos2, button: PointerButton, held: Modifiers) {
@@ -183,7 +196,6 @@ impl Harness {
 #[test]
 fn a_band_selects_exactly_the_blocks_it_touches_whichever_way_it_is_drawn() {
     let mut h = Harness::selecting(SRC);
-    let a = h.area();
     let corner = h.corner();
     let all = h.all_blocks().len();
     // Up and to the right of the corner, over some of the blocks.
@@ -198,8 +210,7 @@ fn a_band_selects_exactly_the_blocks_it_touches_whichever_way_it_is_drawn() {
     // The same rectangle drawn the other way round: from the far
     // corner back to the empty one needs an empty start, so start at
     // another empty corner and end on the opposite one.
-    let far = Pos2::new(a.right() - 8.0, a.bottom() - 8.0);
-    assert!(h.all_blocks().iter().all(|(_, r)| !r.expand(30.0).contains(far)));
+    let far = h.far_corner();
     let want = h.touched(far, mid);
     assert!(!want.is_empty(), "the second band touches something");
     h.wait(1.0);
@@ -265,7 +276,6 @@ fn a_band_that_ends_outside_the_diagram_selects_what_it_touched_inside() {
 #[test]
 fn shift_and_ctrl_add_to_the_selection_with_a_band_and_toggle_with_a_click() {
     let mut h = Harness::selecting(SRC);
-    let a = h.area();
     let corner = h.corner();
     let motor = h.write_of("motor");
     let horn = h.write_of("horn");
@@ -275,7 +285,7 @@ fn shift_and_ctrl_add_to_the_selection_with_a_band_and_toggle_with_a_click() {
     h.band(corner, r.center());
     assert_eq!(h.selected(), first);
     // A shift band elsewhere adds.
-    let far = Pos2::new(a.right() - 8.0, a.bottom() - 8.0);
+    let far = h.far_corner();
     let more = h.touched(far, h.on_screen(horn).center());
     h.wait(1.0);
     h.pull(

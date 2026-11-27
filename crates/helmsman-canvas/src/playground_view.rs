@@ -151,6 +151,9 @@ pub struct PlaygroundView {
     pub agent_change: Option<crate::agent_marks::AgentChange>,
     /// The revision the History tab runs, when it is not the newest.
     pub history_at: Option<u32>,
+    /// The revision the Describe tab's arrows show, the newest included
+    /// (`history_at` is clear there).
+    pub exchange_at: Option<u32>,
     /// Its shared default layout (the project's) and this browser's
     /// tweaks (`arrange.rs`).
     pub layers: Layers,
@@ -321,6 +324,7 @@ impl PlaygroundView {
             viewer: None,
             agent_change: None,
             history_at: None,
+            exchange_at: None,
 
             layers: Layers::load(tweaks),
             fresh: false,
@@ -2458,13 +2462,6 @@ impl PlaygroundView {
     /// it was.
     fn steps(&self) -> Option<crate::instruct::Steps> {
         let at = self.history_at.filter(|n| self.shows_revision(*n));
-        let change = self.agent_change.as_ref().is_some_and(|c| {
-            c.project == self.proj.open
-                && c.holds(&self.proj.open, self.proj.files.get(&c.file).map(String::as_str))
-        });
-        if at.is_none() && !change {
-            return None;
-        }
         let revs = self.proj.revisions();
         let k = match at {
             Some(n) => revs.iter().position(|r| r.n == n)?,
@@ -2484,7 +2481,68 @@ impl PlaygroundView {
         Some(crate::instruct::Steps {
             back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
             forward: tip(k + 1, "Forward"),
+            // The info button opens the version on show, when one is.
+            shown: at,
         })
+    }
+
+    /// The Describe tab's arrows: through the revisions that carry an
+    /// exchange (an instruction and what came of it), newest last; past
+    /// the newest the tab is live again. `None` while an answer is under
+    /// way, and while there is no exchange to go back to.
+    fn exchange_steps(&self) -> Option<crate::instruct::Steps> {
+        let revs = self.proj.revisions();
+        let ex: Vec<_> = revs.iter().filter(|r| r.page.is_some()).collect();
+        if ex.is_empty() || self.instruct.busy() {
+            return None;
+        }
+        let at = self.exchange_at.filter(|n| self.shows_revision(*n));
+        // An edit of your own puts the arrows away while you are on the
+        // live file (docs/help/agent.md): a step would replace it.
+        if at.is_none() && self.proj.dirty() {
+            return None;
+        }
+        // The exchange shown; none while live (and past the newest).
+        let k = at.and_then(|n| ex.iter().position(|r| r.n == n));
+        let tip = |r: &SimRevision, way: &str| {
+            (
+                r.n,
+                format!(
+                    "{way}: the instruction and the answer of revision {}, {}. The project runs as it was then; Saving keeps it.",
+                    r.n, r.what
+                ),
+            )
+        };
+        let back = match k {
+            Some(0) => None,
+            Some(j) => Some(tip(ex[j - 1], "Back")),
+            None => Some(tip(ex[ex.len() - 1], "Back")),
+        };
+        let forward = k.map(|j| {
+            ex.get(j + 1).map_or_else(
+                || {
+                    (
+                        crate::instruct::LIVE,
+                        "Forward: back to the project and the box as you left them.".to_string(),
+                    )
+                },
+                |r| tip(r, "Forward"),
+            )
+        });
+        Some(crate::instruct::Steps {
+            back,
+            forward,
+            shown: k.map(|j| ex[j].n),
+        })
+    }
+
+    /// H: into the Describe tab's history, at the newest exchange.
+    pub fn open_history(&mut self) {
+        if self.exchange_at.is_none()
+            && let Some(n) = self.exchange_steps().and_then(|s| s.back).map(|(n, _)| n)
+        {
+            self.show_revision(n);
+        }
     }
 
     /// A checked answer into the open project: unsaved edits are saved
@@ -2711,6 +2769,17 @@ impl PlaygroundView {
     /// Save keeps it as the newest; the newest is a step away.
     pub fn show_revision(&mut self, n: u32) {
         let revs = self.proj.revisions();
+        // Past the newest exchange: the newest revision, and the tab as
+        // the engineer left it.
+        if n == crate::instruct::LIVE {
+            if let Some(last) = revs.last().map(|r| r.n) {
+                self.show_revision(last);
+            }
+            self.instruct.leave_steps();
+            self.exchange_at = None;
+            return;
+        }
+        self.exchange_at = Some(n);
         let Some(k) = revs.iter().position(|r| r.n == n) else {
             return;
         };
@@ -2778,19 +2847,33 @@ impl PlaygroundView {
         let Some(view) = self.revision.clone() else {
             return;
         };
-        let current: std::collections::BTreeMap<String, String> = self
-            .proj
-            .files
-            .iter()
-            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
-            .map(|(n, t)| (n.clone(), t.clone()))
-            .collect();
         let write = if self.proj.is_example() {
             Err("A built-in example is read-only: copy the project first.".into())
         } else {
             Ok(())
         };
-        match crate::history_ui::modal(ctx, chrome, &view, &current, &write) {
+        // What this version changed: against the one before it.
+        let before: std::collections::BTreeMap<String, String> = self
+            .proj
+            .revisions()
+            .iter()
+            .rev()
+            .find(|r| r.n < view.row.n)
+            .map(|r| {
+                r.files
+                    .iter()
+                    .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+                    .map(|(n, t)| (n.clone(), t.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        match crate::history_ui::modal_against(
+            ctx,
+            chrome,
+            &view,
+            crate::history_ui::Against::Before(&before),
+            &write,
+        ) {
             Some(crate::history_ui::HistoryAct::Close) => self.revision = None,
             Some(crate::history_ui::HistoryAct::Restore(n)) => {
                 self.revision = None;
@@ -2876,6 +2959,11 @@ impl PlaygroundView {
             crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
         }
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
+            self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.named_ui(&ui.ctx().clone(), chrome)
+            && self.own_project()
+        {
             self.apply_wiring(&w);
         }
         if let Some(crate::devices::DeviceAct::Quick(q)) = self.devices_ui.quick_ui(&ui.ctx().clone(), chrome)
@@ -3289,14 +3377,14 @@ impl PlaygroundView {
             picked: self
                 .viewer
                 .as_ref()
-                .filter(|v| v.pick.is_some() || v.because.is_some())
-                .map(|v| format!("{:?} {:?}", v.pick, v.because)),
+                .filter(|v| v.pick.is_some() || v.because.is_some() || v.shown_signal().is_some())
+                .map(|v| format!("{:?} {:?} {:?}", v.pick, v.because, v.shown_signal())),
             trend: hash(&|h| {
                 trend.window_ms.hash(h);
                 trend.signals.hash(h);
             }),
             asks: self.chat.seq(),
-            trend_open: chrome.trend,
+            trend_open: chrome.trend && !chrome.msgs,
         }
     }
 }
@@ -3505,6 +3593,7 @@ impl Body for PlaygroundView {
         let steps = self.steps();
         let versions = self.versions();
         let mut revision = None;
+        let mut info = None;
         let mut to_error: Option<(String, u32)> = None;
         // The header is the open file's name (Nick, 2026-11-08), the
         // magnifier and word wrap; at its right end Deploy, and before it
@@ -3553,6 +3642,7 @@ impl Body for PlaygroundView {
             );
             go = pressed.deploy;
             revision = pressed.revision;
+            info = pressed.info;
             if pressed.errors
                 && let Some(d) = first
             {
@@ -3561,6 +3651,9 @@ impl Body for PlaygroundView {
         });
         if let Some(n) = revision {
             self.show_revision(n);
+        }
+        if let Some(n) = info {
+            self.act(Act::ShowRevision(n));
         }
         if chrome.history && !versions.rows.is_empty() {
             match editor::versions_panel(ui, chrome, &mut self.instruct, &versions) {
@@ -3607,6 +3700,37 @@ impl Body for PlaygroundView {
                 })
                 .inner;
             chrome.hit("st draft", r.rect);
+            return;
+        }
+        // An old version on show: marked, and read-only; the mark's button
+        // runs the newest again.
+        if let Some(n) = self.history_at.filter(|n| self.shows_revision(*n)) {
+            let row = self
+                .proj
+                .revisions()
+                .iter()
+                .find(|r| r.n == n)
+                .map(SimRevision::row);
+            let newest = self.proj.revisions().last().map(|r| r.n);
+            if crate::history_ui::stepped_mark(ui, chrome, n, row.as_ref(), &current)
+                && let Some(last) = newest
+            {
+                self.show_revision(last);
+            }
+            let text = self.proj.files.get(&current).cloned().unwrap_or_default();
+            let mut shown: &str = &text;
+            let size = Vec2::new(ui.available_width(), ui.available_height().max(120.0));
+            ui.allocate_ui(size, |ui| {
+                editor::st_editor(
+                    ui,
+                    id.with(("version", n)),
+                    &mut shown,
+                    &diags,
+                    &warns,
+                    MAX_SOURCE,
+                    chrome,
+                );
+            });
             return;
         }
         let Some(text) = self.proj.current_text_mut() else {
@@ -3746,14 +3870,6 @@ impl Body for PlaygroundView {
             .collect();
         self.want_wired();
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
-            Some(crate::devices::DeviceAct::Scan) => {
-                self.devices_ui.simulated_scan(&map);
-                self.wired_lib.scan(&mut self.devices_ui);
-                // Scan and add queues what the library knows.
-                self.devices_ui.found_to_add_all();
-            }
-            Some(crate::devices::DeviceAct::Ask(_)) => self.devices_ui.simulated_ask(),
-            Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
             Some(crate::devices::DeviceAct::AddIo(device)) => {
                 // A read-only example is copied first; the copy keeps the
                 // device's name.
@@ -3761,11 +3877,8 @@ impl Body for PlaygroundView {
                     self.devices_ui.open_add_io(&device);
                 }
             }
+            Some(crate::devices::DeviceAct::Scan) => self.devices_ui.simulated_scan(&map),
             Some(crate::devices::DeviceAct::Library { .. }) => self.devices_ui.simulated_library_answer(),
-            Some(crate::devices::DeviceAct::OpenMap) => {
-                self.proj.open_file(helmsman_project::IO_MAP);
-                chrome.show_code();
-            }
             Some(
                 crate::devices::DeviceAct::Add(_)
                 | crate::devices::DeviceAct::Rename(_)
@@ -3794,6 +3907,8 @@ impl Body for PlaygroundView {
         match tab {
             Tab::Io => self.io(ui, chrome),
             Tab::Claude => self.claude(ui, chrome),
+            // Not in `tabs`: the page has no Help (a box answers it).
+            Tab::Help => {}
         }
     }
 
@@ -3934,6 +4049,8 @@ impl PlaygroundView {
         };
         // What the diagram says of each point; nothing while there is none.
         let cards = self.viewer.as_ref().map(crate::st_view::Viewer::output_cards);
+        // What is on the Trend: its cards show their trend glyph on.
+        let pinned = self.session.trend.signals.clone();
         let lit = self
             .viewer
             .as_ref()
@@ -3990,6 +4107,7 @@ impl PlaygroundView {
                             uses: uses(&p.name),
                             simulate: true,
                             designation: crate::assign::Designation::of(&place),
+                            trended: pinned.iter().any(|t| t.eq_ignore_ascii_case(&p.name)),
                         };
                         let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             if form == Form::Detail {
@@ -3997,7 +4115,7 @@ impl PlaygroundView {
                                 let glyph = crate::glyph_lib::for_point(&p.name, true, p.ty == Ty::Bool);
                                 let text =
                                     format!("{} = {}", p.name.to_ascii_lowercase(), show(p.ty, p.value));
-                                crate::io_cards::value(ui, Some(glyph), t.fg, &text, true);
+                                crate::io_cards::value(ui, Some(glyph), state_ink(&t, p.value), &text, true);
                                 return None;
                             }
                             let r = ui.scope(|ui| input_ui(ui, p, &said, form == Form::Tile));
@@ -4067,6 +4185,7 @@ impl PlaygroundView {
                             uses: uses(&p.name),
                             simulate: false,
                             designation: crate::assign::Designation::of(&place),
+                            trended: pinned.iter().any(|t| t.eq_ignore_ascii_case(&p.name)),
                         };
                         let (a, card, ()) = crate::io_cards::show(ui, chrome, &row, |ui| {
                             output_ui(ui, p, form == Form::Tile);
@@ -4167,6 +4286,22 @@ impl PlaygroundView {
         if a.code {
             self.find_in_code(name, chrome);
         }
+        if a.trend {
+            let pin = self
+                .session
+                .trend
+                .signals
+                .iter()
+                .find(|t| t.eq_ignore_ascii_case(name))
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            let added = !self.session.trend.signals.contains(&pin);
+            self.session.trend.toggle(&pin);
+            if added {
+                chrome.trend = true;
+                chrome.msgs = false;
+            }
+        }
         if a.diagram
             && let Some(v) = &mut self.viewer
         {
@@ -4174,6 +4309,14 @@ impl PlaygroundView {
         }
         if a.tapped && !input {
             self.pick(name);
+        }
+        // An input's card goes to where it is, as an output's does
+        // (Nick, 2026-11-26).
+        if a.tapped
+            && input
+            && let Some(v) = &mut self.viewer
+        {
+            v.show_signal(name);
         }
     }
 
@@ -4228,7 +4371,13 @@ impl PlaygroundView {
             (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).ceil(),
             ui.spacing().item_spacing.y,
         );
-        let cap = (ui.available_height() * SIGNAL_ROWS_SHARE).max(SIGNAL_ROWS_MIN);
+        // Three rows while they take no more than half the tab: a handful
+        // of signals all show (Nick, 2026-11-23) at the width the wider
+        // left pane leaves (2026-11-26), where a third held two.
+        let three = 3.0 * (row + gap) - gap;
+        let cap = (ui.available_height() * SIGNAL_ROWS_SHARE)
+            .max(three.min(ui.available_height() * 0.5))
+            .max(SIGNAL_ROWS_MIN);
         let rows = ((cap + gap) / (row + gap)).floor().max(1.0);
         let rows_h = rows * (row + gap) - gap;
         let legend = egui::ScrollArea::vertical()
@@ -4336,7 +4485,7 @@ impl PlaygroundView {
                 blocked: self.chat.route().err().map(str::to_string),
                 undo_blocked: self.undo_blocked(),
                 decided: std::collections::BTreeMap::new(),
-                steps: self.steps(),
+                steps: self.exchange_steps(),
                 room_below: Some(0.0),
                 progress: self.progress(ctx.input(|i| i.time)),
                 card: self.card.clone(),
@@ -5012,22 +5161,6 @@ impl PlaygroundView {
         true
     }
 
-    fn use_device(&mut self, d: crate::devices::NewDevice) {
-        if !self.own_project() {
-            return;
-        }
-        // The copy's program and map, for the form's channels.
-        let map = self
-            .proj
-            .files
-            .get(helmsman_project::IO_MAP)
-            .cloned()
-            .unwrap_or_default();
-        self.devices_ui.map = helmsman_project::iomap::skim(&map);
-        self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
-        self.devices_ui.open(d);
-    }
-
     /// The form's Add: new variables into the program file (refused, with
     /// nothing changed, if the program would not read after), then the
     /// device and its signals into io.map.
@@ -5474,6 +5607,10 @@ impl Workspace for PlaygroundView {
         true
     }
 
+    fn go_history(&mut self) {
+        self.open_history();
+    }
+
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
@@ -5596,6 +5733,16 @@ impl Default for PlaygroundView {
 
 /// One input: its control, and the response a right-click on its row
 /// opens a menu from. `place` is where the point is now, in its tooltip.
+/// An input's glyph says its state: green on, red off (Nick, 2026-11-26);
+/// a number's is plain.
+fn state_ink(t: &crate::theme::Theme, v: Value) -> egui::Color32 {
+    match v {
+        Value::Bool(true) => t.ink(crate::st_view::brand::GREEN),
+        Value::Bool(false) => t.ink(crate::st_view::brand::RED),
+        _ => t.fg,
+    }
+}
+
 fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Value>, egui::Response) {
     let t = theme(ui);
     let label = match p.address() {
@@ -5615,7 +5762,13 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
     let slider = ui.available_width() >= 150.0;
     let boxed = Vec2::new((ui.available_width() - 2.0).clamp(40.0, 84.0), TAP * 0.6);
     ui.horizontal_wrapped(|ui| {
-        crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, t.fg, crate::glyph_lib::tip(glyph));
+        crate::glyph_lib::show(
+            ui,
+            glyph,
+            crate::glyphs::ROW,
+            state_ink(&t, p.value),
+            crate::glyph_lib::tip(glyph),
+        );
         match p.widget {
             Some(Widget::Push) => {
                 let on = p.value == Value::Bool(true);
@@ -5628,7 +5781,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                     .fill(if on { YELLOW } else { t.rule })
                     .sense(Sense::click_and_drag());
                 let r = control_button(ui, b, size, tile).tip(format!(
-                    "Push button: on while held. Double-click for its details.\n{place}"
+                    "Push button: on while held. Click the card for its details.\n{place}"
                 ));
                 out = Some(Value::Bool(r.is_pointer_button_down_on()));
                 anchor = Some(r);
@@ -5642,7 +5795,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point, place: &str, tile: bool) -> (Option<Va
                 )
                 .fill(if on { YELLOW } else { t.rule });
                 let r = control_button(ui, b, size, tile).tip(format!(
-                    "Switch: click to flip. Double-click for its details.\n{place}"
+                    "Switch: click to flip. Click the card for its details.\n{place}"
                 ));
                 if r.clicked() {
                     out = Some(Value::Bool(!on));

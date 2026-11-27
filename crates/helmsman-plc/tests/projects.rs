@@ -2691,6 +2691,78 @@ fn every_save_is_a_revision_an_engineer_can_read_and_restore() {
     assert_eq!(r.status, 400, "{r:?}");
 }
 
+/// Nick, 2026-11-26: a save from the Describe tab says what was asked.
+/// With its page and `what`, the revision is "Described: <what>"; with
+/// the page alone it is the old "took the described change into <file>";
+/// otherwise "saved <file>". The body takes `text`, `version`, `page` and
+/// `what`, and any other key is still refused.
+#[test]
+fn a_described_save_records_what_was_asked_and_other_keys_are_still_refused() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(&s, "line5", &[("main.st", MAIN)]);
+    let save = |body: Json| {
+        send(
+            b.addr,
+            "PUT",
+            "/api/projects/line5/files/main.st",
+            Some(&s),
+            "application/json",
+            body.to_string().as_bytes(),
+        )
+    };
+    let whats = || -> Vec<String> {
+        let h = get(b.addr, "/api/projects/line5/history").json();
+        h["revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["what"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let r = save(json!({
+        "text": "PROGRAM a END_PROGRAM",
+        "page": "Instruction: make the lamp blink\nFile: main.st\n",
+        "what": "make the lamp blink",
+    }));
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(whats().last().unwrap(), "Described: make the lamp blink");
+    let n = r.json()["revision"].as_u64().unwrap();
+    let rev = get(b.addr, &format!("/api/projects/line5/history/{n}")).json();
+    assert_eq!(
+        rev["page"], "Instruction: make the lamp blink\nFile: main.st\n",
+        "the page rides along as before"
+    );
+    // The page alone: the old wording.
+    let r = save(json!({ "text": "PROGRAM b END_PROGRAM", "page": "Instruction: x\n" }));
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(whats().last().unwrap(), "took the described change into main.st");
+    // What without a page is no described change.
+    let r = save(json!({ "text": "PROGRAM c END_PROGRAM", "what": "sneaky" }));
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(whats().last().unwrap(), "saved main.st");
+    // A plain save, with its version.
+    let v = get(b.addr, "/api/projects/line5/files/main.st").json()["version"].clone();
+    let r = save(json!({ "text": "PROGRAM d END_PROGRAM", "version": v }));
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(whats().last().unwrap(), "saved main.st");
+    // Any other key is refused, and nothing is saved.
+    let before = whats().len();
+    for body in [
+        json!({ "text": "PROGRAM e END_PROGRAM", "page": "p", "what": "w", "who": "mallory" }),
+        json!({ "text": "PROGRAM e END_PROGRAM", "whats": "w" }),
+        json!({ "text": "PROGRAM e END_PROGRAM", "What": "w" }),
+    ] {
+        let r = save(body.clone());
+        assert_eq!(r.status, 400, "{body}: {r:?}");
+    }
+    assert_eq!(whats().len(), before, "a refused save is no revision");
+    assert_eq!(
+        get(b.addr, "/api/projects/line5/files/main.st").json()["text"],
+        "PROGRAM d END_PROGRAM"
+    );
+}
+
 fn control(addr: SocketAddr, s: Option<&str>, module: &str, op: &str) -> Resp {
     send(
         addr,

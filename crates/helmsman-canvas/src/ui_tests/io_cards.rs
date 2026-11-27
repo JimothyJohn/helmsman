@@ -36,13 +36,14 @@ fn sim_with(src: &str) -> Harness {
     h
 }
 
-fn double_click(h: &mut Harness, key: &str) {
-    // Clicks made just before would make this a triple click.
+/// One click on card `key` (Nick, 2026-11-26: one click opens or closes
+/// its details; a double-click before), low on the card: under its
+/// control and its glyphs.
+fn click_card(h: &mut Harness, key: &str) {
+    // A click just before would make this a double click.
     h.wait(1.0);
-    // Low on the card: under its control and its glyphs.
     let r = h.rect(key);
     let at = eframe::egui::pos2(r.center().x, (r.bottom() - 8.0).min(h.size.y - 4.0));
-    h.click(at);
     h.click(at);
     h.wait(0.2);
 }
@@ -68,12 +69,12 @@ fn a_card_says_the_first_link_and_its_details_say_them_all() {
     // The details open below the fold of the inputs unless they are folded.
     h.press("io head inputs");
     h.wait(0.2);
-    double_click(&mut h, "io card motor");
+    click_card(&mut h, "io card motor");
     assert!(h.drew("kept"), "motor latches on itself");
     assert!(h.drew("times in the code"), "and how often it is named");
     assert!(!h.has("io more motor"), "all of them are shown");
-    double_click(&mut h, "io card motor");
-    assert!(!h.drew("times in the code"), "a second double-click closes them");
+    click_card(&mut h, "io card motor");
+    assert!(!h.drew("times in the code"), "a second click closes them");
     h.press("io head inputs");
     h.wait(0.2);
     h.press("io more start");
@@ -156,10 +157,8 @@ fn tiles_are_narrower_keep_the_panel_and_open_their_details_under_the_grid() {
         (h.rect("right").left() - right.left()).abs() <= 8.0,
         "the panel kept its width"
     );
-    let at = h.rect("io card horn").center();
-    h.click(at);
-    h.click(at);
-    h.wait(0.3);
+    click_card(&mut h, "io card horn");
+    h.wait(0.1);
     assert!(h.drew("driven by"), "the details of the tile, under the grid");
     assert!((h.rect("right").left() - right.left()).abs() <= 8.0);
     h.press("io list");
@@ -229,9 +228,9 @@ fn forty_inputs_with_long_names_keep_the_panel_in_the_list_and_in_the_grid() {
     let first = "io card proximity_sensor_0_at_the_far_end_of_conveyor_section";
     for step in ["list", "details", "grid", "grid details"] {
         match step {
-            "details" | "grid details" => double_click(&mut h, first),
+            "details" | "grid details" => click_card(&mut h, first),
             "grid" => {
-                double_click(&mut h, first);
+                click_card(&mut h, first);
                 h.press("io grid");
             }
             _ => {}
@@ -497,4 +496,288 @@ fn a_tile_paints_nothing_that_moves_while_the_pointer_is_over_it() {
         "hovering does not grow or move a tile"
     );
     assert_eq!(still, card, "and it is where it was");
+}
+
+/// An input read once and wired to three uses.
+const FAN: &str = "\
+PROGRAM fan
+VAR_INPUT start : BOOL; other : BOOL; END_VAR
+VAR_OUTPUT a : BOOL; b : BOOL; c : BOOL; END_VAR
+a := start AND other;
+b := start OR other;
+c := NOT start;
+END_PROGRAM
+";
+
+/// What is lit on the simulation's diagram for `name`: the reads of it,
+/// every wire into or out of one, the block at each such wire's other
+/// end, and (to check nothing else is) the reads of `other` with their
+/// wires.
+/// The reads of `start` lit; per wire of start, the wire and its far
+/// block lit; the reads of `other` lit; other's own wires lit.
+type FanLit = (Vec<bool>, Vec<(bool, bool)>, Vec<bool>, Vec<bool>);
+
+fn fan_lit(h: &Harness) -> FanLit {
+    use helmsman_diagram::NodeKind;
+    let v = super::sim_view(h);
+    let on = v.highlighted().expect("something is lit");
+    let d = v.diagram();
+    let reads_of = |name: &str| -> Vec<helmsman_diagram::NodeId> {
+        d.nodes
+            .iter()
+            .filter(|n| matches!(&n.kind, NodeKind::Read { path } if path == name))
+            .map(|n| n.id)
+            .collect()
+    };
+    let start = reads_of("START");
+    let other = reads_of("OTHER");
+    assert!(!start.is_empty() && !other.is_empty(), "both inputs are drawn");
+    let mut wires = Vec::new();
+    let mut ends = Vec::new();
+    for (k, w) in d.wires.iter().enumerate() {
+        if start.contains(&w.from) || start.contains(&w.to) {
+            let end = if start.contains(&w.from) { w.to } else { w.from };
+            wires.push((on.wire(k), on.node(end)));
+            ends.push(end);
+        }
+    }
+    let other_wires: Vec<bool> = d
+        .wires
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| other.contains(&w.from) && !ends.contains(&w.from))
+        .map(|(k, _)| on.wire(k))
+        .collect();
+    (
+        start.iter().map(|n| on.node(*n)).collect(),
+        wires,
+        other.iter().map(|n| on.node(*n)).collect(),
+        other_wires,
+    )
+}
+
+/// Nick, 2026-11-26: "an input lit one leg, not all its places". The I/O
+/// card's diagram glyph lights every wire into or out of a block that
+/// reads the point, and the block at each wire's other end: `start`, read
+/// once and wired to three uses, lights all three wires and all three
+/// blocks it feeds.
+#[test]
+fn the_diagram_glyph_lights_every_wire_of_a_point_and_every_use_it_feeds() {
+    let mut h = sim_with(FAN);
+    h.press("io diagram start");
+    h.wait(0.6);
+    let (reads, wires, others, other_wires) = fan_lit(&h);
+    assert!(reads.iter().all(|&l| l), "the read of start is lit: {reads:?}");
+    assert!(wires.len() >= 3, "start is wired to its three uses: {wires:?}");
+    assert!(
+        wires.iter().all(|&(wire, end)| wire && end),
+        "every wire of start and the block at its other end are lit: {wires:?}"
+    );
+    assert!(others.iter().all(|&l| !l), "other is not start: {others:?}");
+    assert!(
+        other_wires.iter().all(|&l| !l),
+        "nor are other's wires: {other_wires:?}"
+    );
+}
+
+/// The same through Cross references (Alt Shift X) on the picked read.
+#[test]
+fn cross_references_light_every_wire_of_a_variable_and_every_use_it_feeds() {
+    use eframe::egui::{Key, Modifiers};
+    let mut h = sim_with(FAN);
+    h.app.chrome.show(Pane::Code);
+    h.wait(0.3);
+    let read = |k: &helmsman_diagram::NodeKind| matches!(k, helmsman_diagram::NodeKind::Read { path } if path == "START");
+    let (at, _) = super::node(super::sim_view(&h), read);
+    h.click(at);
+    h.frame(vec![]);
+    assert_eq!(
+        super::sim_view(&h).picked_var().as_deref(),
+        Some("START"),
+        "the read is picked"
+    );
+    h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::X);
+    h.wait(0.3);
+    let (reads, wires, others, other_wires) = fan_lit(&h);
+    assert!(reads.iter().all(|&l| l), "{reads:?}");
+    assert!(wires.len() >= 3, "{wires:?}");
+    assert!(wires.iter().all(|&(wire, end)| wire && end), "{wires:?}");
+    assert!(others.iter().all(|&l| !l), "{others:?}");
+    assert!(other_wires.iter().all(|&l| !l), "{other_wires:?}");
+}
+
+// ---- Nick, 2026-11-26: the trend glyph, one click, inputs to the diagram,
+// ---- an input's BOOL in green and red, the diagram glyph steps ----------
+
+/// The simulation's camera on the diagram: where it looks and how close.
+fn cam(h: &Harness) -> (eframe::egui::Vec2, f32) {
+    let v = h.app.sim.as_ref().unwrap().viewer.as_ref().unwrap();
+    let c = v.cams[v.scope];
+    (c.offset, c.zoom)
+}
+
+#[test]
+fn the_trend_glyph_pins_the_point_and_opens_the_trend_and_again_takes_it_off() {
+    let mut h = sim_with(MIXER);
+    h.app.chrome.trend = false;
+    h.wait(0.2);
+    assert!(h.has("io trend level"), "a graph glyph on the card");
+    let src = h.app.sim.as_ref().unwrap().proj.build_src();
+    let dirty = h.app.sim.as_ref().unwrap().proj.dirty();
+    h.press("io trend level");
+    h.wait(0.3);
+    assert!(
+        h.app.chrome.trend && !h.app.chrome.msgs,
+        "the bottom panel opens on the Trend"
+    );
+    assert!(
+        h.has("trend lane level"),
+        "level is on the Trend: {:?}",
+        h.app.chrome.hits
+    );
+    h.press("io trend level");
+    h.wait(0.3);
+    assert!(!h.has("trend lane level"), "again takes it off");
+    // Nothing of it is an edit of the program.
+    assert_eq!(h.app.sim.as_ref().unwrap().proj.build_src(), src);
+    assert_eq!(h.app.sim.as_ref().unwrap().proj.dirty(), dirty);
+}
+
+#[test]
+fn one_click_on_an_output_card_opens_its_details_and_another_closes_them() {
+    let mut h = sim_with(MIXER);
+    // The inputs folded: the outputs' cards are in view.
+    h.press("io head inputs");
+    h.wait(0.2);
+    assert!(!h.drew("times in the code"), "closed to start");
+    click_card(&mut h, "io card motor");
+    assert!(h.drew("times in the code"), "one click opens the details");
+    click_card(&mut h, "io card motor");
+    assert!(!h.drew("times in the code"), "one more closes them");
+}
+
+#[test]
+fn a_click_on_an_inputs_card_goes_to_it_on_the_diagram() {
+    let mut h = sim_with(MIXER);
+    assert!(
+        h.app
+            .sim
+            .as_ref()
+            .unwrap()
+            .viewer
+            .as_ref()
+            .unwrap()
+            .highlighted()
+            .is_none(),
+        "nothing lit to start"
+    );
+    click_card(&mut h, "io card stop");
+    h.wait(0.6);
+    let v = h.app.sim.as_ref().unwrap().viewer.as_ref().unwrap();
+    let on = v.highlighted().expect("the input is lit on the diagram");
+    let d = v.diagram();
+    let reads = |name: &str| {
+        d.nodes
+            .iter()
+            .filter(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path == name))
+            .map(|n| on.node(n.id))
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        !reads("STOP").is_empty() && reads("STOP").iter().all(|&lit| lit),
+        "stop's blocks"
+    );
+    assert!(reads("LEVEL").iter().all(|&lit| !lit), "not another input's");
+    // And its blocks are in view.
+    let screen = h.app.chrome.diagram;
+    for n in d
+        .nodes
+        .iter()
+        .filter(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path == "STOP"))
+    {
+        let r = v.block_on_screen(n.id).expect("drawn");
+        assert!(screen.intersects(r), "STOP's block {r:?} in the view {screen:?}");
+    }
+}
+
+#[test]
+fn the_diagram_glyph_pressed_again_frames_the_next_use_and_comes_round() {
+    let mut h = sim_with(MIXER);
+    // start is read by three statements: three uses, then the first again.
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        h.wait(1.0);
+        h.press("io diagram start");
+        h.wait(1.0);
+        seen.push(cam(&h));
+    }
+    let far = |a: (eframe::egui::Vec2, f32), b: (eframe::egui::Vec2, f32)| {
+        (a.0 - b.0).length() > 4.0 || (a.1 - b.1).abs() > 0.01
+    };
+    assert!(
+        far(seen[0], seen[1]) || far(seen[1], seen[2]),
+        "a press frames another use: {seen:?}"
+    );
+    assert!(!far(seen[0], seen[3]), "round the end to the first: {seen:?}");
+}
+
+/// The colours the last frame drew inside `r`: text, fills and strokes.
+fn colours_in(h: &Harness, r: eframe::egui::Rect) -> Vec<eframe::egui::Color32> {
+    use eframe::egui::Shape;
+    fn walk(s: &Shape, r: eframe::egui::Rect, out: &mut Vec<eframe::egui::Color32>) {
+        match s {
+            Shape::Vec(v) => v.iter().for_each(|s| walk(s, r, out)),
+            Shape::Text(t) if r.contains(t.pos) => {
+                out.extend(t.override_text_color);
+                out.extend(t.galley.job.sections.iter().map(|s| s.format.color));
+            }
+            Shape::Rect(x) if r.contains_rect(x.rect) => {
+                out.push(x.fill);
+                out.push(x.stroke.color);
+            }
+            Shape::Circle(c) if r.contains(c.center) => {
+                out.push(c.fill);
+                out.push(c.stroke.color);
+            }
+            Shape::LineSegment { points, stroke } if r.contains(points[0]) => out.push(stroke.color),
+            Shape::Path(p) if p.points.first().is_some_and(|q| r.contains(*q)) => out.push(p.fill),
+            Shape::Mesh(m) if m.vertices.first().is_some_and(|v| r.contains(v.pos)) => {
+                out.extend(m.vertices.iter().map(|v| v.color));
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, r, &mut out);
+    }
+    out.retain(|c| c.a() > 0);
+    out
+}
+
+#[test]
+fn an_inputs_bool_is_green_when_on_and_red_when_off() {
+    use crate::st_view::brand::{GREEN, RED};
+    use helmsman_iec::Value::Bool;
+    let mut h = sim_with(DRIVE);
+    let card = h.rect("io card enable");
+    let near = |c: &eframe::egui::Color32, w: eframe::egui::Color32| {
+        c.r().abs_diff(w.r()) < 40 && c.g().abs_diff(w.g()) < 40 && c.b().abs_diff(w.b()) < 40
+    };
+    let has = |h: &Harness, w| colours_in(h, card).iter().any(|c| near(c, w));
+    assert_eq!(value(&h, "enable"), Some(Bool(false)));
+    assert!(
+        has(&h, RED) && !has(&h, GREEN),
+        "enable is off: red {:?}",
+        colours_in(&h, card)
+    );
+    let at = control(&h, "enable");
+    h.click(eframe::egui::pos2(at.right() - 30.0, at.center().y));
+    h.wait(0.3);
+    assert_eq!(value(&h, "enable"), Some(Bool(true)), "the switch turned it on");
+    assert!(
+        has(&h, GREEN) && !has(&h, RED),
+        "enable is on: green {:?}",
+        colours_in(&h, card)
+    );
 }

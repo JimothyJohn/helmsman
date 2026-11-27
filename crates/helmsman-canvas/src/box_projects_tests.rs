@@ -1304,6 +1304,144 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
     assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
 }
 
+/// Nick, 2026-11-26: a save or a deploy that went through is a popup under
+/// the header's save glyph for `FLASH_S` (2.5 s), "Saved" or "Deployed",
+/// and one info line in the log; it is no notice. Driven on the bench box
+/// through the page, the requests carried out as the browser would.
+#[test]
+fn a_save_and_a_deploy_that_went_through_flash_under_the_save_glyph_and_log_one_line() {
+    use crate::box_projects::FLASH_S;
+    use crate::messages::Level;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    v.projects.open_file("main.st");
+    let session = Some(b.login(&jar, "alice", ALICE));
+    let mut h = Harness::new(v, session);
+    h.wait(0.3);
+    // Carries out what the page asked the box until it is quiet.
+    let settle_page = |h: &mut Harness| {
+        for _ in 0..30 {
+            h.frame(vec![]);
+            let (ctx, now) = (h.ctx.clone(), h.time);
+            if h.bv().psent.is_empty() && h.bv().sent.is_empty() {
+                return;
+            }
+            pump(&b, &jar, h.bv(), &ctx, now);
+        }
+        panic!("the page never went quiet");
+    };
+    settle_page(&mut h);
+    let lines = |h: &mut Harness, text: &str| {
+        h.bv()
+            .log
+            .iter()
+            .filter(|m| m.text == text && m.level == Level::Info)
+            .count()
+    };
+    let flash_up = |h: &Harness| h.app.chrome.rect("save flash");
+    // What `make` saved before the page was drawn is past.
+    h.wait(FLASH_S + 0.2);
+    assert!(flash_up(&h).is_none(), "nothing flashes at rest");
+
+    // A save.
+    let edited = MAIN.replace("reset := FALSE", "reset := NOT start");
+    h.bv().projects.current_mut().unwrap().text.clone_from(&edited);
+    h.frame(vec![]);
+    let before = lines(&mut h, "Saved line.");
+    h.press("save");
+    let saved_at = h.time;
+    settle_page(&mut h);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        edited.as_str()
+    );
+    let f = h.bv().projects.flash.clone().expect("the save flashes");
+    assert_eq!((f.word, f.line.as_str()), ("Saved", "Saved line."));
+    assert!(
+        (f.at - saved_at).abs() < 1.0,
+        "flashed at page time {} not {saved_at}",
+        f.at
+    );
+    h.frame(vec![]);
+    let pop = flash_up(&h).expect("the popup is up");
+    let save = h.rect("save");
+    assert!(
+        pop.top() >= save.bottom() - 1.0 && pop.right() > save.left() && pop.left() < save.right(),
+        "the popup {pop:?} is under the save glyph {save:?}"
+    );
+    assert!(h.drew("Saved"), "the popup says Saved");
+    assert!(
+        !h.bv()
+            .projects
+            .notice
+            .as_ref()
+            .is_some_and(|(n, _)| n.contains("Saved line")),
+        "no notice: {:?}",
+        h.bv().projects.notice
+    );
+    h.wait(1.0);
+    assert!(flash_up(&h).is_some(), "still up a second on");
+    h.wait(FLASH_S);
+    assert!(flash_up(&h).is_none(), "gone after {FLASH_S} s");
+    assert_eq!(lines(&mut h, "Saved line."), before + 1, "one line in the log");
+
+    // A deploy.
+    let before: usize = h
+        .bv()
+        .log
+        .iter()
+        .filter(|m| m.text.starts_with("Deployed "))
+        .count();
+    // The Code tab's deploy arrow, as a user deploys.
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    h.press("code deploy");
+    let deployed_at = h.time;
+    settle_page(&mut h);
+    let p = &h.bv().projects;
+    assert!(
+        matches!(p.deploy, Deploy::Done(_)),
+        "{:?} {:?}",
+        p.deploy,
+        p.diags
+    );
+    let f = h.bv().projects.flash.clone().expect("the deploy flashes");
+    assert_eq!(f.word, "Deployed");
+    assert!(
+        f.line.starts_with("Deployed ") && f.line.ends_with('.') && f.line.contains("line"),
+        "{:?}",
+        f.line
+    );
+    assert!((f.at - deployed_at).abs() < 1.0);
+    h.frame(vec![]);
+    assert!(flash_up(&h).is_some(), "the popup is up");
+    assert!(h.drew("Deployed"), "the popup says Deployed");
+    assert!(h.app.chrome.rect("deployed").is_none(), "no deploy notice");
+    assert!(
+        !h.drew("is running the version deployed from here"),
+        "no deploy notice"
+    );
+    h.wait(FLASH_S + 0.3);
+    assert!(flash_up(&h).is_none(), "gone after {FLASH_S} s");
+    let after: Vec<String> = h
+        .bv()
+        .log
+        .iter()
+        .filter(|m| m.text.starts_with("Deployed "))
+        .map(|m| m.text.clone())
+        .collect();
+    assert_eq!(after.len(), before + 1, "one line in the log: {after:?}");
+    assert_eq!(after.last(), Some(&f.line));
+}
+
 /// Alice's page on the bench box, watched until the running module is
 /// drawn with a scan.
 fn drawn(b: &Bench, jar: &Jar) -> BoxView {
@@ -2101,9 +2239,14 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
         .projects
         .history
         .iter()
-        .find(|r| r.what == "took the described change into main.st")
+        .find(|r| r.what == "Described: comment it")
         .cloned()
-        .expect("the change's revision");
+        .unwrap_or_else(|| {
+            panic!(
+                "the change's revision says what was asked: {:?}",
+                v.projects.history.iter().map(|r| &r.what).collect::<Vec<_>>()
+            )
+        });
     assert!(saved.page);
     let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
     assert!(
@@ -2345,17 +2488,17 @@ fn an_answer_the_box_cut_off_is_never_written() {
 // ---- the Monitor's Stop, Run and Restart on a box (card monitor-box-run-stop) ----
 
 /// The page on the Monitor, its requests carried out against the box until
-/// the conveyor's status tile is up.
+/// the conveyor is in the header (its status card went, 2026-11-26).
 fn monitor(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> Harness {
     let v = page(b, jar, who);
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
     h.app.open_monitor();
     let deadline = Instant::now() + Duration::from_secs(20);
-    while h.app.chrome.rect("status conveyor").is_none() {
+    while h.app.chrome.rect("monitor program 0").is_none() {
         assert!(
             Instant::now() < deadline,
-            "no status tile: {:?}",
+            "no conveyor in the header: {:?}",
             h.app.chrome.hits
         );
         monitor_pump(b, jar, &mut h);
@@ -4138,16 +4281,23 @@ fn a_proposed_profile_is_shown_renamed_and_saved_into_the_open_project_on_a_real
     );
 }
 
-// ---- the vendor's file for the agent, on the Devices tab ----
+// ---- the vendor's file for the agent, from the New device form ----
 
-/// A found device the library lacks, on the tab of a real box.
-fn unknown_found() -> crate::devices::Found {
-    let mut f = crate::devices::Found::simulated_e1213(&helmsman_project::iomap::MapText::default());
-    f.address = "192.168.3.77".into();
-    f.library = None;
-    f.mapped = None;
-    f.simulated = false;
-    f
+/// The New device form opened by New device… on the Devices tab's blank
+/// space (the + under the devices gave way to Scan for Device), with
+/// 192.168.3.77 typed as its address (Nick, 2026-11-26).
+fn vendor_form(h: &mut Harness) {
+    h.right_click(h.rect("devices blank").center());
+    h.press("menu new device");
+    h.wait(0.2);
+    let at = h.rect("device endpoint").center();
+    h.click(at);
+    h.frame(vec![Event::Text("192.168.3.77".into())]);
+    h.frame(vec![]);
+    assert!(
+        h.app.chrome.rect("vendor file").is_some(),
+        "the form has the button"
+    );
 }
 
 #[test]
@@ -4160,9 +4310,7 @@ fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
     let mut h = Harness::new(v, session);
     h.press("pane devices");
     h.wait(0.3);
-    h.bv().devices_ui.found = vec![unknown_found()];
-    h.bv().devices_ui.scan = crate::devices::Scan::Done;
-    h.frame(vec![]);
+    vendor_form(&mut h);
     assert_eq!(
         b.json("/api/dropins"),
         serde_json::json!([]),
@@ -4170,7 +4318,7 @@ fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
     );
 
     // The button opens the picker; the file arrives as the browser reads it.
-    h.press("vendor file 192.168.3.77");
+    h.press("vendor file");
     assert!(h.bv().devices_ui.vendor.is_picking());
     let eds = "$ EZ-EDS\n[File]\n  DescText = \"Acme Rio\";\n[Device]\n  ProdName = \"Rio\";\n";
     h.bv()
@@ -4211,7 +4359,12 @@ fn a_vendor_file_becomes_a_dropin_on_a_real_box_and_the_chat_carries_its_id() {
         "the file's name stays out of the message"
     );
     assert!(
-        h.app.chrome.rect("vendor note 192.168.3.77").is_some(),
+        ask.message.contains("It answers at 192.168.3.77."),
+        "the typed address: {}",
+        ask.message
+    );
+    assert!(
+        h.app.chrome.rect("vendor note").is_some(),
         "the note beside the button"
     );
 }
@@ -4226,11 +4379,9 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     let mut h = Harness::new(v, session);
     h.press("pane devices");
     h.wait(0.3);
-    h.bv().devices_ui.found = vec![unknown_found()];
-    h.bv().devices_ui.scan = crate::devices::Scan::Done;
-    h.frame(vec![]);
+    vendor_form(&mut h);
     // Bytes that are not UTF-8: the box says so (422).
-    h.press("vendor file 192.168.3.77");
+    h.press("vendor file");
     h.bv()
         .devices_ui
         .vendor
@@ -4248,8 +4399,10 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
         note,
         "The box could not read latin1.eds: the document is not UTF-8 text. Nothing was sent."
     );
-    // Control characters inside: 422 as well.
-    h.press("vendor file 192.168.3.77");
+    // Control characters inside: 422 as well. The form grows with the
+    // refusal under its button and settles a frame later: press it then.
+    h.wait(0.5);
+    h.press("vendor file");
     h.bv().devices_ui.vendor.picked("ctl.eds", b"a\x07b".to_vec());
     pump_until(&b, &jar, &mut h, "the second refusal", |h| {
         h.bv()
@@ -4268,7 +4421,8 @@ fn the_boxs_own_refusals_of_a_vendor_file_are_said_and_nothing_goes_to_the_agent
     );
     // A signed-out page: the box answers 401, in words.
     jar.set(None);
-    h.press("vendor file 192.168.3.77");
+    h.wait(0.5);
+    h.press("vendor file");
     h.bv().devices_ui.vendor.picked("ok.eds", b"fine".to_vec());
     pump_until(&b, &jar, &mut h, "the 401", |h| {
         h.bv()
@@ -4404,10 +4558,10 @@ fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
         "a signal the program does not have is listed too"
     );
     // `horn` is no port of the program: no menu on it.
-    h.right_click(h.rect("io row horn").center());
+    h.right_click(h.rect("io row horn").left_top() + egui::vec2(12.0, 12.0));
     assert!(h.app.chrome.rect("menu assign port").is_none());
     // An output port, to the device's coil.
-    h.right_click(h.rect("io row lamp").center());
+    h.right_click(h.rect("io row lamp").left_top() + egui::vec2(12.0, 12.0));
     h.press("menu assign port");
     h.wait(0.2);
     assert!(
@@ -4424,7 +4578,7 @@ fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
         .replace("out lamp  bool box do:0 safe=false\n", "");
     assert_eq!(buffer(&mut h), moved);
     // And an input.
-    h.right_click(h.rect("io row start").center());
+    h.right_click(h.rect("io row start").left_top() + egui::vec2(12.0, 12.0));
     h.press("menu assign port");
     h.wait(0.2);
     h.press("assign channel rio di:5");
@@ -4445,7 +4599,7 @@ fn an_engineer_assigns_from_the_io_tab_and_goes_back_to_the_box_channel() {
             && binding_of(&b, "lamp") == Some(("device".into(), "rio".into(), "coil:0".into()))
     });
     // Back to simulated I/O: the lamp goes to the box's first free output.
-    h.right_click(h.rect("io row lamp").center());
+    h.right_click(h.rect("io row lamp").left_top() + egui::vec2(12.0, 12.0));
     assert!(h.app.chrome.rect("menu back to simulated").is_some());
     h.press("menu back to simulated");
     h.wait(0.3);
@@ -4632,7 +4786,7 @@ fn a_port_goes_to_a_channel_with_no_line_on_the_box_and_the_box_binds_it() {
     h.press("tab io");
     h.wait(0.3);
     // The I/O tab's row: the device has channels though the map has no line.
-    h.right_click(h.rect("io row start").center());
+    h.right_click(h.rect("io row start").left_top() + egui::vec2(12.0, 12.0));
     h.press("menu assign port");
     h.wait(0.2);
     assert!(
@@ -4943,7 +5097,9 @@ fn the_files_tab_names_the_box_and_has_only_my_files() {
     h.app.chrome.show_files();
     h.wait(0.3);
     let left = h.rect("left");
-    assert!(h.drew("Files on the box"), "the header names the device");
+    // Nick, 2026-11-26: a box's Files tab has no "Files on the box"
+    // heading (the simulation's says the files are in this browser).
+    assert!(!h.drew("Files on the box"), "no heading on a box");
     assert!(!h.drew("in this browser"));
     assert!(h.app.chrome.rect("files head mine").is_some());
     assert!(
@@ -5190,10 +5346,11 @@ fn the_first_sign_in_asks_for_the_projects_a_locked_box_refused() {
 
 /// Nick 2026-11-24: "there needs to be a deploy button on the agent tab as
 /// well ... make it pulse or something to indicate that it's required".
-/// The Agent tab has Deploy; it says the program is not running yet while
-/// an edit waits, and pressing it sends the program as the Code tab's does.
+/// The Agent tab has Deploy; it pulses while the Agent's edit waits (no
+/// label since 2026-11-26), and pressing it sends the program as the Code
+/// tab's does.
 #[test]
-fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
+fn the_agent_tab_deploys_and_pulses_while_a_change_is_not_running() {
     use crate::remote::Fetch;
     const SRC: &str = "PROGRAM drive\nVAR slew : DINT; END_VAR\nslew := 0;\nEND_PROGRAM\n";
     let mut bv = BoxView::new();
@@ -5224,14 +5381,11 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
         h.app.chrome.rect("agent deploy").is_some(),
         "Deploy is on the Agent tab"
     );
-    assert!(
-        h.app.chrome.rect("agent deploy pending").is_none(),
-        "nothing waits: no pulse"
-    );
+    assert!(!h.bv().agent_pending, "nothing waits: no pulse");
     h.bv().projects.module.as_mut().unwrap().text = SRC.replace("slew := 0;", "slew := 500;");
     h.wait(0.1);
     assert!(
-        h.app.chrome.rect("agent deploy pending").is_none(),
+        !h.bv().agent_pending,
         "an edit by hand does not pulse (Nick: only a successful Agent output)"
     );
     // A refusal does not either.
@@ -5247,16 +5401,25 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
     h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Refused));
     h.bv().log_agent();
     h.wait(0.1);
-    assert!(h.app.chrome.rect("agent deploy pending").is_none());
-    // The Agent's answer was written: it pulses and says so.
+    assert!(!h.bv().agent_pending);
+    // The Agent's answer was written: Deploy pulses. Nick, 2026-11-26: the
+    // ring alone, no line saying so under it.
     h.bv().instruct.outcome = Some(outcome(crate::instruct::Kind::Applied));
     h.bv().log_agent();
     h.wait(0.1);
-    assert!(h.app.chrome.rect("agent deploy pending").is_some());
-    // Deploy sits at the tab's right edge.
+    assert!(h.bv().agent_pending, "the Agent's change waits: Deploy pulses");
+    assert!(h.app.chrome.rect("agent deploy pending").is_none(), "no label");
+    assert!(!h.drew("is not running yet"), "no label");
+    // Deploy sits at the tab's right edge: by the ribbon that holds the
+    // pane's hide button along its inner edge (2026-11-26).
     let tab = h.rect("agent tab");
+    let ribbon = h.rect("left");
     let deploy = h.rect("agent deploy");
-    assert!(tab.right() - deploy.right() < 24.0, "{deploy:?} in {tab:?}");
+    assert!(tab.contains_rect(deploy), "{deploy:?} in {tab:?}");
+    assert!(
+        deploy.right() <= ribbon.left() && ribbon.left() - deploy.right() < 24.0,
+        "{deploy:?} by the ribbon {ribbon:?}"
+    );
     h.press("agent deploy");
     let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
     assert_eq!(sent.len(), 1, "{sent:?}");
@@ -5265,10 +5428,9 @@ fn the_agent_tab_deploys_and_says_when_a_change_is_not_running() {
         ("PUT", "/api/modules/drive")
     );
     // The deploy ran: the pulse stops.
-    h.bv().projects.deploy = crate::box_projects::Deploy::Done("drive is running".into());
+    h.bv().projects.deploy = crate::box_projects::Deploy::Done("drive deployed.".into());
     h.wait(0.1);
     assert!(!h.bv().agent_pending);
-    assert!(h.app.chrome.rect("agent deploy pending").is_none());
 }
 
 /// Nick 2026-11-24: File › New project makes the project with a program
@@ -5306,12 +5468,10 @@ fn file_new_project_opens_a_saved_starter_program() {
     // also be cleared and the state reset").
     h.bv().instruct.draft = "make the lamp blink".into();
     h.bv().projects.deploy = crate::box_projects::Deploy::Failed("the last one's".into());
-    h.bv().devices_ui.add_note = Some("Scan and add: added rio.".into());
     new_project(&mut h, "fresh");
     h.wait(0.1);
     assert_eq!(h.bv().instruct.draft, "", "the Agent starts empty");
     assert_eq!(h.bv().projects.deploy, crate::box_projects::Deploy::Idle);
-    assert_eq!(h.bv().devices_ui.add_note, None);
     assert_eq!(
         h.bv().waiting(),
         "fresh has not run yet. Deploy it to see it here.",
@@ -5766,4 +5926,104 @@ fn a_deploy_under_way_shows_a_spinner_and_its_stage_beside_deploy() {
     h.wait(0.1);
     assert!(h.app.chrome.rect("agent deploying").is_none(), "it ended");
     assert_eq!(Deploy::Deploying.stage(false), Some("Deploying…"), "to a box");
+}
+
+// ---- Space on a box asks first (Nick, 2026-11-26; docs/help/keyboard.md) ----
+
+/// Space down and up with nothing else in between.
+fn space(h: &mut Harness) {
+    h.key(egui::Key::Space);
+    h.wait(0.2);
+}
+
+/// What the page asked the box's modules to do, by method and URL (the
+/// page's own desk, `PUT /api/desk`, is no command).
+fn writes(h: &mut Harness) -> Vec<(&'static str, String)> {
+    h.sent()
+        .into_iter()
+        .filter(|q| q.method != "GET" && q.url.starts_with("/api/modules"))
+        .map(|q| (q.method, q.url))
+        .collect()
+}
+
+#[test]
+fn space_on_a_box_asks_stop_the_machine_naming_its_programs_and_esc_sends_nothing() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = drawn(&b, &jar);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.3);
+    let _ = writes(&mut h);
+    space(&mut h);
+    assert!(h.drew("Stop the machine?"), "Space asks before it stops anything");
+    assert!(h.drew("conveyor"), "the question names the programs");
+    assert_eq!(writes(&mut h), [], "nothing sent while it asks");
+    h.key(egui::Key::Escape);
+    h.wait(0.2);
+    assert!(!h.drew("Stop the machine?"), "Esc cancels");
+    assert_eq!(writes(&mut h), [], "and sends nothing");
+    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
+}
+
+#[test]
+fn space_on_a_box_then_enter_stops_it_and_space_again_asks_to_start_it() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = drawn(&b, &jar);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.3);
+    let _ = writes(&mut h);
+    space(&mut h);
+    assert!(h.drew("Stop the machine?"));
+    h.key(egui::Key::Enter);
+    h.wait(0.2);
+    let reqs = h.sent();
+    let w: Vec<_> = reqs
+        .iter()
+        .filter(|q| q.method != "GET" && q.url.starts_with("/api/modules"))
+        .map(|q| (q.method, q.url.clone()))
+        .collect();
+    assert_eq!(
+        w,
+        [("POST", "/api/modules/conveyor/stop".to_string())],
+        "Enter confirms: the box's audited stop"
+    );
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    wait("the box reports it stopped", || {
+        b.json("/api/modules/conveyor")["status"]["state"] == "stopped"
+    });
+    let t = h.time;
+    wait("the page sees it stopped", || {
+        values(&b, h.app.boxv.as_mut().unwrap(), t);
+        h.app.boxv.as_ref().unwrap().state.modules[0].state == "stopped"
+    });
+    h.wait(0.3);
+    space(&mut h);
+    assert!(h.drew("Start the machine?"), "stopped, Space asks to start it");
+    // Space confirms too.
+    space(&mut h);
+    let w = writes(&mut h);
+    assert_eq!(w, [("POST", "/api/modules/conveyor/run".to_string())], "{w:?}");
+}
+
+#[test]
+fn space_on_a_box_does_nothing_for_someone_who_may_not_stop_it() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = page(&b, &jar, Some(("bob", BOB)));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.3);
+    let _ = writes(&mut h);
+    space(&mut h);
+    h.key(egui::Key::Enter);
+    h.wait(0.2);
+    assert!(!h.drew("Stop the machine?"), "an operator is not asked");
+    assert_eq!(writes(&mut h), [], "and nothing is sent");
+    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
 }

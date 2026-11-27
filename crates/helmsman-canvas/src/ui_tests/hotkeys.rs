@@ -1,7 +1,9 @@
 //! Help › Show hotkeys (a superscript over every control that has a
-//! shortcut) and the one plain letter every view has (E M P D S I V F A T),
-//! which a text field takes first. Driven the way a visitor does: the Help
-//! menu, the keyboard, the pointer.
+//! shortcut) and the plain keys (Nick, 2026-11-26): E M P, A the Agent tab,
+//! C Code, D Devices, I I/O, F Files, H the Describe history, L the Log,
+//! T the Trend, Z fit, ? Help, Space run or stop; a text field takes them
+//! first. Driven the way a visitor does: the Help menu, the keyboard, the
+//! pointer.
 
 // The asserts carry a message saying what was expected; assert_eq! on a
 // whole list would drown it.
@@ -50,18 +52,20 @@ fn down(modifiers: Modifiers, key: Key) -> Event {
     }
 }
 
-/// Every view's letter, with the pane or flag it opens.
-const LETTERS: [(Key, &str); 10] = [
+/// Every plain letter the page takes (docs/help/keyboard.md).
+const LETTERS: [(Key, &str); 12] = [
     (Key::E, "E"),
     (Key::M, "M"),
     (Key::P, "P"),
-    (Key::D, "D"),
-    (Key::S, "S"),
-    (Key::I, "I"),
-    (Key::V, "V"),
-    (Key::F, "F"),
     (Key::A, "A"),
+    (Key::C, "C"),
+    (Key::D, "D"),
+    (Key::I, "I"),
+    (Key::F, "F"),
+    (Key::H, "H"),
+    (Key::L, "L"),
     (Key::T, "T"),
+    (Key::Z, "Z"),
 ];
 
 /// What the chrome and the screen are, for "nothing changed".
@@ -224,10 +228,10 @@ fn a_tab_wears_the_letter_its_key_has() {
     h.messages();
     for (hit, action, text) in [
         ("pane files", Action::Files, "F"),
-        ("pane devices", Action::Devices, "V"),
-        ("pane code", Action::St, "S"),
-        ("tab claude", Action::Describe, "D"),
-        ("messages fold", Action::Messages, "A"),
+        ("pane devices", Action::Devices, "D"),
+        ("pane code", Action::St, "C"),
+        ("tab claude", Action::Describe, "A"),
+        ("bottom messages", Action::Messages, "L"),
     ] {
         // A tab on either side of the page has its own hit name.
         let r = if h.has(hit) {
@@ -304,10 +308,10 @@ fn on_a_box_run_and_restart_show_no_key_but_save_and_the_tabs_do() {
 #[test]
 fn each_pane_letter_switches_to_that_tab_from_another() {
     for (key, pane, from) in [
-        (Key::D, Pane::Claude, Pane::Files),
-        (Key::S, Pane::Code, Pane::Files),
+        (Key::A, Pane::Claude, Pane::Files),
+        (Key::C, Pane::Code, Pane::Files),
         (Key::I, Pane::Io, Pane::Files),
-        (Key::V, Pane::Devices, Pane::Files),
+        (Key::D, Pane::Devices, Pane::Files),
         (Key::F, Pane::Files, Pane::Code),
     ] {
         let mut h = Harness::new(App::sim());
@@ -325,11 +329,11 @@ fn each_pane_letter_switches_to_that_tab_from_another() {
 #[test]
 fn a_letter_does_what_a_click_on_its_tab_does() {
     for (key, hit, target) in [
-        (Key::D, "tab claude", Some(Pane::Claude)),
-        (Key::S, "pane code", Some(Pane::Code)),
-        (Key::V, "pane devices", Some(Pane::Devices)),
+        (Key::A, "tab claude", Some(Pane::Claude)),
+        (Key::C, "pane code", Some(Pane::Code)),
+        (Key::D, "pane devices", Some(Pane::Devices)),
         (Key::F, "pane files", Some(Pane::Files)),
-        (Key::A, "messages fold", None),
+        (Key::L, "bottom messages", None),
     ] {
         // From the tab already shown a click keeps it and a key toggles it
         // (as the Alt+Shift chords do): compared only from another tab.
@@ -340,7 +344,10 @@ fn a_letter_does_what_a_click_on_its_tab_does() {
             let (mut k, mut c) = (Harness::new(App::sim()), Harness::new(App::sim()));
             for h in [&mut k, &mut c] {
                 h.app.chrome.show(start);
-                h.app.chrome.msgs = target.is_some();
+                // The bottom panel open on the Trend: L and a click on
+                // its Log tab both bring the Log up.
+                h.app.chrome.trend = true;
+                h.app.chrome.msgs = false;
                 h.wait(0.3);
             }
             let hit = if c.has(hit) { hit } else { "pane claude" };
@@ -358,19 +365,38 @@ fn a_letter_does_what_a_click_on_its_tab_does() {
 }
 
 #[test]
-fn a_and_t_toggle_the_messages_and_the_trend() {
+/// Nick, 2026-11-26: the Log (the Messages, renamed where a user reads
+/// it) and the Trend are the two tabs of the bottom panel (`chrome.trend`:
+/// the panel is open; `chrome.msgs`: it shows the Log). L and T each open
+/// the panel on their tab, or shut it when their tab is the one showing.
+fn l_and_t_toggle_the_log_and_the_trend() {
     let mut h = Harness::new(App::sim());
     h.app.chrome.msgs = false;
     h.app.chrome.trend = false;
     h.wait(0.2);
-    h.key(Modifiers::NONE, Key::A);
-    assert!(h.app.chrome.msgs && !h.app.chrome.trend);
-    h.key(Modifiers::NONE, Key::A);
-    assert!(!h.app.chrome.msgs);
+    let open = |h: &Harness| (h.app.chrome.trend, h.app.chrome.msgs);
+    h.key(Modifiers::NONE, Key::L);
+    assert_eq!(open(&h), (true, true), "L opens the shut panel on the Log");
+    h.key(Modifiers::NONE, Key::L);
+    assert!(!h.app.chrome.trend, "L again shuts it");
     h.key(Modifiers::NONE, Key::T);
-    assert!(h.app.chrome.trend && !h.app.chrome.msgs);
+    assert_eq!(open(&h), (true, false), "T opens the shut panel on the Trend");
+    h.key(Modifiers::NONE, Key::L);
+    assert_eq!(open(&h), (true, true), "L over the Trend shows the Log");
     h.key(Modifiers::NONE, Key::T);
-    assert!(!h.app.chrome.trend);
+    assert_eq!(open(&h), (true, false), "T over the Log shows the Trend");
+    h.key(Modifiers::NONE, Key::T);
+    assert!(!h.app.chrome.trend, "T again shuts it");
+    // What the keys did is what the panel draws, the tab named Log.
+    h.key(Modifiers::NONE, Key::L);
+    h.wait(0.2);
+    assert!(h.has("bottom trend") && h.has("bottom messages"));
+    // The tab is a glyph: its tooltip names it the Log.
+    let at = h.rect("bottom messages").center();
+    h.frame(vec![Event::PointerMoved(at)]);
+    h.wait(1.5);
+    assert!(h.drew("Log"), "the tab's tooltip says Log");
+    assert!(!h.drew("Messages"), "no Messages left where a user reads");
 }
 
 #[test]
@@ -549,30 +575,53 @@ fn a_letter_with_ctrl_cmd_alt_or_shift_switches_nothing() {
 }
 
 #[test]
-fn over_the_diagram_w_a_s_d_e_q_stay_its_own_but_the_other_letters_work() {
+/// Nick, 2026-11-26: over the diagram only . and , are its own (they
+/// jump along it); every view letter works there as anywhere else, the
+/// old pan and jump keys W A S D E Q among them.
+fn over_the_diagram_only_period_and_comma_stay_its_own_and_every_letter_works() {
     let mut h = Harness::new(App::sim());
     h.app.chrome.show(Pane::Code);
+    h.app.chrome.trend = true;
+    h.app.chrome.msgs = false;
     h.wait(0.3);
     let d = h.app.chrome.diagram;
     assert!(d.is_positive());
     h.frame(vec![Event::PointerMoved(d.center())]);
     h.frame(vec![]);
     let before = state(&h);
-    for key in [Key::D, Key::S, Key::E, Key::A] {
-        h.key(Modifiers::NONE, key);
-        assert_eq!(state(&h), before, "{key:?} over the diagram is the diagram's");
-    }
+    let pick = |h: &Harness| super::sim_view(h).pick;
+    assert_eq!(pick(&h), None);
+    h.key(Modifiers::NONE, Key::Period);
+    h.wait(0.5);
+    assert!(pick(&h).is_some(), ". over the diagram jumps to a stop");
+    h.key(Modifiers::NONE, Key::Comma);
+    h.wait(0.5);
+    assert!(pick(&h).is_some(), ", over the diagram jumps to a stop");
+    assert_eq!(state(&h), before, ". and , switch no view");
+    h.key(Modifiers::NONE, Key::D);
+    assert!(h.app.chrome.showing(Pane::Devices), "D works over the diagram");
+    h.key(Modifiers::NONE, Key::C);
+    assert!(h.app.chrome.showing(Pane::Code), "C works over the diagram");
+    h.key(Modifiers::NONE, Key::L);
+    assert!(
+        h.app.chrome.trend && h.app.chrome.msgs,
+        "L works over the diagram"
+    );
+    h.key(Modifiers::NONE, Key::T);
+    assert!(
+        h.app.chrome.trend && !h.app.chrome.msgs,
+        "T works over the diagram"
+    );
     h.key(Modifiers::NONE, Key::F);
     assert!(h.app.chrome.showing(Pane::Files), "F works over the diagram");
-    let trend = h.app.chrome.trend;
-    h.key(Modifiers::NONE, Key::T);
-    assert_ne!(h.app.chrome.trend, trend, "T works over the diagram");
-    // Off the diagram, D is Describe again.
-    let side = h.rect("left");
-    h.frame(vec![Event::PointerMoved(side.center())]);
+    h.frame(vec![Event::PointerMoved(h.app.chrome.diagram.center())]);
     h.frame(vec![]);
-    h.key(Modifiers::NONE, Key::D);
-    assert!(h.app.chrome.showing(Pane::Claude));
+    h.key(Modifiers::NONE, Key::E);
+    assert_eq!(
+        h.app.screen,
+        Screen::Monitor,
+        "E works over the diagram (on the Editor it flips to the Monitor)"
+    );
 }
 
 #[test]
@@ -587,10 +636,10 @@ fn the_old_alt_shift_chords_still_switch() {
 #[test]
 fn the_letter_of_the_tab_already_showing_keeps_it_as_a_click_does() {
     for (key, pane) in [
-        (Key::D, Pane::Claude),
-        (Key::S, Pane::Code),
+        (Key::A, Pane::Claude),
+        (Key::C, Pane::Code),
         (Key::I, Pane::Io),
-        (Key::V, Pane::Devices),
+        (Key::D, Pane::Devices),
         (Key::F, Pane::Files),
     ] {
         let mut h = Harness::new(App::sim());
@@ -606,13 +655,191 @@ fn the_letter_of_the_tab_already_showing_keeps_it_as_a_click_does() {
             "{key:?} on the tab already showing changed something"
         );
     }
-    // Messages and the Trend are not tabs of the pane: their letters toggle.
+    // The Log and the Trend are the bottom panel's tabs: the letter of
+    // the one showing shuts the panel, and brings it back on that tab.
+    for (key, msgs) in [(Key::L, true), (Key::T, false)] {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.trend = true;
+        h.app.chrome.msgs = msgs;
+        h.wait(0.2);
+        h.key(Modifiers::NONE, key);
+        assert!(!h.app.chrome.trend, "{key:?} on its own tab shuts the panel");
+        h.key(Modifiers::NONE, key);
+        assert_eq!((h.app.chrome.trend, h.app.chrome.msgs), (true, msgs), "{key:?}");
+    }
+}
+
+// ---- Space, Z, H and A (Nick, 2026-11-26) ---------------------------------
+
+fn space(pressed: bool) -> Event {
+    Event::Key {
+        key: Key::Space,
+        physical_key: None,
+        pressed,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+fn running(h: &Harness) -> bool {
+    h.app.sim.as_ref().unwrap().session.running
+}
+
+#[test]
+fn space_runs_and_stops_the_simulation_when_it_is_let_go() {
+    let mut h = Harness::code();
+    h.wait(0.3);
+    assert!(running(&h), "the page opens running");
+    h.frame(vec![space(true)]);
+    h.wait(0.3);
+    assert!(running(&h), "held, nothing yet: Space acts on release");
+    h.frame(vec![space(false)]);
+    h.wait(0.1);
+    assert!(!running(&h), "released: stopped");
+    assert!(!h.drew("Stop the machine?"), "the simulation does not ask");
+    h.frame(vec![space(true)]);
+    h.frame(vec![space(false)]);
+    h.wait(0.1);
+    assert!(running(&h), "again: running");
+    // A held key's repeats are one press.
+    h.frame(vec![space(true)]);
+    for _ in 0..5 {
+        h.frame(vec![Event::Key {
+            key: Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: Modifiers::NONE,
+        }]);
+    }
+    h.frame(vec![space(false)]);
+    h.wait(0.1);
+    assert!(!running(&h), "one stop for one press, however long held");
+}
+
+#[test]
+fn space_held_through_a_drag_pans_the_diagram_and_neither_runs_nor_stops() {
+    let mut h = Harness::code();
+    h.wait(0.3);
+    let d = h.app.chrome.diagram;
+    let cam = |h: &Harness| {
+        let v = super::sim_view(h);
+        v.cams[v.scope].offset
+    };
+    let before = cam(&h);
+    let (from, to) = (d.center(), d.center() + eframe::egui::vec2(-120.0, 60.0));
+    h.frame(vec![Event::PointerMoved(from)]);
+    h.frame(vec![space(true)]);
+    h.frame(vec![Harness::button(from, true)]);
+    for k in 1..=8 {
+        #[allow(clippy::cast_precision_loss)]
+        h.frame(vec![Event::PointerMoved(from.lerp(to, k as f32 / 8.0))]);
+    }
+    h.frame(vec![Harness::button(to, false)]);
+    h.frame(vec![space(false)]);
+    h.wait(0.2);
+    assert!(running(&h), "a pointer went down while Space was held: no stop");
+    assert!(
+        (cam(&h) - before).length() > 20.0,
+        "Space and a drag pans: {before:?} -> {:?}",
+        cam(&h)
+    );
+    // And the next plain Space acts again.
+    h.frame(vec![space(true)]);
+    h.frame(vec![space(false)]);
+    h.wait(0.1);
+    assert!(!running(&h));
+}
+
+#[test]
+fn space_typed_into_a_field_is_a_space_and_runs_nothing() {
     let mut h = Harness::new(App::sim());
-    let (m, t) = (h.app.chrome.msgs, h.app.chrome.trend);
+    h.app.chrome.show(Pane::Claude);
+    h.wait(0.3);
+    h.click(h.rect("agent instruction").center());
+    h.frame(vec![]);
+    assert!(h.ctx.egui_wants_keyboard_input());
+    let was = running(&h);
+    h.frame(vec![Event::Text("lamp".into())]);
+    h.frame(vec![space(true), Event::Text(" ".into())]);
+    h.frame(vec![space(false)]);
+    h.frame(vec![Event::Text("on".into())]);
+    h.wait(0.1);
+    assert_eq!(running(&h), was, "Space in the field runs and stops nothing");
+    assert_eq!(
+        h.app.sim.as_ref().unwrap().instruct.draft,
+        "lamp on",
+        "it typed a space"
+    );
+}
+
+#[test]
+fn z_fits_the_whole_diagram_or_the_selected_blocks() {
+    let mut h = Harness::code();
+    h.wait(0.5);
+    let cam = |h: &Harness| {
+        let v = super::sim_view(h);
+        v.cams[v.scope]
+    };
+    let fitted = cam(&h);
+    // Zoomed in and moved off: Z brings the whole diagram back.
+    let d = h.app.chrome.diagram;
+    h.frame(vec![Event::PointerMoved(d.center())]);
+    for _ in 0..8 {
+        h.frame(vec![Event::PointerMoved(d.center()), Event::Zoom(1.15)]);
+    }
+    h.wait(0.3);
+    assert!(cam(&h).zoom > fitted.zoom * 1.5, "zoomed in");
+    let before = state(&h);
+    h.key(Modifiers::NONE, Key::Z);
+    h.wait(1.0);
+    assert!(
+        (cam(&h).zoom / fitted.zoom - 1.0).abs() < 0.05 && (cam(&h).offset - fitted.offset).length() < 8.0,
+        "Z fits as the page opened: {fitted:?} vs {:?}",
+        cam(&h)
+    );
+    assert_eq!(state(&h), before, "Z switches no view");
+    // With one block selected: the view frames it, centred.
+    let sel = {
+        let v = super::sim_view(&h);
+        v.diagram().nodes[0].id
+    };
+    h.app
+        .sim
+        .as_mut()
+        .unwrap()
+        .viewer
+        .as_mut()
+        .unwrap()
+        .select([sel], false);
+    h.frame(vec![]);
+    h.key(Modifiers::NONE, Key::Z);
+    h.wait(1.0);
+    let r = super::sim_view(&h).block_on_screen(sel).expect("drawn");
+    let d = h.app.chrome.diagram;
+    assert!(d.contains_rect(r), "the selected block in view: {r:?} in {d:?}");
+    assert!(
+        (r.center() - d.center()).length() < 0.15 * d.width(),
+        "centred: {r:?} in {d:?}"
+    );
+    assert!(cam(&h).zoom > fitted.zoom, "framed larger than the whole diagram");
+}
+
+#[test]
+fn a_opens_the_agent_tab_with_its_field_ready_to_type_in() {
+    let mut h = Harness::new(App::sim());
+    h.app.chrome.show(Pane::Files);
+    h.wait(0.3);
     h.key(Modifiers::NONE, Key::A);
-    h.key(Modifiers::NONE, Key::T);
-    assert_eq!((h.app.chrome.msgs, h.app.chrome.trend), (!m, !t));
-    h.key(Modifiers::NONE, Key::A);
-    h.key(Modifiers::NONE, Key::T);
-    assert_eq!((h.app.chrome.msgs, h.app.chrome.trend), (m, t));
+    h.wait(0.2);
+    assert!(h.app.chrome.showing(Pane::Claude), "the Agent tab");
+    assert!(h.ctx.egui_wants_keyboard_input(), "the field has the keyboard");
+    // The next letters are typed, not keys.
+    h.frame(vec![Event::Text("dim it".into())]);
+    h.wait(0.1);
+    assert_eq!(h.app.sim.as_ref().unwrap().instruct.draft, "dim it");
+    assert!(
+        h.app.chrome.showing(Pane::Claude),
+        "D typed into it switched nothing"
+    );
 }

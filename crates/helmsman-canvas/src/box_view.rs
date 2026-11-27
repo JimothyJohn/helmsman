@@ -44,6 +44,7 @@ struct BoxSeen {
     fault: Option<String>,
     notice: Option<String>,
     warned: Option<String>,
+    flash: Option<f64>,
 }
 
 // Each flag is its own fact (the node's token, watching a node, the
@@ -171,6 +172,9 @@ pub struct BoxView {
     /// The revision Back and Forward (the Agent tab, the Code tab) last
     /// showed; `None`: the newest.
     history_at: Option<u32>,
+    /// The version the Code tab is stepped to (read-only); `None`: the
+    /// live file.
+    code_at: Option<u32>,
 }
 
 impl Default for BoxView {
@@ -295,9 +299,8 @@ impl BoxView {
         self.instruct = crate::instruct::Instruct::default();
         self.agent_pending = false;
         self.projects.deploy = Deploy::Idle;
-        self.devices_ui.add_note = None;
-        self.devices_ui.ask_note = None;
         self.history_at = None;
+        self.code_at = None;
         self.fresh = Some(name);
     }
 
@@ -452,6 +455,7 @@ impl BoxView {
             agent_pending: false,
             fresh: None,
             history_at: None,
+            code_at: None,
         }
     }
 
@@ -508,7 +512,6 @@ impl BoxView {
                     let found = crate::devices::hosts(&self.devices_ui.found);
                     self.projects.scanned(found);
                 }
-                PCall::Ask(address) => self.devices_ui.asked(&address, a.status, &a.body),
                 PCall::Library => self.devices_ui.library_answer(a.status, &a.body),
                 PCall::Wired(wired) => self.devices_ui.wired_answer(&wired, a.status, &a.body),
                 PCall::Wiring(device) => self.devices_ui.wiring_answer(&device, a.status, &a.body),
@@ -766,7 +769,8 @@ impl BoxView {
         if let Err(why) = self.writable() {
             return Some(why);
         }
-        if !self.agent.status.can_send() {
+        if !self.agent.status.can_send() || matches!(self.agent.status, crate::box_agent::Status::Offline(_))
+        {
             return Some(self.agent.status.line());
         }
         if self.agent_files().is_none() {
@@ -861,6 +865,7 @@ impl BoxView {
         });
         match started {
             Some(Ok(ask)) => {
+                self.history_at = None;
                 let message = format!("{}\n\n{}", crate::instruct::BOX_RULES, ask.message);
                 self.agent_send(&message, true, ctx);
             }
@@ -1543,7 +1548,47 @@ impl BoxView {
         }
     }
 
-    /// Help mode's Ask: the question and the page's Messages to the box.
+    /// The Help tab: the question, Ask or Stop, the answer. Its own
+    /// conversation, apart from the Describe tab's (Nick, 2026-11-26).
+    fn help_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        // Where the diagram's selection is being used: a click here keeps it.
+        chrome.hit("help tab", ui.clip_rect());
+        let ctx = ui.ctx().clone();
+        let view = crate::help::View {
+            blocked: self.help_blocked(),
+        };
+        let act = egui::ScrollArea::vertical()
+            .id_salt("box-help")
+            .show(ui, |ui| {
+                // Room for the scroll bar (a resizable panel grows to any
+                // row that overflows it).
+                ui.set_max_width(ui.available_width() - 12.0);
+                crate::help::ui(ui, chrome, &mut self.help, &view)
+            })
+            .inner;
+        match act {
+            Some(crate::help::Act::Ask) => self.ask_help(&ctx),
+            Some(crate::help::Act::Stop) => {
+                #[cfg(target_arch = "wasm32")]
+                self.help_http.abort();
+                if let Some(h) = self.help.helping.as_mut() {
+                    h.stop();
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// A click on an error (`chrome.help_ask`): the Help tab shown and
+    /// asked about it, with the page's Messages. Signed out, the tab
+    /// shows the question and says to sign in.
+    fn help_about(&mut self, error: &str, ctx: &egui::Context, chrome: &mut Chrome) {
+        self.help.draft = crate::messages::help_question(error);
+        chrome.show(crate::editor::Pane::Help);
+        self.ask_help(ctx);
+    }
+
+    /// The Help tab's Ask: the question and the page's Messages to the box.
     pub fn ask_help(&mut self, ctx: &egui::Context) {
         if self.help_blocked().is_some() || crate::help::refusal(&self.help.draft).is_some() {
             return;
@@ -1636,18 +1681,14 @@ impl BoxView {
         match chip {
             Some(c) => {
                 self.instruct.add_chip(c);
-                self.help.mode = crate::help::Mode::Code;
                 chrome.show(crate::editor::Pane::Claude);
             }
             None => self.projects.note(missing, true),
         }
     }
 
-    /// The Agent tab: its heading (the agent's state as a dot, the mode's
-    /// name, the mode toggle), then the shared tab (changing the program)
-    /// or Help.
+    /// The Describe tab: the shared tab (changing the program).
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        use crate::help::Mode;
         use crate::instruct::Act;
         // Where the diagram's selection is being used: a click here keeps it.
         chrome.hit("agent tab", ui.clip_rect());
@@ -1664,7 +1705,7 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
             decided: self.decided.clone(),
-            steps: self.revision_steps(),
+            steps: self.exchange_steps(),
             room_below: None,
             progress: None,
             // The question card is the page's for now (TODO.md
@@ -1674,44 +1715,28 @@ impl BoxView {
             io: None,
             versions: self.versions(),
         };
-        let help_view = crate::help::View {
-            blocked: self.help_blocked(),
-        };
         let design_off = self.design_blocked();
         let mut design_act = None;
         let deploy_state = self.agent_deploy();
         let mut deploy_go = false;
-        let (act, help_act) = egui::ScrollArea::vertical()
+        let act = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
                 // Room for the scroll bar (a resizable panel grows to any
                 // row that overflows it).
                 ui.set_max_width(ui.available_width() - 12.0);
-                crate::help::heading(
-                    ui,
-                    chrome,
-                    &mut self.help.mode,
-                    self.agent.status.dot(),
-                    &self.agent.status.line(),
-                );
-                ui.add_space(4.0);
-                match self.help.mode {
-                    Mode::Code => {
-                        let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
-                        deploy_go = deploy_row(ui, chrome, &deploy_state);
-                        let view = crate::design_ui::EntryView {
-                            now: ctx.input(|i| i.time),
-                            blocked: design_off.clone(),
-                            keep_blocked: self.writable().err(),
-                            kept: self.kept_design(),
-                        };
-                        if let Some(a) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
-                            design_act = Some(a);
-                        }
-                        (act, None)
-                    }
-                    Mode::Help => (None, crate::help::ui(ui, chrome, &mut self.help, &help_view)),
+                let act = crate::instruct::ui(ui, chrome, &mut self.instruct, &view);
+                deploy_go = deploy_row(ui, chrome, &deploy_state);
+                let view = crate::design_ui::EntryView {
+                    now: ctx.input(|i| i.time),
+                    blocked: design_off.clone(),
+                    keep_blocked: self.writable().err(),
+                    kept: self.kept_design(),
+                };
+                if let Some(a) = crate::design_ui::entry_ui(ui, chrome, &mut self.design, &view) {
+                    design_act = Some(a);
                 }
+                act
             })
             .inner;
         if deploy_go {
@@ -1719,17 +1744,6 @@ impl BoxView {
         }
         if let Some(a) = design_act {
             self.design_act(a, &ctx);
-        }
-        match help_act {
-            Some(crate::help::Act::Ask) => self.ask_help(&ctx),
-            Some(crate::help::Act::Stop) => {
-                #[cfg(target_arch = "wasm32")]
-                self.help_http.abort();
-                if let Some(h) = self.help.helping.as_mut() {
-                    h.stop();
-                }
-            }
-            None => {}
         }
         match act {
             Some(Act::Send) => self.send_instruction(&ctx),
@@ -1739,7 +1753,8 @@ impl BoxView {
             // A box's change goes through a deploy: no arrows here.
             // A box never plans in steps (`steps` is the page's).
             Some(Act::Offer(k)) => self.take_offer(k, &ctx),
-            Some(Act::Revision(n) | Act::Details(n)) => self.show_revision(n),
+            Some(Act::Revision(n)) => self.step_to(n),
+            Some(Act::Details(n)) => self.show_revision(n),
             Some(Act::RunSteps | Act::Answer(_) | Act::Split | Act::OneGo) | None => {}
         }
     }
@@ -1748,28 +1763,137 @@ impl BoxView {
     /// it to 2 places: agent so that you can easily move anywhere in the
     /// history to see the prompt and output as well as in the code tab so
     /// you can do the same thing but with all of the code"): Back and
-    /// Forward from the revision last shown, the newest at first.
+    /// Forward through the versions, the Code tab showing each one's code
+    /// in place and read-only (Nick, 2026-11-26: the same arrows and i as
+    /// the Agent tab); Forward past the newest is the live file.
     fn revision_steps(&self) -> Option<crate::instruct::Steps> {
         let revs = &self.projects.history;
-        let k = match self.history_at {
-            Some(n) => revs.iter().position(|r| r.n == n)?,
-            None => revs.len().checked_sub(1)?,
+        let last = revs.len().checked_sub(1)?;
+        let at = self.code_at.and_then(|n| revs.iter().position(|r| r.n == n));
+        // From the live file Back goes to the newest version, or the one
+        // before it when the file is as that version left it.
+        let back = match at {
+            Some(k) => k.checked_sub(1),
+            None if self.projects.dirty() => Some(last),
+            None => last.checked_sub(1),
         };
         let tip = |j: usize, way: &str| {
             revs.get(j).map(|r| {
                 (
                     r.n,
                     format!(
-                        "{way}: shows revision {}, {}: its instruction, the answer and the code.",
+                        "{way}: shows the code of version {}, {}. Nothing is changed.",
                         r.n, r.what
                     ),
                 )
             })
         };
+        let forward = at.map(|k| {
+            tip(k + 1, "Forward").unwrap_or_else(|| {
+                (
+                    crate::instruct::LIVE,
+                    "Forward: back to the file as you left it.".to_string(),
+                )
+            })
+        });
         Some(crate::instruct::Steps {
-            back: k.checked_sub(1).and_then(|j| tip(j, "Back")),
-            forward: tip(k + 1, "Forward"),
+            back: back.and_then(|j| tip(j, "Back")),
+            forward,
+            shown: at.map(|k| revs[k].n),
         })
+    }
+
+    /// The Code tab at version `n` (read from the box, no window), or at
+    /// the live file for [`crate::instruct::LIVE`].
+    fn code_step(&mut self, n: u32) {
+        if n == crate::instruct::LIVE {
+            self.code_at = None;
+            self.projects.stepped = None;
+            return;
+        }
+        let Some(name) = self.projects.open.as_ref().map(|o| o.name.clone()) else {
+            return;
+        };
+        self.code_at = Some(n);
+        self.projects.peek_revision(&name, n);
+    }
+
+    /// The Agent tab's arrows: through the revisions that carry an
+    /// exchange, newest last; past the newest the tab is live again.
+    /// `None` while an answer is under way and while there is no exchange.
+    fn exchange_steps(&self) -> Option<crate::instruct::Steps> {
+        let ex: Vec<&crate::history_ui::RevisionRow> =
+            self.projects.history.iter().filter(|r| r.page).collect();
+        // An edit of your own puts the arrows away while you are on the
+        // live file (docs/help/agent.md): a step would replace it.
+        let own_edit = self.history_at.is_none() && self.projects.dirty();
+        if ex.is_empty() || self.instruct.busy() || own_edit {
+            return None;
+        }
+        let k = self.history_at.and_then(|n| ex.iter().position(|r| r.n == n));
+        let tip = |r: &crate::history_ui::RevisionRow, way: &str| {
+            (
+                r.n,
+                format!(
+                    "{way}: the instruction and the answer of revision {}, {}.",
+                    r.n, r.what
+                ),
+            )
+        };
+        let back = match k {
+            Some(0) => None,
+            Some(j) => Some(tip(ex[j - 1], "Back")),
+            None => Some(tip(ex[ex.len() - 1], "Back")),
+        };
+        let forward = k.map(|j| {
+            ex.get(j + 1).map_or_else(
+                || {
+                    (
+                        crate::instruct::LIVE,
+                        "Forward: back to the box as you left it.".to_string(),
+                    )
+                },
+                |r| tip(r, "Forward"),
+            )
+        });
+        Some(crate::instruct::Steps {
+            back,
+            forward,
+            shown: k.map(|j| ex[j].n),
+        })
+    }
+
+    /// The Agent tab at revision `n`: its instruction in the box and its
+    /// answer under it, as when it was sent ([`crate::instruct::Instruct::show_step`]); the
+    /// page was read with the history. [`crate::instruct::LIVE`] is the
+    /// tab as the engineer left it. Nothing on the box changes.
+    fn step_to(&mut self, n: u32) {
+        if n == crate::instruct::LIVE {
+            self.history_at = None;
+            self.instruct.leave_steps();
+            return;
+        }
+        let Some(what) = self
+            .projects
+            .history
+            .iter()
+            .find(|r| r.n == n)
+            .map(|r| r.what.clone())
+        else {
+            return;
+        };
+        self.history_at = Some(n);
+        let page = self.projects.pages.get(&n).cloned();
+        self.instruct.show_step(page.as_deref(), &what);
+    }
+
+    /// H: into the Agent tab's history, at the newest exchange.
+    pub fn open_history(&mut self) {
+        if self.history_at.is_none()
+            && let Some((n, _)) = self.exchange_steps().and_then(|s| s.back)
+        {
+            self.step_to(n);
+        }
     }
 
     /// The project's versions for the clock's list, in the Agent tab and
@@ -1778,7 +1902,8 @@ impl BoxView {
         (!self.projects.history.is_empty()).then(|| crate::instruct::Versions {
             rows: self.projects.history.clone(),
             at: self
-                .history_at
+                .code_at
+                .or(self.history_at)
                 .or_else(|| self.projects.history.last().map(|r| r.n)),
         })
     }
@@ -1923,10 +2048,8 @@ impl BoxView {
         }
         if self.projects.deploy != self.seen.deploy {
             match &self.projects.deploy {
-                Deploy::Done(what) => {
-                    self.agent_pending = false;
-                    self.log.info(now, format!("Deployed: {what}"));
-                }
+                // The flash below logs it.
+                Deploy::Done(_) => self.agent_pending = false,
                 Deploy::Failed(why) => self.log.error(now, format!("Deploy failed: {why}")),
                 _ => {}
             }
@@ -1946,6 +2069,13 @@ impl BoxView {
             }
             self.seen.fault = fault;
         }
+        let flash = self.projects.flash.as_ref().map(|f| f.at);
+        if flash != self.seen.flash {
+            if let Some(f) = &self.projects.flash {
+                self.log.info(now, f.line.clone());
+            }
+            self.seen.flash = flash;
+        }
         let notice = self.projects.notice.as_ref().map(|(n, _)| n.clone());
         if notice != self.seen.notice {
             if let Some((n, error)) = &self.projects.notice {
@@ -1957,6 +2087,24 @@ impl BoxView {
             }
             self.seen.notice = notice;
         }
+    }
+
+    /// Whether Edit › Edit map… is on: the box reports a Skipper's I/O
+    /// map, with or without projects, whether or not the Devices tab has
+    /// been drawn.
+    #[must_use]
+    pub const fn can_edit_map(&self) -> bool {
+        self.state.io_map_node
+    }
+
+    /// Edit › Edit map…: the Skipper's I/O map in its window.
+    pub fn edit_map(&mut self) {
+        self.devices_ui.node_map.set_context(
+            self.state.io_map_node,
+            self.session.is_some(),
+            self.state.io_map.as_deref(),
+        );
+        self.devices_ui.node_map.open_window();
     }
 
     /// One frame of the Editor.
@@ -1985,6 +2133,9 @@ impl BoxView {
         self.vendor_file(&ui.ctx().clone());
         self.design_windows(&ui.ctx().clone(), chrome);
         if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
+            self.apply_wiring(&w);
+        }
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.named_ui(&ui.ctx().clone(), chrome) {
             self.apply_wiring(&w);
         }
         if let Some(crate::devices::DeviceAct::Quick(q)) = self.devices_ui.quick_ui(&ui.ctx().clone(), chrome)
@@ -2487,7 +2638,7 @@ impl BoxView {
         let retry = |at: f64| (at - now).max(0.0).ceil();
         match self.state.link() {
             Link::Connecting => ("● connecting…".into(), t.muted),
-            Link::Connected => ("● connected".into(), t.accent),
+            Link::Connected => ("● connected".into(), t.ink(GREEN)),
             Link::SignIn => ("● sign in to watch".into(), t.fg),
             Link::Reconnecting { at, .. } => (format!("● reconnecting (retry in {}s)", retry(at)), t.fg),
             Link::Unreachable { at, .. } => {
@@ -2636,7 +2787,14 @@ impl BoxView {
     }
 
     /// What a card of the I/O tab asked for.
-    fn io_asked(&mut self, name: &str, input: bool, a: crate::io_cards::Asked, chrome: &mut Chrome) {
+    fn io_asked(
+        &mut self,
+        name: &str,
+        input: bool,
+        a: crate::io_cards::Asked,
+        chrome: &mut Chrome,
+        now: f64,
+    ) {
         if a.details {
             let key = name.to_ascii_lowercase();
             if !self.io_open.remove(&key) {
@@ -2646,12 +2804,33 @@ impl BoxView {
         if a.code {
             self.find_in_code(name, chrome);
         }
+        if a.trend {
+            // The pin as the Trend names it, whatever case the card has.
+            let pin = self
+                .trend
+                .pins
+                .iter()
+                .find(|p| p.eq_ignore_ascii_case(name))
+                .cloned()
+                .unwrap_or_else(|| name.to_string());
+            let added = !self.trend.pins.contains(&pin);
+            self.trend.toggle(&pin, self.session.as_ref(), now);
+            if added {
+                chrome.trend = true;
+                chrome.msgs = false;
+            }
+        }
         if let Some(v) = &mut self.view {
             if a.diagram {
                 v.show_signal(name);
             }
             if a.tapped && !input {
                 v.show_output(name);
+            }
+            // An input's card goes to where it is, as an output's does
+            // (Nick, 2026-11-26).
+            if a.tapped && input {
+                v.show_signal(name);
             }
         }
     }
@@ -2975,6 +3154,10 @@ impl Workspace for BoxView {
         true
     }
 
+    fn go_history(&mut self) {
+        self.open_history();
+    }
+
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         if self.writable().is_err() {
             return false;
@@ -3044,6 +3227,10 @@ impl Workspace for BoxView {
 
 impl Body for BoxView {
     fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if let Some(error) = chrome.help_ask.take() {
+            let ctx = ui.ctx().clone();
+            self.help_about(&error, &ctx, chrome);
+        }
         let t = theme(ui);
         let now = ui.ctx().input(|i| i.time);
         let (text, color) = self.status(now, &t);
@@ -3092,7 +3279,7 @@ impl Body for BoxView {
 
     fn has_notices(&self) -> bool {
         self.state.scan.as_ref().is_some_and(|s| s.fault.is_some())
-            || self.projects.deploy != Deploy::Idle
+            || !matches!(self.projects.deploy, Deploy::Idle | Deploy::Done(_))
             || self.projects.notice.is_some()
             || self.desk.problem.is_some()
             || self.on_box.problem.is_some()
@@ -3107,7 +3294,7 @@ impl Body for BoxView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
-            crate::messages::copyable(
+            crate::messages::copyable_error(
                 ui,
                 chrome,
                 "fault",
@@ -3116,7 +3303,9 @@ impl Body for BoxView {
             );
         }
         match &self.projects.deploy {
-            Deploy::Idle => {}
+            // A deploy that went through is the save glyph's popup and a
+            // line in the log (Nick, 2026-11-26), not a notice.
+            Deploy::Idle | Deploy::Done(_) => {}
             Deploy::Saving => {
                 ui.label(RichText::new("saving…").color(t.muted));
             }
@@ -3132,13 +3321,9 @@ impl Body for BoxView {
             Deploy::Deploying => {
                 ui.label(RichText::new("deploying…").color(t.muted));
             }
-            Deploy::Done(what) => {
-                let r = ui.label(RichText::new(format!("✔ {what}")).color(t.accent));
-                chrome.hit("deployed", r.rect);
-            }
             Deploy::Failed(why) => {
                 let why = format!("✖ {why}");
-                crate::messages::copyable(
+                crate::messages::copyable_error(
                     ui,
                     chrome,
                     "deploy failed",
@@ -3158,7 +3343,13 @@ impl Body for BoxView {
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();
             if error {
-                crate::messages::copyable(ui, chrome, "notice", &text, crate::theme::theme(ui).ink(RED));
+                crate::messages::copyable_error(
+                    ui,
+                    chrome,
+                    "notice",
+                    &text,
+                    crate::theme::theme(ui).ink(RED),
+                );
             } else {
                 let r = ui.label(RichText::new(text).color(t.muted));
                 chrome.hit("notice", r.rect);
@@ -3234,40 +3425,40 @@ impl Body for BoxView {
             if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
                 self.project_act(a);
             }
-            ui.separator();
-            ui.label(RichText::new("Running").strong().color(t.muted))
-                .tip("The modules the box runs now, each a program. Click one to see it live.");
         }
-        let mut chosen = None;
-        let modules = self.state.modules.clone();
-        if modules.is_empty() {
-            ui.label(RichText::new(self.waiting()).color(t.muted));
-        }
-        for m in &modules {
-            let selected = self.state.selected.as_deref() == Some(m.name.as_str());
-            let arrow = if selected { "▾" } else { "▸" };
-            let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans)).color(
-                if m.state == "faulted" {
-                    crate::theme::theme(ui).ink(RED)
-                } else {
-                    t.fg
-                },
-            );
-            let r = ui.selectable_label(selected, text);
-            chrome.hit(format!("module {}", m.name), r.rect);
-            let r = match &m.fault {
-                Some(f) => r.tip(format!("Faulted: {f}")),
-                None => r.tip("A module: its state and scans so far. Click to open its diagram."),
-            };
-            if r.clicked() {
-                chosen = Some(m.name.clone());
+        // A box with projects lists no modules here: its Files tab is the
+        // project's (Nick, 2026-11-26: the Running section went).
+        if !self.has_projects() {
+            let mut chosen = None;
+            let modules = self.state.modules.clone();
+            if modules.is_empty() {
+                ui.label(RichText::new(self.waiting()).color(t.muted));
             }
-            if selected && let Some(v) = &mut self.view {
-                ui.indent(("box-tree", &m.name), |ui| v.tree_ui(ui));
+            for m in &modules {
+                let selected = self.state.selected.as_deref() == Some(m.name.as_str());
+                let arrow = if selected { "▾" } else { "▸" };
+                let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
+                    .color(if m.state == "faulted" {
+                        crate::theme::theme(ui).ink(RED)
+                    } else {
+                        t.fg
+                    });
+                let r = ui.selectable_label(selected, text);
+                chrome.hit(format!("module {}", m.name), r.rect);
+                let r = match &m.fault {
+                    Some(f) => r.tip(format!("Faulted: {f}")),
+                    None => r.tip("A module: its state and scans so far. Click to open its diagram."),
+                };
+                if r.clicked() {
+                    chosen = Some(m.name.clone());
+                }
+                if selected && let Some(v) = &mut self.view {
+                    ui.indent(("box-tree", &m.name), |ui| v.tree_ui(ui));
+                }
             }
-        }
-        if let Some(name) = chosen {
-            self.state.select(&name);
+            if let Some(name) = chosen {
+                self.state.select(&name);
+            }
         }
         // The blank space under it all: a right-click offers a new project
         // (and a paste into the open one).
@@ -3408,21 +3599,11 @@ impl Body for BoxView {
             self.session.is_some(),
             self.state.io_map.as_deref(),
         );
-        self.devices_ui.node_map.row(ui, chrome);
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
+            Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.scan = crate::devices::Scan::Running;
                 self.projects.discover();
-            }
-            Some(crate::devices::DeviceAct::Ask(address)) => {
-                self.devices_ui.ask_note = Some(format!("Asking {address}…"));
-                self.projects.ask(address);
-            }
-            Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
-            Some(crate::devices::DeviceAct::AddIo(device)) => self.devices_ui.open_add_io(&device),
-            Some(crate::devices::DeviceAct::OpenMap) => {
-                self.projects.open_file(helmsman_project::IO_MAP);
-                chrome.show_code();
             }
             Some(crate::devices::DeviceAct::Library { vendor, product }) => {
                 self.projects.library(vendor, product);
@@ -3453,9 +3634,16 @@ impl Body for BoxView {
                 ui.label(RichText::new("Open a project in Files.").color(t.muted));
                 return;
             };
+            let at = self
+                .code_at
+                .filter(|n| self.projects.history.iter().any(|r| r.n == *n));
             let deploy = write.clone().and_then(|()| {
                 if self.busy() {
                     Err("A save or deploy is under way.".into())
+                } else if let Some(n) = at {
+                    Err(format!(
+                        "Version {n} is on show, read-only. Go Forward to the file first."
+                    ))
                 } else {
                     Ok(())
                 }
@@ -3464,6 +3652,7 @@ impl Body for BoxView {
             let steps = self.revision_steps();
             let versions = self.versions();
             let mut revision = None;
+            let mut info = None;
             // The header is the open file's name (Nick, 2026-11-08), then
             // word wrap, then the → that deploys this version.
             let name = o.current.clone().unwrap_or_else(|| "Program".to_string());
@@ -3505,19 +3694,68 @@ impl Body for BoxView {
                 );
                 go = pressed.deploy;
                 revision = pressed.revision;
+                info = pressed.info;
             });
             if go {
                 self.deploy();
             }
             if let Some(n) = revision {
-                self.show_revision(n);
+                self.code_step(n);
+            }
+            if let Some(n) = info {
+                self.project_act(crate::projects::Act::ShowRevision(n));
             }
             if chrome.history
                 && let Some(v) = &versions
-                && let Some(crate::instruct::Act::Revision(n) | crate::instruct::Act::Details(n)) =
-                    editor::versions_panel(ui, chrome, &mut self.instruct, v)
             {
-                self.show_revision(n);
+                match editor::versions_panel(ui, chrome, &mut self.instruct, v) {
+                    Some(crate::instruct::Act::Revision(n)) => self.code_step(n),
+                    Some(crate::instruct::Act::Details(n)) => {
+                        self.project_act(crate::projects::Act::ShowRevision(n));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(n) = at {
+                let row = self.projects.history.iter().find(|r| r.n == n).cloned();
+                let file = o.current.clone().unwrap_or_default();
+                if crate::history_ui::stepped_mark(ui, chrome, n, row.as_ref(), &file) {
+                    self.code_step(crate::instruct::LIVE);
+                }
+                let then = self
+                    .projects
+                    .stepped
+                    .as_ref()
+                    .filter(|v| v.row.n == n)
+                    .map(|v| v.files.get(&file).cloned());
+                match then {
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(
+                                RichText::new(format!("Reading version {n}…"))
+                                    .size(18.0)
+                                    .color(t.muted),
+                            );
+                        });
+                    }
+                    Some(None) => {
+                        ui.label(
+                            RichText::new(format!("{file} was not in this version."))
+                                .size(18.0)
+                                .color(t.muted),
+                        );
+                    }
+                    Some(Some(text)) => {
+                        let size = Vec2::new(ui.available_width(), ui.available_height().max(120.0));
+                        let id = editor::source_id("box-st", &o.name, &file).with(("version", n));
+                        let mut shown: &str = &text;
+                        ui.allocate_ui(size, |ui| {
+                            editor::st_editor(ui, id, &mut shown, &[], &[], usize::MAX, chrome);
+                        });
+                    }
+                }
+                return;
             }
             let Some(file) = o.current.clone() else {
                 ui.label(RichText::new("No files in this project yet.").color(t.muted));
@@ -3631,13 +3869,20 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Claude]
+        &[Tab::Io, Tab::Claude, Tab::Help]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
-        if tab == Tab::Claude {
-            self.agent_tab(ui, chrome);
-            return;
+        match tab {
+            Tab::Claude => {
+                self.agent_tab(ui, chrome);
+                return;
+            }
+            Tab::Help => {
+                self.help_tab(ui, chrome);
+                return;
+            }
+            Tab::Io => {}
         }
         let t = theme(ui);
         self.assign_context();
@@ -3662,6 +3907,8 @@ impl Body for BoxView {
         let known = &self.devices_ui.wired;
         // What the diagram says of each point; nothing while there is none.
         let cards = self.view.as_ref().map(Viewer::output_cards);
+        // What is on the Trend: its cards show their trend glyph on.
+        let pinned = self.trend.pins.clone();
         let lit = self
             .view
             .as_ref()
@@ -3745,11 +3992,15 @@ impl Body for BoxView {
                             let forced = if is_forced { "  FORCED" } else { "" };
                             let text = format!("{name} = {}{unit}{forced}", show(value));
                             let on = value == Some(helmsman_iec::Value::Bool(true));
+                            // An input's BOOL says its state: green on, red
+                            // off (Nick, 2026-11-26).
+                            let off = input && value == Some(helmsman_iec::Value::Bool(false));
                             let color = match sig.map(|s| s.quality.as_str()) {
                                 _ if is_forced => t.ink(WARN),
                                 Some("missing") => t.ink(RED),
                                 _ if on && !input => t.ink(crate::lamps::colour(name).unwrap_or(GREEN)),
                                 _ if on => t.ink(GREEN),
+                                _ if off => t.ink(RED),
                                 _ => t.fg,
                             };
                             let bool_ty = matches!(value, Some(helmsman_iec::Value::Bool(_)));
@@ -3802,6 +4053,7 @@ impl Body for BoxView {
                                 uses: src.as_ref().map(|c| crate::find::names(c, name).len()),
                                 simulate: false,
                                 designation: crate::assign::designate(&map, name, is_port),
+                                trended: pinned.iter().any(|p| p.eq_ignore_ascii_case(name)),
                             };
                             let sim_input = input && engineer && sig.is_some_and(|s| s.sim);
                             let (a, card, control) = crate::io_cards::show(ui, chrome, &row, |ui| {
@@ -3831,8 +4083,9 @@ impl Body for BoxView {
                 ui.add_space(6.0);
             }
         });
+        let now = ui.input(|i| i.time);
         for (name, input, a) in asked {
-            self.io_asked(&name, input, a, chrome);
+            self.io_asked(&name, input, a, chrome, now);
         }
         for (name, v) in sets {
             self.force(&name, v);
@@ -3979,10 +4232,10 @@ struct AgentDeploy {
 /// The Agent tab's Deploy (Nick, 2026-11-24: "there needs to be a deploy
 /// button on the agent tab as well ... make it pulse or something to
 /// indicate that it's required"): the Code tab's yellow arrow, with a ring
-/// that pulses while what the agent (or anyone) saved is not running, and
-/// a line that says so. Whether it was pressed.
+/// that pulses while what the agent (or anyone) saved is not running; the
+/// pulse is the whole reminder (Nick, 2026-11-26: no line beside it).
+/// Whether it was pressed.
 fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
-    let t = theme(ui);
     let where_to = if s.to_node { "the Skipper" } else { "the box" };
     let tip = match &s.ready {
         Ok(()) => format!(
@@ -4026,14 +4279,6 @@ fn deploy_row(ui: &mut egui::Ui, chrome: &mut Chrome, s: &AgentDeploy) -> bool {
         );
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
-        let l = ui.label(
-            RichText::new(format!(
-                "The Agent's change is not running yet: Deploy runs it on {where_to}."
-            ))
-            .color(t.accent)
-            .size(crate::theme::BODY),
-        );
-        chrome.hit("agent deploy pending", l.rect);
     }
     r.clicked()
 }

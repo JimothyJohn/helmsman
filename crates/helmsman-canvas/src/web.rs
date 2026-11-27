@@ -1228,3 +1228,175 @@ fn copy_by_command(window: &web_sys::Window, copied_text: &str) -> Result<(), St
         Err(why) => Err(why),
     }
 }
+
+thread_local! {
+    /// A user name and password the sign-in form handed over, not taken yet.
+    /// Held only until the next frame passes them to the login call.
+    static LOGIN_SUBMITTED: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+    /// The sign-in form was closed (Esc or Cancel).
+    static LOGIN_CLOSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+const LOGIN_ID: &str = "helmsman-login";
+
+fn css(c: egui::Color32) -> String {
+    let [r, g, b, _] = c.to_array();
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// Shows the box sign-in as a real HTML form, so the browser's own
+/// password manager can save and fill it; the canvas draws no password
+/// field of its own for it. Call every frame the sign-in is open: the
+/// form is made once, then its colours, the box's words (`problem`) and
+/// the button follow. A submit arrives through [`take_login`], Esc or
+/// Cancel through [`take_login_closed`]. The password is never stored by
+/// the page: it passes from the field to the login call and no further.
+pub fn show_login_form(ctx: &egui::Context, t: &crate::theme::Theme, problem: Option<&str>, busy: bool) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Some(root) = doc
+        .get_element_by_id(LOGIN_ID)
+        .or_else(|| make_login_form(&doc, ctx))
+    else {
+        return;
+    };
+    let _ = root.set_attribute(
+        "style",
+        &format!(
+            "--bg:{};--fg:{};--muted:{};--rule:{};--accent:{};--bad:{}",
+            css(t.panel),
+            css(t.fg),
+            css(t.muted),
+            css(t.rule),
+            css(t.accent),
+            css(t.ink(egui::Color32::from_rgb(255, 110, 100))),
+        ),
+    );
+    if let Ok(Some(p)) = root.query_selector(".problem") {
+        p.set_text_content(Some(problem.unwrap_or("")));
+    }
+    if let Ok(Some(b)) = root.query_selector("button[type=submit]")
+        && let Ok(b) = b.dyn_into::<web_sys::HtmlButtonElement>()
+    {
+        b.set_disabled(busy);
+    }
+}
+
+fn make_login_form(doc: &web_sys::Document, ctx: &egui::Context) -> Option<web_sys::Element> {
+    let root = doc.create_element("div").ok()?;
+    root.set_id(LOGIN_ID);
+    root.set_inner_html(
+        "<style>\
+#helmsman-login{position:fixed;top:56px;right:12px;z-index:10;width:min(320px,calc(100vw - 24px));\
+box-sizing:border-box;padding:14px;background:var(--bg);color:var(--fg);border:1px solid var(--rule);\
+border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.4);font:18px/1.3 Inter,system-ui,sans-serif}\
+#helmsman-login h2{margin:0 0 10px;font-size:18px;font-weight:700}\
+#helmsman-login input{display:block;width:100%;box-sizing:border-box;margin:0 0 8px;padding:6px 8px;\
+font:inherit;color:var(--fg);background:transparent;border:1px solid var(--rule);border-radius:4px}\
+#helmsman-login input:focus{outline:2px solid var(--accent);outline-offset:0}\
+#helmsman-login button{font:inherit;padding:5px 12px;margin-right:8px;color:var(--fg);background:transparent;\
+border:1px solid var(--rule);border-radius:4px;cursor:pointer}\
+#helmsman-login button[type=submit]{border-color:var(--accent);font-weight:700}\
+#helmsman-login button:disabled{opacity:.5;cursor:default}\
+#helmsman-login .problem{margin:8px 0 0;color:var(--bad)}\
+</style>\
+<form method=\"post\" action=\"#\" autocomplete=\"on\">\
+<h2>Sign in</h2>\
+<input type=\"text\" name=\"username\" autocomplete=\"username\" placeholder=\"user\" \
+title=\"Your user name on this box.\" aria-label=\"user\" autocapitalize=\"none\" spellcheck=\"false\">\
+<input type=\"password\" name=\"password\" autocomplete=\"current-password\" placeholder=\"password\" \
+title=\"Your password. Enter signs in. Your browser can remember it.\" aria-label=\"password\">\
+<button type=\"submit\" title=\"Signs in to this box. Sessions end after an hour, or 15 minutes unused.\">Sign in</button>\
+<button type=\"button\" class=\"cancel\" title=\"Closes this without signing in (Esc).\">Cancel</button>\
+<p class=\"problem\" role=\"alert\"></p>\
+</form>",
+    );
+    let form = root.query_selector("form").ok()??;
+    let on_submit = {
+        let root = root.clone();
+        let ctx = ctx.clone();
+        Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            e.prevent_default();
+            let value = |sel: &str| {
+                root.query_selector(sel)
+                    .ok()
+                    .flatten()
+                    .and_then(|i| i.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    .map(|i| i.value())
+                    .unwrap_or_default()
+            };
+            let pair = (value("input[name=username]"), value("input[name=password]"));
+            LOGIN_SUBMITTED.with(|s| *s.borrow_mut() = Some(pair));
+            ctx.request_repaint();
+        })
+    };
+    form.add_event_listener_with_callback("submit", on_submit.as_ref().unchecked_ref())
+        .ok()?;
+    on_submit.forget();
+    let close = {
+        let ctx = ctx.clone();
+        Closure::<dyn FnMut()>::new(move || {
+            LOGIN_CLOSED.with(|c| c.set(true));
+            ctx.request_repaint();
+        })
+    };
+    if let Ok(Some(cancel)) = root.query_selector(".cancel") {
+        let _ = cancel.add_event_listener_with_callback("click", close.as_ref().unchecked_ref());
+    }
+    // Keys typed in the form are the form's: the canvas must not see them
+    // (a letter would be a shortcut). Esc closes.
+    let keys = {
+        let ctx = ctx.clone();
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+            e.stop_propagation();
+            if e.key() == "Escape" {
+                LOGIN_CLOSED.with(|c| c.set(true));
+                ctx.request_repaint();
+            }
+        })
+    };
+    let _ = root.add_event_listener_with_callback("keydown", keys.as_ref().unchecked_ref());
+    let _ = root.add_event_listener_with_callback("keyup", keys.as_ref().unchecked_ref());
+    keys.forget();
+    close.forget();
+    doc.body()?.append_child(&root).ok()?;
+    if let Ok(Some(user)) = root.query_selector("input[name=username]")
+        && let Ok(user) = user.dyn_into::<web_sys::HtmlElement>()
+    {
+        let _ = user.focus();
+    }
+    Some(root)
+}
+
+/// Removes the sign-in form (after a sign-in, or when it is closed): the
+/// browser then offers to save the password it saw submitted.
+pub fn hide_login_form() {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Some(root) = doc.get_element_by_id(LOGIN_ID) {
+        root.remove();
+        // The keyboard back to the page's canvas: left on the bare page
+        // after Esc, Cancel or a sign-in, no key reached the app until a
+        // click on it (the tester's find, 2026-11-27).
+        if let Some(canvas) = doc
+            .get_element_by_id("canvas")
+            .and_then(|c| c.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = canvas.focus();
+        }
+    }
+}
+
+/// The user name and password the form was submitted with, if it was.
+#[must_use]
+pub fn take_login() -> Option<(String, String)> {
+    LOGIN_SUBMITTED.with(|s| s.borrow_mut().take())
+}
+
+/// Whether the form was closed with Esc or Cancel since the last call.
+#[must_use]
+pub fn take_login_closed() -> bool {
+    LOGIN_CLOSED.with(std::cell::Cell::take)
+}

@@ -57,7 +57,11 @@ make ship ARGS=--live-only                    # the live half again
 - **scripts/parity-tabs.py** opens every manifest tab on the playground:
   `--dist` serves a build (the candidate), `--site` the public page (live).
   Each tab must draw, look unlike the other tabs of its panel, and log no
-  error. Screenshots go to `target/parity-tabs/`.
+  error. A tab only a box's page has (Help) is opened on the page a box
+  serves instead: `--box BIN --box-ui DIR` starts that box on loopback with
+  a box's canvas build (`make canvas-web`) and signs in as an engineer.
+  Without `--box` such a tab is listed as `box` and not checked.
+  Screenshots go to `target/parity-tabs/`.
 - **scripts/ship.sh** (`make staging`, `make ship`) runs the steps below.
 
 ## What they do
@@ -77,7 +81,8 @@ and stops, with the command that updates the checkout, if they differ
 1. **Candidate.** `scripts/compat.sh --candidate` (contracts and CI of the
    four candidate tips, written to `target/compat/train.txt`), then the journeys on the box compat built there, with
    the relay it built at agent-relay's candidate, and the tabs on the candidate's
-   committed playground, which is what master will serve. Any failure stops
+   committed playground, which is what master will serve (the box-only tabs
+   on that box, serving the canvas built at the candidate). Any failure stops
    here with nothing promoted.
 2. **Promote.** It shows how far each candidate is ahead. `make staging`
    promotes without a question; `make ship` asks you to type `ship`
@@ -93,7 +98,8 @@ and stops, with the command that updates the checkout, if they differ
    (up to 20 min, for the Pages build) to say every row but the try box is
    live; commits merged since are not waited for. Then it runs the
    journeys on a box built at the new master, held to *the candidate's* features, and
-   with the deployed relay, and the tabs on the public site.
+   with the deployed relay, and the tabs on the public site (the box-only
+   ones on that box, serving the canvas built at master).
 4. **Report.** `target/ship/report.md` lists every journey and tab with its
    candidate and live outcome. A feature that passed on the candidate and
    is anything else live is a regression: it is named, and a **draft** pull
@@ -115,6 +121,7 @@ put it in that file's `JOURNEYS`. The gate tells you if you forgot either.
 - Edge cases, error paths and security. Those are each crate's own tests.
 - Real devices and the node board: the benches (`scripts/bench-e1213.sh`,
   helmsman-hardware `docs/bringup-test.md`).
-- The box-served page's tabs (the tab pass drives the playground) and the
+- The box-served page's tabs other than the box-only ones (the tab pass
+  drives the playground; `make canvas-smoke BOX=1` drives a box's page), and the
   Pi image, which `box-image.yml` boots under QEMU on its own schedule.
 - A box on site with `--site` (multicast, a fixed port).

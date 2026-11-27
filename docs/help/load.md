@@ -60,7 +60,7 @@ values.
   again. The Describe tab can fix them for you from a description.
 - **A file someone else saved since you opened it** is refused alone and
   offers Reload; the other files land.
-- **"stopped: its outputs are at their safe values"** in Messages, right
+- **"stopped: its outputs are at their safe values"** in the Log, right
   after a deploy. The program loaded, but a signal it reads has no value,
   usually because the device that supplies it is down. The **Devices**
   tab shows each link, up or down, and why; once the device answers, the
