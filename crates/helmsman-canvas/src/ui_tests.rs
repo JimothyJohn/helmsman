@@ -8204,6 +8204,7 @@ mod shell;
 mod show_changes;
 mod sim_points;
 mod sim_popup;
+mod skipper_clock;
 mod start_state;
 mod tank_example;
 mod vendor;

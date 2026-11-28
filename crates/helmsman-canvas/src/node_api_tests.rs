@@ -107,6 +107,7 @@ pub(crate) fn view() -> NodeView {
         seq: 7,
         at_ms: 70_000,
         uptime_ms: 90_000,
+        clock_offset_ms: None,
         heap_used: 1,
         heap_peak: 2,
         heap_size: 3,

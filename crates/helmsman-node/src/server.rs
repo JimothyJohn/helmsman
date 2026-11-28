@@ -181,6 +181,11 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
         // Never asked for here: a one-block board's map takes no sim point
         // (`IoMap::one_block` refuses it), so the router finds none to set.
         Effect::SetSim { .. } => (Response::error(409, "this board has no sim points"), false),
+        Effect::SetTime { unix_ms } => {
+            let up = embassy_time::Instant::now().as_millis();
+            state::with(ctx.shared, |live| live.clock_offset_ms = Some(unix_ms.saturating_sub(up)));
+            (router::time_set(unix_ms), false)
+        }
         Effect::SaveIoMap { text, page } => {
             // Beside the program on flash; the restart makes the I/O task
             // drive the block it names.

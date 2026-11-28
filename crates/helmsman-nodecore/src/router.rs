@@ -17,6 +17,7 @@
 //! POST /api/modules/{name}/run|stop|restart   token: Control
 //! GET  /api/events                the values stream
 //! PUT  /api/signals/{name}        token: SetSim {"value": true | 12 | 3.5}: sets a sim input (409 for any other signal)
+//! PUT  /api/time                  token: SetTime {"unix_ms": <ms since 1970>}: the node's wall clock (RAM only, set again after a restart); 400 for a non-number, 0 or a date outside 2020..2100
 //! GET  /api/signals  /api/devices  /api/io_map  /api/site  /api/node  /api/settings
 //! PUT  /api/settings              token: SaveSettings from JSON
 //! PUT  /api/io_map                token: SaveIoMap from {"text"} or text/plain; 422 names the bad line; 409 until the check of that text passed
@@ -70,6 +71,9 @@ pub enum Effect {
     /// `point` is the map's sim `in` point; `value` is of its kind and in
     /// its range, so the image takes it as given.
     SetSim { point: Point, value: SignalValue },
+    /// Set the wall clock to `unix_ms` now ([`time_set`]); the firmware
+    /// keeps `unix_ms` minus its uptime, in RAM.
+    SetTime { unix_ms: u64 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +205,7 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
         ("GET", ["api", "events"]) => Outcome::Stream,
         ("GET", ["api", "signals"]) => Outcome::Reply(Response::json(200, &api::signals(view))),
         ("PUT", ["api", "signals", name]) => sim_put(req, view, settings, name),
+        ("PUT", ["api", "time"]) => time_put(req, settings),
         ("GET", ["api", "devices"]) => Outcome::Reply(Response::json(200, &api::devices(view))),
         ("GET", ["api", "io_map"]) => Outcome::Reply(Response::json(200, &api::io_map(view))),
         ("GET", ["api", "site"]) => Outcome::Reply(Response::json(200, &api::site(view, settings))),
@@ -245,6 +250,39 @@ fn sim_put(req: &Request, view: &NodeView, settings: &Settings, name: &str) -> O
         point: point.clone(),
         value,
     })
+}
+
+/// Unix ms of 2020-01-01 and 2100-01-01: what a clock set by a client may be.
+const TIME_MIN_MS: u64 = 1_577_836_800_000;
+const TIME_MAX_MS: u64 = 4_102_444_800_000;
+
+/// `PUT /api/time`: `{"unix_ms": <integer>}`.
+fn time_put(req: &Request, settings: &Settings) -> Outcome {
+    if let Err(e) = authorize(req.bearer(), settings) {
+        return Outcome::Reply(e);
+    }
+    let Ok(serde_json::Value::Object(obj)) = serde_json::from_slice::<serde_json::Value>(&req.body) else {
+        return Outcome::Reply(Response::error(
+            400,
+            "want {\"unix_ms\": milliseconds since 1970}",
+        ));
+    };
+    let Some(ms) = obj.get("unix_ms").and_then(serde_json::Value::as_u64) else {
+        return Outcome::Reply(Response::error(
+            400,
+            "unix_ms is a whole number of milliseconds since 1970",
+        ));
+    };
+    if !(TIME_MIN_MS..TIME_MAX_MS).contains(&ms) {
+        return Outcome::Reply(Response::error(400, "unix_ms is a time between 2020 and 2100"));
+    }
+    Outcome::Effect(Effect::SetTime { unix_ms: ms })
+}
+
+/// The reply to an [`Effect::SetTime`] the firmware has applied.
+#[must_use]
+pub fn time_set(unix_ms: u64) -> Response {
+    Response::json(200, &json!({ "unix_ms": unix_ms }))
 }
 
 fn not_sim_input() -> Response {

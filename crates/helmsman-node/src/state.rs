@@ -139,6 +139,8 @@ pub struct Live {
     pub deployed: Option<DeployResult>,
     pub link_up: bool,
     pub ip: Option<[u8; 4]>,
+    /// Wall clock minus uptime in ms, set by `PUT /api/time`; RAM only.
+    pub clock_offset_ms: Option<u64>,
 }
 
 pub type Shared = Mutex<CriticalSectionRawMutex, RefCell<Live>>;
@@ -207,6 +209,7 @@ pub fn view(
             seq: live.seq,
             at_ms: live.at.map_or(0, |t| t.as_millis()),
             uptime_ms: now.as_millis(),
+            clock_offset_ms: live.clock_offset_ms,
             heap_used: esp_alloc::HEAP.used(),
             heap_peak: esp_alloc::HEAP.stats().max_usage,
             heap_size,

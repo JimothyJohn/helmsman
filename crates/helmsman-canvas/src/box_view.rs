@@ -52,6 +52,8 @@ struct BoxSeen {
 #[allow(clippy::struct_excessive_bools)]
 pub struct BoxView {
     pub state: BoxState,
+    /// The watched Skipper's wall clock (card skipper-wall-clock).
+    pub clock: crate::skipper_clock::SkipperClock,
     /// The Messages tab's log.
     pub log: crate::messages::Log,
     /// What the log last saw, to report changes once.
@@ -456,6 +458,7 @@ impl BoxView {
             psent: Vec::new(),
             node_token: false,
             watches_node: false,
+            clock: crate::skipper_clock::SkipperClock::default(),
             agent_pending: false,
             fresh: None,
             history_at: None,
@@ -492,6 +495,9 @@ impl BoxView {
             .map(crate::skipper_map::devices)
             .unwrap_or_default();
         self.projects.tick(now);
+        for r in self.clock.step(now, self.watches_node) {
+            self.projects.enqueue(r);
+        }
         self.on_box.step(self.session.as_ref());
         for m in msgs {
             self.state.apply(m, now);
@@ -529,6 +535,11 @@ impl BoxView {
                     self.devices_ui.proposal.answer(&call, a.status, &a.body);
                 }
                 PCall::VendorFile => self.devices_ui.vendor.answer(a.status, &a.body),
+                PCall::NodeInfo => {
+                    self.clock
+                        .node_info(&a, now, crate::sim_projects::wall_ms(), self.node_token);
+                }
+                PCall::SetTime => self.clock.time_set(&a),
                 PCall::NodeMap(op) => self.devices_ui.node_map.answer(op, a.status, &a.body),
                 PCall::DesignProject(name) => self.design_project_answer(&name, &a),
                 call => self.projects.answer_for(call, &a, signed_in),
@@ -3407,7 +3418,25 @@ impl Body for BoxView {
                 self.wants_sim = true;
             }
         }
-        if let Some(s) = &self.state.scan {
+        let now_s = ui.ctx().input(|i| i.time);
+        let skipper = self.watches_node.then(|| {
+            let at = self.state.scan.as_ref().map(|s| (s.now_ms, s.scan));
+            at.or_else(|| self.clock.uptime_now(now_s).map(|t| (t, 0)))
+                .and_then(|(t, scan)| self.clock.wall(t).map(|w| (w, scan, self.state.scan.is_some())))
+        });
+        if let Some(Some((w, scan, scanned))) = skipper {
+            ui.separator();
+            ui.label(RichText::new(&w.time).monospace().color(t.muted)).tip(
+                crate::skipper_clock::SkipperClock::tip(
+                    &w,
+                    &if scanned {
+                        format!("The Skipper's clock at scan {scan}")
+                    } else {
+                        "The Skipper's clock".to_string()
+                    },
+                ),
+            );
+        } else if let Some(s) = self.state.scan.as_ref().filter(|_| !self.watches_node) {
             ui.separator();
             ui.label(
                 RichText::new(format!(
