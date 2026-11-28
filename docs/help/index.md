@@ -11,7 +11,7 @@ part is still to come.
 
 The [playground](../playground/) runs a controller inside the page, with no
 install and nothing to sign up for. It opens with a small example running:
-a traffic light, its three lamps lit in turn in the corner of the diagram.
+a traffic light, its three lamps lit in turn in the I/O panel.
 The diagram in the middle is the program as it runs,
 live; the Structured Text that makes it is one key away (View › Structured
 Text, or <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>).
@@ -25,7 +25,7 @@ Take the tour starts it again any time.
 
 Or try these yourself, in order:
 
-1. Watch the traffic light in the diagram's corner: green for three
+1. Watch the traffic light in the I/O panel: green for three
    seconds, yellow for one, red for three, and the same lamps in the same
    colours on the trend below. Switch `run` off in the I/O panel on the
    right and the light stops on red.

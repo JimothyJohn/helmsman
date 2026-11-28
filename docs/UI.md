@@ -43,6 +43,84 @@ explanation belongs in Help. `tips_tests` counts the tips over the limit
 (110 characters, or more than one line break) and holds the count: it may
 only go down.
 
+## Look and feel (Nick, 2026-11-27)
+
+The canvas must feel alive and professionally built. The theme basics stay
+(Inter and Plex Mono, tonal fills, no outlines, radius 6, shadows in
+`theme.rs`); what changes is contrast, motion, colour meaning and finish.
+
+- **Contrast.** The canvas is the darkest layer; each layer of chrome above
+  it is clearly lighter (about 10 to 16 levels a step, not 4 to 6). The
+  chrome floats: the side panes, the Signals (bottom) pane and the toolbar
+  sit 8 to 12 px in from the edges with rounded corners and a shadow, as the
+  diagram's corner controls do. Primary text is near white, muted text is
+  clearly muted, and body text, labels and port names each have a level of
+  their own. Light mode is the same in reverse; the `ink()` contrast tests
+  hold.
+- **TRUE glows, FALSE is flat, everywhere.** One look for each on every
+  surface: wires, block chips, I/O cards, lamps, Signals traces, status
+  text (a lamp's FALSE is red: below). TRUE is green at full brightness with a glow (two wide faint
+  under-strokes, about 5x width at 8% and 2.5x at 18%, under the core) and
+  slow even dots flowing source to sink along a live TRUE wire. FALSE is a
+  thin flat muted grey: no glow, no motion. A chip eases or flashes briefly
+  when its value flips. On the light page a glow does not read: TRUE is a
+  heavier stroke in saturated green, the dots stay. Motion runs only while
+  the program runs and the page is visible (repaints gated on both);
+  off-screen wires are culled before the glow is drawn.
+- **TRUE is green, never yellow.** Yellow is brand, selection and focus
+  only (the wordmark, the active tab, Deploy, a selected item), never a
+  signal state. Green is also "running" and a lamp on. TRUE and FALSE are
+  told apart by glow, weight and motion as well as hue; a fault on a wire,
+  if ever shown, is dashed as well as red.
+- **Lamps are green on, red off** (Nick, 2026-11-27): a lamp (an output's
+  card in the I/O tab, a lamp on the Monitor) is green when TRUE and red
+  when FALSE, whatever its name says (a lamp named `yellow` is green when
+  on). Lit on a soft disc when on, dimmed when off. Everything else that is
+  FALSE stays flat grey.
+- **An I/O card at rest is its point** (Nick, 2026-11-27): icon, name and
+  value on one line. Its three glyphs (code, diagram, Trend) show while the
+  pointer is over the card or it is open, drawn over the right end of the
+  first line on a backdrop of the card's fill (a soft fade at its left
+  edge). The head's layout never depends on hover: a switch or a number box
+  keeps its width as the pointer enters, and a click on a glyph goes to the
+  glyph, not to the control under it. A simulated input's
+  icon is lit when on and dimmed when off, as an output's is.
+- **A dot grid** on the canvas, panned and zoomed with the diagram, one or
+  two levels above the ground, fading out as the zoom gets small.
+- **Signals pane.** Thin lane separators and gridlines; a gradient under
+  each trace (alpha about 0.25 to 0). A BOOL lane is the TRUE/FALSE look
+  (a green filled step when TRUE, a flat grey line when FALSE), its axis
+  TRUE/FALSE or unlabelled, not 1.0/0.0. The pane is no taller than it
+  needs to be.
+- **Restraint.** Motion on live TRUE wires and value flips only: no ambient
+  animation, no animated chrome.
+- **Finish.**
+  1. Nothing is clipped: blocks size to their content, the Signals label
+     column sizes to its longest name, and anything that must be cut shows
+     its whole text on hover.
+  2. Nothing collides: value badges clear of wires, no stacked ghost
+     outlines behind blocks, and Fit leaves room for the floating controls.
+  3. A counter is coloured only when it is not zero (no red ⊗ 0).
+  4. No stock egui widgets show through: the collapsing triangle, the
+     slider thumb and the checkbox are painted to match the glyphs.
+  5. One voice per role: mono for code and live values only, Inter for
+     everything else; live numbers have a fixed width.
+  6. Numbers: decimals chosen per signal, units where known, numeric
+     columns right-aligned.
+  7. Alignment: spacing on a 4/8 pt grid; hairlines and rect edges snapped
+     to physical pixels; a pane's controls share one left edge and width.
+  8. Port labels read clearly or are not drawn.
+  9. Icons share one stroke weight, size and baseline; Stop is neutral
+     with its glyph alone (red is a state, not a button colour).
+  10. Hover and press ease over about 80 to 120 ms; keyboard focus shows a
+      visible ring.
+  11. No empty space that reads as broken: an empty area collapses or says
+      in one line what goes there.
+- **Held by tests, not taste** (`ui_tests`): no glyph clipped by its widget
+  or block; no text rect overlapping another block or label on the canvas;
+  no error or warning colour on a zero count; no YELLOW on a signal-state
+  draw path.
+
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
 - **One header row (48 pt):** on the left the brand wordmark (the
@@ -85,15 +163,16 @@ only go down.
   and their lanes pop for a second and a half; at the cap of six the
   oldest pin nobody chose makes room, and the engineer's own stay. It
   opens 320 pt tall (the diagram keeps about 430 pt at 1280x800).
-- **Messages**, under the left pane's tabs and above the trend, with a
-  fold on their header that is kept per browser (Nick, 2026-11-23: they
-  are part of the user feedback). They hold the last 200 things the page
-  had to say, filtered by level
+- **Log**, the bottom panel's second tab beside the trend (Nick,
+  2026-11-26: they are historic and run long; under the left pane's tabs
+  from 2026-11-23), the two tab glyphs stacked at the panel's left, the
+  tab shown kept per browser. The standing notices sit above either tab.
+  They hold the last 200 things the page had to say, filtered by level
   with the counts on the filters: info, warnings,
-  errors, with the error count on the header; errors are listed to start and
-  a click on info or warnings lists them too (Nick, 2026-11-23). The
-  header goes red while an error stands or one came in unread, folded or
-  not, and a shut left pane opens on them when an error arrives; so a
+  errors, with the error count beside the tab; every level is listed to
+  start (2026-11-26; errors only before, which left Nick with counts and
+  no rows). The tab goes red while an error stands or one came in unread,
+  and a shut bottom panel opens on them when an error arrives; so a
   fault or a refused deploy is still there to read after the line under
   the header has gone. An Agent outcome is one short line there, its
   whole text on hover and in Copy all; Copy all and Clear are icons
@@ -144,7 +223,8 @@ only go down.
   Delete and, on the open one, Paste, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
   project, and on the blank space New project and Paste; New project and
-  Copy project are also the File menu's first items; the Delete key
+  Copy project are also the File menu's first items (a new project opens
+  on a saved `main.st` holding the playground's starter, Nick 2026-11-24); the Delete key
   deletes the row last clicked, a double click on a file opens the Code
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one
@@ -162,23 +242,13 @@ only go down.
   state, which on a box says the protocol a device by its profile is
   reached over and whether the link is slow (2026-11-12); on a box the
   open project's `io.map`, else the map the box runs; under the map's
-  devices, "On the network": Scan asks the box for one scan on every
-  protocol (`POST /api/devices/discover`; the simulation answers with its
-  simulated E1213; since 2026-11-11 the request asks EtherNet/IP, Modbus
-  and, where the build has it, PROFINET, and answers `found`, one entry
-  per device however many protocols it answered on, which the tab reads,
-  with the older `devices` list as the fallback for an older box) and
-  lists every device that answered by vendor and model, with whether a
-  map device binds it and what the public device library knows of it
-  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
-  then by vendor and model text; `--devices-index` points a box at
-  another). **Add by click** (2026-11-12, PROTOCOLS.md step 3): a device
-  the library knows, whose entry names a profile (`NAME.device`), offers
-  Add: a small form asks one thing, the device's name, and says how many
-  channels it has; Add copies the profile into the project as
-  `NAME.device` (the box fetches and checks it, `GET
-  /api/devices/library`; the simulation carries its E1213's) and writes
-  `device NAME device:PROFILE IDENTITY` with the identity the scan saw.
+  devices, **Scan for Device** lists what answers and a click adds one by
+  its name (Nick, 2026-11-26; a **+** that opened the New device form for
+  a few hours before that, and before it "On the
+  network", Scan, Scan and add, the IP address Ask and Advanced are gone;
+  until then Scan listed what answered, `POST /api/devices/discover`, and
+  Add by click wrote a library device as `device NAME device:PROFILE
+  IDENTITY`).
   No signal is written and no protocol, address, byte order or cycle
   time is asked. **A device's I/O is added one point at a time**
   (`device_io.rs`, Nick, 2026-11-15: every channel is available, and
@@ -196,12 +266,12 @@ only go down.
   the variable stays). A device with signals the program has no variable
   for (every channel, as Add wrote them until 2026-11-15) offers Remove N
   unused, which asks first. The New device and Edit forms hold settings
-  only: Edit is the name alone unless Advanced is on, and Save writes
+  only: Edit is the name and the address (2026-11-26), and Save writes
   the device's signals back as they were. The agent's listing in the
   playground names the channels not added (`device_io::describe_free`);
-  the box's `list_devices` does not yet. A device the library does
-  not know says so and offers Advanced, and, on a box with an agent, a
-  button **Build from vendor file…** (`device_vendor.rs`, Nick,
+  the box's `list_devices` does not yet. The New device form
+  has, on a box with an agent, **From the vendor's file…** (on a found
+  device the library did not know until 2026-11-26) (`device_vendor.rs`, Nick,
   2026-11-15). It picks the vendor's file (an EDS, an IODD, a PDF manual
   or a text file: text up to 1 MB, a PDF up to 2 MB), posts it to the box
   as a drop-in (`POST /api/dropins`, the file name cut to `A-Z a-z 0-9 . _ -`
@@ -252,8 +322,7 @@ only go down.
   the stored console password (write-only, the field never shows a value)
   and Change the console's password. Everyone else sees the controls
   disabled with the reason as the tooltip. Errors are the box's own words.
-  **Advanced** (a tick box beside
-  Scan, off by default, remembered in the browser) is the older way: a
+  A
   right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
   and settings, written as one `device` line of `io.map`; Import device…
@@ -316,17 +385,10 @@ only go down.
   after a described change is on. Shift
   or Ctrl Enter goes on with a list (`- `, `* `, `1. `, ending it on an
   empty item) and Tab indents; while the Agent works the box shows the
-  instruction sent, greyed. On a new project (a built-in example
-  open) "From a spec…" opens a window (Nick, 2026-11-15, `crate::spec_mode`):
-  paste a scope of work or add `.md` and `.txt` files, with the total
-  against the one request's cap, and Build; the draft comes back on a
-  review screen (the name, the I/O, each requirement passed or not, the
-  untested ones, the reason) and nothing is made until Accept. On a box
-  (Nick, 2026-11-15; `crate::box_spec`) the Describe tab offers it to an
-  engineer with a project open or not, the window also takes `.pdf`
-  files with the box's caps beside the total, the review lists the
-  inputs that need a device, and Accept sends the project to the box as
-  one zip. "Design a machine…" (`crate::design_step`, `crate::design_ui`;
+  instruction sent, greyed. "Design a machine…" takes the description and, in the same window, pasted
+  text or `.md` and `.txt` files (`crate::documents`, Nick, 2026-11-23: one
+  entry, not a second "From a spec" button), with the total against the cap.
+  "Design a machine…" (`crate::design_step`, `crate::design_ui`;
   card `design-step-canvas`) asks a strong model for a whole machine's
   control system design: a window takes the description, the tab shows
   the elapsed time and the model's thinking summary while the turns come
@@ -340,9 +402,9 @@ only go down.
   entry only while that says it is open (and says when it is closed or
   the hour's allowance is used). A change that lands
   runs at once and is seen on the canvas, marked, with nothing written in
-  the tab (its reason goes to the Messages). One that does not is an
-  error in the Messages (their red count, and they open), the box is
-  outlined red, and one red line opens the Messages. Undo is Before /
+  the tab (its reason goes to the Log). One that does not is an
+  error in the Log (their red count, and they open), the box is
+  outlined red, and one red line opens the Log. Undo is Before /
   After there: the file swaps at once between the version before the
   change and the change, compiled and running, each marked green and red
   against the other; nothing is saved (Save keeps the version shown), and
@@ -404,20 +466,17 @@ only go down.
   deselects), go with the next instruction, and say how many more are
   selected than the eight an instruction carries. Dragging empty space no
   longer pans the diagram: Space and a drag, or the middle button, do; the
-  arrow keys and W A S D too, and the wheel zooms. Hovering empty space
-  says so.
-- **Zoom only scales; corner controls (Nick, 2026-11-23).** The diagram is
-  drawn the same way at every zoom: it no longer swaps to lines of text
-  zoomed out or to the sections' blocks mid-zoom (it looked glitchy and like
-  another interface), and stays at the one level a small program has when
-  first fitted. Folds the reader makes (a double click, the tabs, the CASE
-  and interlock tables) work as before; zooming out will later merge nodes
-  into labelled groups in the same style
-  (`st_zoom::SEMANTIC_ZOOM`). In the diagram's bottom-right corner, left of
-  the lamps: a hand (while on, a drag on empty space moves the view instead
-  of drawing a box; off by default, not saved with the project), zoom in
-  and zoom out (one step about the middle, the wheel's limits). Each is a
-  44 pt glyph with a tooltip.
+  arrow keys too, and the wheel zooms (no W A S D since 2026-11-26: those
+  letters are view keys). Hovering empty space says nothing.
+- **The zoom only scales (Nick, 2026-11-26).** The zoom ladder of
+  2026-11-23 (cards per statement, section and program, a rung picker,
+  clicks that flew in) was removed: it was broken, and the diagram is
+  always drawn as its blocks and wires. Folds the reader makes (a double
+  click, the tabs, the CASE and interlock tables) work as before. In the
+  diagram's bottom-right corner: a hand (while on, a drag on empty space
+  moves the view instead of drawing a box; off by default, not saved with
+  the project), zoom in and zoom out (one step about the middle, the
+  wheel's limits) and fit, each a 44 pt glyph with a tooltip.
 - **The box link's status counts down:** "reconnecting (retry in 2s)",
   ticking each second; every retry waits 2 s (it was 5 s, too slow:
   Nick, 2026-11-13).
@@ -505,6 +564,54 @@ only go down.
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
 
+## Show Changes (Nick, 2026-11-27)
+
+"When a change is deployed things can go absolutely haywire … We really
+need to ensure the user knows EXACTLY what they're doing before making
+changes and that the changes aren't supposed to be huge." Progress is
+incremental: one small, understood step at a time, the start of written,
+staged and slowly implemented specs.
+
+- **A described change is held, never written on arrival.** A green answer
+  (checked by `verify::check` as before) becomes the pending change:
+  nothing is written, saved, run or deployed. The Agent tab shows its
+  reason, its size ("3 blocks, 12 lines") and every output whose logic it
+  changes by name ("switches MOTOR, LAMP"), then Show Changes, Apply and
+  Discard. Send is off while a change is pending ("Apply or Discard the
+  change first"). A pending change lives in the page; a reload drops it.
+- **Show Changes** puts the proposed version on screen without running it:
+  the Code tab shows the proposed file read-only with its lines marked as a
+  diff draws (`+` green tint, `−` red tint), and the canvas shows the
+  proposed diagram with blocks marked as Proposals marks them (added,
+  changed, removed), with no live values, since it is not running. A
+  banner over the canvas says "Proposed change, not applied: the machine
+  runs the current program", with Show current, Apply and Discard. The
+  machine (the simulation or the box) keeps running the current program
+  the whole time.
+- **One step is small.** The Agent is told to make the smallest change that
+  does the one thing asked. A change can't be applied when it adds,
+  changes or removes more than 8 blocks or 30 lines, or when it changes
+  the logic of an output the instruction does not name (by its name, any
+  case, `_` or space, or by the block in focus). Apply is off and the tab
+  says why: "Too big for one step: 12 blocks, 48 lines (one step is at most
+  8 blocks or 30 lines). Ask for part of it." or "It changes VALVE, which
+  the instruction does not name. Name it, or ask for less."
+- **Apply** writes it as before: in the simulation one revision that runs
+  at once; on a box the project's file (a PUT), which runs only once
+  deployed. Apply refuses if the file changed since Send. Discard drops it
+  and changes nothing. Undo after Apply stays as it is.
+- **Deploy on a box opens "What changes on the machine"** and never deploys
+  straight from the button or Ctrl Shift Enter. The sheet compares the
+  project with the program the box runs now: each file's diff, the
+  diagram diff with its counts, every output whose logic changes by name,
+  the checks and, where the policy needs one, the replay's result (run
+  before the sheet shows), the tier and who may apply it. Deploy on the
+  sheet sends it; Cancel sends nothing to the machine. When nothing differs it says
+  the box already runs this program and Deploy is off. Deploy in the
+  simulation (the page's own program) is unchanged.
+- **Later, not now:** running the proposed program in a trial simulation
+  beside the live one before it is applied.
+
 ## Projects
 
 - A project is a folder of free-form `.st` files that compile together; one
@@ -572,14 +679,11 @@ only go down.
   the project's `icons.map` naming the block or its type still puts its
   character instead.
 - **Lamps** (Nick, 2026-11-12: the first screen should speak without
-  words). The program's BOOL outputs are lamps in the diagram's
-  bottom-right corner (`lamps`), lit from the scan: a red, a yellow and a
-  green together are a traffic light, anything else a row of pilot lamps
-  named under them. An output named after a colour (`red`, `lamp_green`,
-  `amber`, `blue`, `white`) takes that colour there, in the I/O tab's
-  output text when on, and on both trends until a palette colour is
-  picked for it. Only the program's own diagram shows them, not a block
-  instance's.
+  words). An output named after a colour (`red`, `lamp_green`, `amber`,
+  `blue`, `white`) takes that colour in the I/O tab's output text when on,
+  and on both trends until a palette colour is picked for it. The fixture
+  of lamps in the diagram's bottom-right corner (a traffic light, a row of
+  pilot lamps) was removed 2026-11-26: the I/O tab shows the same.
 - **Examples** (Nick, 2026-11-05). Six programs from the first chapters
   of a Structured Text book, a few lines each: Traffic light (first, Nick,
   2026-11-12), Blink, Read and write, Logic (AND, OR, NOT), Start/stop
@@ -637,51 +741,57 @@ focused text field alone, never to the editor's history as well
 | Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
 | Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
-| E, Q | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (pointer over the diagram, nothing typed in) | (keys of our own, beside W A S D) |
+| . , | The next or the previous function block call, IF, CASE or loop on the diagram, zoomed in and framed (pointer over the diagram, nothing typed in) | (keys of our own; E and Q until 2026-11-26) |
 
 Each menu item prints its key. Reserved, not built (TODO card
 `hotkey-agent-reserved`): F2 / Shift F2 the Agent.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
-- **Top:** status tiles: running or faulted, then one tile per top-level
-  instance with its key outputs, green or red. The scan period and
-  counts are too low level for the wall: hidden unless an engineer turns
-  "Scan detail" on (card `monitor-scan-time`).
+- **Header (Nick, 2026-11-26):** each program's name with its state's
+  lamp (green running, red faulted, yellow held, grey stopped or stale)
+  and the state in a word, where the Editor shows its own status. The
+  tooltip has the fault, who stopped it and, with "Scan detail" on, the
+  scan period, counts and load (card `monitor-scan-time`): too low level
+  for the wall otherwise.
+- **Content:** the device picker first, then the tile of the program's
+  outputs and one tile per top-level instance with its key outputs,
+  green or red. No status card.
+- **Bottom:** the Editor's own Log and Trend panel, one open or
+  shut state and one tab between the two screens.
 - **Tap a tile:** the same tiles one level down (that instance's instances
-  and outputs). Back and breadcrumbs go up; the full diagram is one tap
-  away.
+  and outputs). The breadcrumbs go up; there is no Back button and no
+  "Open diagram" (the header's Editor | Monitor switch is the way out).
 - **Watch only, but for an engineer's Stop and Restart.** In the
   simulation the header carries the transport (run or stop, step,
   restart) and the same keys as the Editor (Nick, 2026-11-01). On a box,
   an engineer signed in gets Stop or Run and Restart there (no step):
   they act on the program shown, or on every program at the top level,
   through the box's audited routes (card `monitor-box-run-stop`, Nick
-  2026-11-06). A stopped program's tile says STOPPED, "outputs at safe
-  values" and who stopped it. For anyone else the Monitor writes
+  2026-11-06). A stopped program's header says STOPPED, and its tooltip
+  "outputs at safe values" and who stopped it. For anyone else the Monitor writes
   nothing. The Editor's glyph strip carries the same Stop or Run and
   Restart for every program the box runs; no key does it on a box.
 
-As built (step 3): a group per PROGRAM (a module on a box), each with its
-status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
+As built (step 3): a group per PROGRAM (a module on a box), its status
+in the header (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
 period and count only while an engineer is signed in and this browser's
 "Scan detail" is on, kept with the Editor's layout), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
-`monitor-lamp-polarity`), a number its value. "Open diagram" opens the
-Editor's diagram at the level shown. Stale data is never a colour: a
+`monitor-lamp-polarity`), a number its value. Stale data is never a colour: a
 program with no new scan for 3 s, or every program while the box is out
 of reach, goes grey with "stale" and the age, under a red NO DATA banner
 when the box itself is the problem; a stopped simulation is grey too.
 
 Scan load (card `scan-stats`): on a box, "Scan detail" also puts three
-lines on each status tile, each with a tooltip on what it means and
+lines in the program's header tooltip, each saying what it means and
 what is normal: the scan time (average and peak over the module's last
 1000 scans; the tooltip adds the p99 and the shortest), the jitter (how
 late each scan started after its deadline, the same way), and the
 overruns with how long ago the last one was. An overrun in the last
-minute shows on the tile for everyone, in yellow, Scan detail or not.
+minute shows there for everyone, Scan detail or not.
 The simulation runs in the page on no real clock and shows none of
 these.
 Phones (under 600 points wide), `?monitor` and the old `?andon` open on

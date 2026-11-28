@@ -44,12 +44,13 @@ mod box_popup;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;
-mod box_spec;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
 mod box_trend;
 mod box_view;
 mod by_hand;
+mod change;
+mod change_ui;
 mod chat_about;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod chat_about_tests;
@@ -57,6 +58,7 @@ mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
+mod deploy_sheet;
 mod design;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod design_page_tests;
@@ -72,6 +74,7 @@ mod device_vendor;
 mod devices;
 mod diagram_menu;
 mod diff_ui;
+mod documents;
 mod editor;
 mod edits;
 #[cfg(test)]
@@ -81,8 +84,6 @@ mod ekg;
 mod features_tests;
 mod find;
 mod front;
-#[cfg(test)]
-mod front_tests;
 mod glyph_lib;
 mod glyphs;
 mod help;
@@ -110,12 +111,18 @@ mod monitor;
 mod monitor_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod node_api_tests;
+mod node_map;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod node_map_tests;
 mod node_token;
 mod offers;
 mod pane_layout;
 #[cfg(test)]
 mod pane_layout_tests;
 mod phrasing;
+mod placeholders;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod placeholders_tests;
 mod plant;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -131,6 +138,7 @@ mod review_view;
 mod scope;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod scope_tests;
+mod signal_picker;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_plant_tests;
 mod sim_popup;
@@ -139,9 +147,11 @@ mod sim_popup_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
+mod skipper_map;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod skipper_map_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod slow_link_tests;
-mod spec_mode;
 mod st_fold;
 mod st_hints;
 mod st_syntax;
@@ -170,6 +180,7 @@ mod verify_tests;
 mod watch;
 #[cfg(target_arch = "wasm32")]
 mod web;
+mod wire_it;
 mod wired;
 
 /// `helmsman-canvas --help-tables keyboard|starters`: the help site's

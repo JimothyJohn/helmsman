@@ -288,14 +288,20 @@ impl Builder {
                 Some("text") if json.get("text").and_then(Json::as_str).is_none_or(str::is_empty) => continue,
                 Some("tool_use") => {
                     let raw = b.input;
+                    // A tool with no parameters is called by some models
+                    // with `null` for its arguments: the empty object.
                     let input = if raw.trim().is_empty() {
                         // No fragments: the input is the start event's object.
-                        Ok(json.get("input").cloned().unwrap_or_else(|| json!({})))
+                        match json.get("input") {
+                            None | Some(Json::Null) => Ok(json!({})),
+                            Some(i) => Ok(i.clone()),
+                        }
                     } else {
-                        serde_json::from_str::<Json>(&raw)
-                            .ok()
-                            .filter(Json::is_object)
-                            .ok_or(raw)
+                        match serde_json::from_str::<Json>(&raw) {
+                            Ok(Json::Null) => Ok(json!({})),
+                            Ok(j) if j.is_object() => Ok(j),
+                            _ => Err(raw),
+                        }
                     };
                     // History needs an object even when the input was broken.
                     json.insert("input".into(), input.clone().unwrap_or_else(|_| json!({})));

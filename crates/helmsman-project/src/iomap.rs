@@ -71,7 +71,7 @@ pub struct MapText {
 }
 
 /// The device ids the format reserves: not devices anyone declares.
-pub const RESERVED: [&str; 3] = ["box", "module", "screen"];
+pub const RESERVED: [&str; 4] = ["box", "module", "screen", "sim"];
 
 fn params(tokens: &[&str]) -> Vec<(String, String)> {
     tokens
@@ -99,6 +99,18 @@ pub fn skim(text: &str) -> MapText {
                 params: params(rest),
                 settings: rest.iter().map(|t| (*t).to_string()).collect(),
             }),
+            [dir @ ("in" | "out"), name, ty, "sim", rest @ ..] => out.signals.push(MapSignal {
+                dir: (*dir).to_string(),
+                name: (*name).to_string(),
+                ty: (*ty).to_string(),
+                device: "sim".to_string(),
+                point: String::new(),
+                unit: params(rest)
+                    .into_iter()
+                    .find(|(k, _)| k == "unit")
+                    .map(|(_, v)| v),
+                tail: rest.iter().map(|t| (*t).to_string()).collect(),
+            }),
             [dir @ ("in" | "out"), name, ty, device, point, rest @ ..] => out.signals.push(MapSignal {
                 dir: (*dir).to_string(),
                 name: (*name).to_string(),
@@ -111,6 +123,8 @@ pub fn skim(text: &str) -> MapText {
                     .map(|(_, v)| v),
                 tail: rest.iter().map(|t| (*t).to_string()).collect(),
             }),
+            // A Skipper's shared value: nothing a box or the skim counts.
+            ["share", ..] => {}
             _ => out.odd += 1,
         }
     }

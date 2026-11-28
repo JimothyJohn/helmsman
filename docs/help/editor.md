@@ -27,7 +27,7 @@ One row along the top.
 
 <img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
-Anything the page has to say is in the **Messages** tab of the bottom
+Anything the page has to say is in the **Log** tab of the bottom
 panel. Its first rows are what is true now: a fault, a deploy under way
 or refused, a file someone else saved since you opened it (with a
 Reload). Under them is the log of what happened. When an error comes in
@@ -120,21 +120,22 @@ switch its inputs. What you can do:
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Zoom with the
   wheel, a two-finger scroll or a pinch, about the pointer, or with the plus
-  and minus buttons in the bottom-right corner. The diagram looks the same at
-  every zoom. A drag on empty space draws a box that selects; move the view
+  and minus buttons in the bottom-right corner. Zooming only scales the
+  view: the blocks and wires are always drawn as they are. A drag on empty
+  space draws a box that selects; move the view
   with the hand button beside the zoom buttons (a drag on empty space then
-  moves it), with Space and a drag, the middle button, or the arrow keys or
-  W A S D while the pointer is over the diagram. The diagram never leaves the view, and a
+  moves it), with Space and a drag, the middle button, or the arrow keys
+  while the pointer is over the diagram. The diagram never leaves the view, and a
   double-click on empty space fits it again.
-- **Jump.** With the pointer over the diagram, <kbd>E</kbd> goes to the
-  next function block call, IF, CASE or loop and <kbd>Q</kbd> to the
+- **Jump.** With the pointer over the diagram, <kbd>.</kbd> goes to the
+  next function block call, IF, CASE or loop and <kbd>,</kbd> to the
   previous one. The view zooms in to frame it with its inputs and picks
   it, so a long program is a few key presses from one end to the other.
   The keys follow the program's order and carry on round from the last
   to the first. After you move the view yourself, the next press starts
-  from what is right (<kbd>E</kbd>) or left (<kbd>Q</kbd>) of its centre.
+  from what is right (<kbd>.</kbd>) or left (<kbd>,</kbd>) of its centre.
 
-![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims; the traffic light in the corner shows the outputs.](img/diagram-why.png)
+![The green lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims.](img/diagram-why.png)
 
 Values that would clutter the diagram are left off it: a constant shows
 its name alone, a time reads as `T#500ms`. A wire that would cross the
@@ -159,12 +160,8 @@ TON = ⏱          # over the built-in one
 The project's rules win over the built-in pictures. Zoomed out past
 where the label is drawn, the icon stands alone at a readable size.
 
-**Lamps.** The program's BOOL outputs are also lamps in the bottom-right
-corner of the diagram, lit as the program runs. An output named after a
-colour (`red`, `lamp_green`, `amber`) is a lamp of that colour, in the
-I/O panel's list and on the trend too; a red, a yellow and a green
-together are drawn as a traffic light. Any other output is a pilot lamp
-with its name under it.
+**Lamps.** An output named after a colour (`red`, `lamp_green`, `amber`)
+is a lamp of that colour, in the I/O panel's list and on the trend.
 
 **Glyphs.** Every point in the I/O panel and the Devices list carries a
 small picture of what it is, read from its name: `start_pb` a push
@@ -190,25 +187,29 @@ redrawn.
   the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
-  next. **Devices** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): at the top, **I/O
-  wiring** links to the project's `io.map`, the file that says which
-  program variable is wired to which device point; then the devices it
-  names, each with its points under it, their live
-  values, and whether the link is up; a right-click on the blank space
-  adds a device (name, protocol, address, settings) as a line of the
-  map; Import device… takes the vendor's EDS file, keeps it in the
-  project and fills the form in from it. Under the map's devices, **On
-  the network**: Scan lists every EtherNet/IP device that answers on the
-  LAN, says whether the map already has it, and shows what the public
-  device library knows of it (in the simulation, one simulated E1213).
-  **Use this device** under one opens the form filled in, the device
-  named by its identity so a changed address never loses it; on a
-  read-only example it copies the project first. The form has a field
+  next. **Devices** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): the devices
+  the project's `io.map` names, each with its points under it, their live
+  values, and whether the link is up. A row shows the device's name; its
+  address, protocol and link are in its tooltip and under the pencil
+  (**Edit**); the bin deletes it. **Scan for Device** under the list asks
+  the network and lists what answered, by vendor and model where the
+  device library knows it; a click on one asks only its name and adds it
+  (the library's profile when it has one, else a device at that address).
+  A device that does not answer is added by a right-click on the blank
+  space: **New device…** (name, protocol, address, settings) writes a
+  line of the map, and Import device…
+  takes the vendor's EDS file, keeps it in the project and fills the form
+  in from it. For a device the library does not have, the form's **From
+  the vendor's file…** takes an EDS, an IODD or a manual (a PDF up to 2 MB,
+  text up to 1 MB) and Helmsman proposes a profile with the channel names
+  from it, to check on this tab before anything is saved; it needs an
+  engineer or an integrator signed in to a box. On a read-only example, adding copies the project first.
+  The form has a field
   for each of the protocol's settings, filled in with the usual values
   and checked against the driver's ranges, with the device's io.map line
   under them. Adding a device adds the device alone. Every channel it
   has is available from then on, and the project lists a channel only
-  once you add it. **+ Add I/O** under the device opens the list of
+  once you add it. **+ Add I/O** under the device's points opens the list of
   channels the project does not use yet; type part of a name (`DI-0`,
   `out`, `int`) to narrow it, and click a channel to add it. The channel
   gets a signal named after the device and the channel (`rio_di_04`)
@@ -220,15 +221,13 @@ redrawn.
   to take it out of the project; the program's variable stays and the
   channel returns to the list. A device that holds points the program
   has no variable for offers **Remove unused**, which asks before it
-  removes them. **Edit** beside a device opens its name, and with
-  Advanced on its protocol, address and timing; Save keeps its points
+  removes them. The per-device wiring walkthrough is not there for now. **Edit** beside a device opens its name and its address, so a device that moved can be fixed; Save keeps its points
   as they are. **Delete** asks, then takes the device and its inputs
   and outputs out (the program's variables stay). Double-click or
   right-click a wired signal to rename it:
   the io.map line and every use in the program change together, listed
   before you confirm. One map may mix Modbus
-  TCP and EtherNet/IP devices. Helmsman reads the same listing, network
-  included. Under that, **Plant states**: the quantities a project's
+  TCP and EtherNet/IP devices. Under that, **Plant states**: the quantities a project's
   plant model keeps for the machine it stands in for (mark a variable
   with `{state unit=m}` on its line), each with the simulation's value
   and the sensor that measures it on the real machine, or the kind of
@@ -239,11 +238,20 @@ redrawn.
   Structured Text editor, headed by the open file's name. Beside the
   name, the magnifier (<kbd>Ctrl</kbd> <kbd>F</kbd>, wherever the
   keyboard is) opens Find over the code; its ⇄ button opens a second row
-  to Replace the selected match or Replace all. At the header's right
+  to Replace the selected match or Replace all, and the <u>ab</u> button
+limits matches to whole words. At the header's right
   end is Deploy, the green button with the arrow. While the code
   compiles the header says nothing about it; when it does not, a red ✖
   with the number of errors stands before Deploy, the first error in its
-  tooltip, and a click goes to that line. The code is
+  tooltip, and a click goes to that line. Before Deploy, once the project
+  has more than one version, are the same three buttons as in the
+  Describe tab: a left arrow, an **i** and a right arrow. The arrows step
+  back and forward through the versions and show each one's code in
+  place, read-only, under a bar that says "Version 7, 3 hours ago" and
+  has a button back to the file as you left it (the right arrow past the
+  newest does the same). Nothing is changed or deployed while an old
+  version is shown. The **i** opens that version in a window, and is
+  grey while you are looking at the file itself. The code is
   coloured by what each word is: keywords, types, numbers and times,
   comments, the program's inputs and outputs, and addresses. Errors are
   marked on the line as you type; the program running does not change
@@ -287,11 +295,11 @@ redrawn.
 - **The trend** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>) runs along the whole
   bottom of the window, under both side panes: the signals you pin, each
   drawn as a pulse that sweeps from left to right.
-- **Messages** sit in the left pane under the tab's content: what needs
-  saying now, then the last two hundred things the page had to say, with
-  the error count beside their header. Click the header to fold them
-  away; it stays red while an error is unread. Tick or untick info,
-  warnings and errors to list or leave out each.
+- **Log** is the bottom panel's other tab, beside the trend: what
+  needs saying now, then the last two hundred things the page had to say,
+  with the error count beside the tab. The tab stays red while an error
+  is unread. Tick or untick info, warnings and errors to list or leave out
+  each.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 

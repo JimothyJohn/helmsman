@@ -281,6 +281,17 @@ pub struct FilesUi {
     pub focus_name: bool,
 }
 
+/// The name the popup uses for what was typed (Nick, 2026-11-24: "let
+/// them have spaces"): the ends trimmed and each run of spaces one `_`,
+/// since a name is also a folder on the box and part of an address. A
+/// project's is lower case as well. Anything else a name cannot hold is
+/// left for the page to refuse in its own words.
+#[must_use]
+pub fn typed_name(typed: &str, project: bool) -> String {
+    let name = typed.split_whitespace().collect::<Vec<_>>().join("_");
+    if project { name.to_ascii_lowercase() } else { name }
+}
+
 /// A file name not taken, from `want`: `want` itself, else `stem-2.ext`,
 /// `stem-3.ext`, ... (`taken` says which names are).
 #[must_use]
@@ -348,10 +359,13 @@ impl FilesUi {
     pub fn show(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) -> Option<Act> {
         let t = theme(ui);
         let mut act = None;
-        let r = ui
-            .add(egui::Label::new(RichText::new(l.place.title()).strong().color(t.fg)).truncate())
-            .tip(l.place.tip());
-        chrome.hit("files place", r.rect);
+        // The box's tab has no header (Nick, 2026-11-26): the tab says it.
+        if l.place != Place::Box {
+            let r = ui
+                .add(egui::Label::new(RichText::new(l.place.title()).strong().color(t.fg)).truncate())
+                .tip(l.place.tip());
+            chrome.hit("files place", r.rect);
+        }
         // Your own come first, whether or not there are any.
         let mut shown = Group::Mine;
         let mine = l.projects.iter().filter(|p| p.group == Group::Mine).count();
@@ -374,7 +388,11 @@ impl FilesUi {
             if p.running {
                 text.push_str("  ● running");
             }
-            let color = if p.running { t.accent } else { t.fg };
+            let color = if p.running {
+                t.ink(crate::st_view::brand::GREEN)
+            } else {
+                t.fg
+            };
             let text = RichText::new(text).color(color);
             let tip = if p.example() {
                 let title = example_title(&p.name).unwrap_or(&p.name);
@@ -834,6 +852,7 @@ impl FilesUi {
             Naming::NewFile | Naming::RenameFile(_) => "NAME.st",
             _ => "a-z 0-9 _ -",
         };
+        let project = !matches!(n, Naming::NewFile | Naming::RenameFile(_));
         let mut ok = false;
         let mut cancel = false;
         let m = crate::theme::near_pointer(ctx, "files-name").show(ctx, |ui| {
@@ -846,7 +865,14 @@ impl FilesUi {
                         .hint_text(hint)
                         .desired_width(f32::INFINITY),
                 )
-                .tip(format!("The name ({hint}). Enter confirms."));
+                .tip(format!(
+                    "The name ({hint}). A space is saved as _{}. Enter confirms.",
+                    if project {
+                        " and capitals as small letters"
+                    } else {
+                        ""
+                    }
+                ));
             chrome.hit("name", t.rect);
             if std::mem::take(&mut self.focus_name) {
                 t.request_focus();
@@ -872,7 +898,7 @@ impl FilesUi {
         // the modal's backdrop, which would otherwise shut the question.
         if ok {
             self.naming = None;
-            let name = self.input.trim().to_string();
+            let name = typed_name(&self.input, project);
             if name.is_empty() {
                 return None;
             }
@@ -1056,6 +1082,9 @@ pub trait Workspace {
     /// Sends the ST editor to the declaration of the picked block's
     /// variable (Go to definition); whether there was one.
     fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool;
+    /// H: the Describe tab's history, at the newest revision with an
+    /// exchange (as Back from the live tab).
+    fn go_history(&mut self) {}
     /// Lights every read and write of the picked block's variable on the
     /// diagram (Cross references); whether there was one.
     fn cross_references(&mut self) -> bool;
@@ -1204,6 +1233,12 @@ mod tests {
 
     #[test]
     fn a_picked_file_names_a_project() {
+        assert_eq!(typed_name("  Tank  fill 2 ", true), "tank_fill_2");
+        assert_eq!(typed_name("Pump control.st", false), "Pump_control.st");
+        assert_eq!(typed_name("a\tb", false), "a_b");
+        assert_eq!(typed_name("   ", true), "");
+        // What a name cannot hold otherwise is not guessed at.
+        assert_eq!(typed_name("tank/fill", true), "tank/fill");
         assert_eq!(slug("Line 3 (copy).zip"), "line-3-copy");
         assert_eq!(slug("conveyor_2.zip"), "conveyor_2");
         assert_eq!(slug("....zip"), "project");

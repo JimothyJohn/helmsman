@@ -204,6 +204,101 @@ fn library() -> Files {
     ]))
 }
 
+/// `scan-every-interface`: a device that does not answer broadcasts is
+/// found by asking its address. The answer has the scan's shape, the
+/// device is mapped and known to the library as in a scan.
+#[test]
+fn a_direct_ask_by_address_answers_in_the_shape_of_a_scan() {
+    let sim = E1213Sim::start().unwrap();
+    let lib = library();
+    let api = box_with(
+        &sim,
+        Some(lib.url("/index.json")),
+        "device e1213 enip-io cip=991:515 profile=moxa-e1213 rpi_ms=100\nin di0 bool e1213 di:0\n",
+    );
+    let r = request(
+        api.addr(),
+        "POST",
+        "/api/devices/discover?address=127.0.0.1",
+        true,
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
+    let j = r.json();
+    let found = j["found"].as_array().unwrap();
+    assert_eq!(found.len(), 1, "{j}");
+    assert_eq!(found[0]["address"], "127.0.0.1", "{j}");
+    assert_eq!(found[0]["mapped"], "e1213", "{j}");
+    assert_eq!(found[0]["library"]["model"], "ioLogik E1213", "{j}");
+    assert_eq!(found[0]["identities"][0]["protocol"], "ethernet-ip", "{j}");
+    assert_eq!(j["devices"].as_array().unwrap().len(), 1, "{j}");
+    let pn = j["protocols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["protocol"] == "profinet")
+        .unwrap();
+    assert_eq!(pn["looked"], false, "{j}");
+    // A token is needed, as for a scan.
+    assert_eq!(
+        request(
+            api.addr(),
+            "POST",
+            "/api/devices/discover?address=127.0.0.1",
+            false
+        )
+        .status,
+        401
+    );
+}
+
+/// Anything but one device's IPv4 address is refused with a reason and
+/// sends nothing: a direct ask cannot be turned into a broadcast, a
+/// multicast or a sweep, and the refusal does not echo the input into the
+/// reply or the audit log.
+#[test]
+fn a_direct_ask_refuses_anything_but_one_devices_address() {
+    let sim = E1213Sim::start().unwrap();
+    let api = box_with(&sim, None, "");
+    for bad in [
+        "",
+        "255.255.255.255",
+        "0.0.0.0",
+        "224.0.0.251",
+        "239.255.255.250",
+        "127.0.0.1:44818",
+        "127.0.0.1,127.0.0.2",
+        "127.0.0.1%0d%0aforged",
+        "localhost",
+        "::1",
+        "1.2.3",
+        "256.1.1.1",
+        "0x7f.0.0.1",
+        "127.0.0.01",
+        "%1b%5b31mred",
+        "192.168.3.0/24",
+    ] {
+        let r = request(
+            api.addr(),
+            "POST",
+            &format!("/api/devices/discover?address={bad}"),
+            true,
+        );
+        assert_eq!(r.status, 400, "{bad:?}: {}", r.body);
+        assert!(r.body.contains("address must be"), "{bad:?}: {}", r.body);
+        assert!(
+            !r.body.contains("forged") && !r.body.contains("localhost"),
+            "{}",
+            r.body
+        );
+    }
+    let audit = request(api.addr(), "GET", "/api/audit?limit=100", true).body;
+    assert!(audit.contains("bad address"), "{audit}");
+    assert!(
+        !audit.contains("forged") && !audit.contains("localhost"),
+        "{audit}"
+    );
+}
+
 /// Add by click (PROTOCOLS.md step 3): the library route hands the canvas
 /// the device's profile text, checked, beside the map lines; a found
 /// device says which file that is; a profile the library serves broken is
@@ -639,4 +734,106 @@ fn a_box_without_the_probe_says_modbus_was_not_looked_for() {
     assert_eq!(says["protocol"], "modbus-tcp");
     assert_eq!(says["looked"], false);
     assert!(says["why"].as_str().unwrap().contains("Modbus"), "{j}");
+}
+
+/// The library route's `wiring=1`: the device's wiring note and its
+/// source, from the index entry's `wiring` table or else from the
+/// library's `/review.json`; nothing guessed, a hostile review refused.
+const LOOKUP: &str = "/api/devices/library?vendor=991&product=515";
+
+fn with_wiring(index: &str, wiring: &str) -> String {
+    let at = r#""kind": "remote-io","#;
+    assert!(index.contains(at));
+    index.replace(at, &format!(r#"{at} "wiring": {wiring},"#))
+}
+
+fn review(note: &str) -> String {
+    format!(
+        r#"{{ "format": "helmsman-devices-review 1", "devices": [ {{ "folder": "devices/moxa/iologik-e1213", "wiring": {{ "note": {}, "source": "the review" }} }} ] }}"#,
+        serde_json::to_string(note).unwrap()
+    )
+}
+
+fn wiring_of(files: Vec<(&'static str, String)>, path: &str) -> Json {
+    let sim = E1213Sim::start().unwrap();
+    let mut all = BTreeMap::from([("/index.json", INDEX.to_string())]);
+    all.extend(files);
+    let lib = Files::serve(all);
+    let api = box_with(&sim, Some(lib.url("/index.json")), "");
+    let r = request(api.addr(), "GET", path, true);
+    assert_eq!(r.status, 200, "{}", r.body);
+    r.json()
+}
+
+#[test]
+fn the_wiring_option_gives_the_index_entrys_note_and_source() {
+    let idx = with_wiring(
+        INDEX,
+        r#"{ "note": "Common to terminal C.", "source": "the manual p. 12" }"#,
+    );
+    let j = wiring_of(vec![("/index.json", idx)], &format!("{LOOKUP}&wiring=1"));
+    assert_eq!(
+        j["matches"][0]["wiring"],
+        json!({"note": "Common to terminal C.", "source": "the manual p. 12"}),
+        "{j}"
+    );
+    // Without the option the answer carries no wiring and fetches nothing more.
+    let j = wiring_of(
+        vec![
+            (
+                "/index.json",
+                with_wiring(INDEX, r#"{ "note": "n", "source": "s" }"#),
+            ),
+            ("/review.json", "not json".into()),
+        ],
+        LOOKUP,
+    );
+    assert!(j["matches"][0].get("wiring").is_none(), "{j}");
+    assert!(j["matches"][0].get("wiring_unavailable").is_none(), "{j}");
+    assert!(j.get("wiring_unavailable").is_none(), "{j}");
+}
+
+#[test]
+fn the_wiring_note_falls_back_to_the_librarys_review() {
+    let j = wiring_of(
+        vec![("/review.json", review("From the review."))],
+        &format!("{LOOKUP}&wiring=1"),
+    );
+    assert_eq!(
+        j["matches"][0]["wiring"],
+        json!({"note": "From the review.", "source": "the review"}),
+        "{j}"
+    );
+}
+
+#[test]
+fn no_wiring_facts_anywhere_means_no_wiring_key_and_no_complaint() {
+    let j = wiring_of(vec![], &format!("{LOOKUP}&wiring=1"));
+    assert_eq!(j["matches"].as_array().unwrap().len(), 1, "{j}");
+    assert!(j["matches"][0].get("wiring").is_none(), "{j}");
+    assert!(j["matches"][0].get("wiring_unavailable").is_none(), "{j}");
+    assert!(j.get("wiring_unavailable").is_none(), "{j}");
+}
+
+#[test]
+fn a_hostile_review_is_refused_in_words_and_gives_no_wiring() {
+    for (what, body) in [
+        ("a note over 600 characters", review(&"n".repeat(601))),
+        ("not json", "<html>nope".to_string()),
+        ("an array", "[1,2,3]".to_string()),
+        ("the wrong format", r#"{"format":"x","devices":[]}"#.to_string()),
+    ] {
+        let j = wiring_of(vec![("/review.json", body)], &format!("{LOOKUP}&wiring=1"));
+        let m = &j["matches"][0];
+        let said = m
+            .get("wiring_unavailable")
+            .or_else(|| j.get("wiring_unavailable"));
+        if what == "the wrong format" {
+            // Nothing usable in it: refused or ignored, but never used.
+            assert!(m.get("wiring").is_none(), "{what}: {j}");
+            continue;
+        }
+        assert!(said.is_some_and(Json::is_string), "{what}: {j}");
+        assert!(m.get("wiring").is_none(), "{what}: {j}");
+    }
 }

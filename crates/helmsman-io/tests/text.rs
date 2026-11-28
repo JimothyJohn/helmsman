@@ -84,7 +84,9 @@ fn token() -> impl Strategy<Value = String> {
 }
 
 fn ident() -> impl Strategy<Value = String> {
-    "[a-z_][a-z0-9_]{0,8}".prop_filter("box and module are reserved", |s| s != "box" && s != "module")
+    "[a-z_][a-z0-9_]{0,8}".prop_filter("box, module and sim are reserved", |s| {
+        s != "box" && s != "module" && s != "sim"
+    })
 }
 
 fn file() -> impl Strategy<Value = MapFile> {
@@ -104,7 +106,7 @@ fn file() -> impl Strategy<Value = MapFile> {
         ident(),
         0..3u8,
         any::<bool>(),
-        (0..4u8, ident()),
+        (0..5u8, ident()),
         token(),
         any::<i64>(),
         -1e9f64..1e9,
@@ -127,6 +129,7 @@ fn file() -> impl Strategy<Value = MapFile> {
                 let ty = [Ty::Bool, Ty::Int, Ty::Real][usize::from(t)];
                 // A module's output is only ever an `in` signal.
                 // A screen tile only ever an `out` one.
+                // A sim point has no safe value, poll or wired.
                 let kind = if (out && kind == 2) || (!out && kind == 3) {
                     0
                 } else {
@@ -137,10 +140,11 @@ fn file() -> impl Strategy<Value = MapFile> {
                     0 => Binding::Device { device: dev, point },
                     1 => Binding::Local { channel: point },
                     2 => Binding::Module { module: point },
-                    _ => Binding::Screen { tile: point },
+                    3 => Binding::Screen { tile: point },
+                    _ => Binding::Sim,
                 };
                 let poll = poll.filter(|_| !out && kind < 2).map(Duration::from_millis);
-                if out && with_safe {
+                if out && with_safe && kind != 4 {
                     let v = match ty {
                         Ty::Bool => Value::Bool(n % 2 == 0),
                         Ty::Int => Value::Int(n),
@@ -348,4 +352,131 @@ fn screen_tiles_are_outputs_the_map_declares() {
     let f = parse("in a bool screen t1\nout b bool screen 1t\nout c real screen t2\n").unwrap();
     let errs = f.map.validate().unwrap_err();
     assert_eq!(errs.len(), 2, "an in screen signal and a bad tile id: {errs:?}");
+}
+
+#[test]
+fn sim_points_parse_print_and_validate_with_no_device() {
+    let src = "in sw bool sim\nout total int sim unit=mm\nin rate real sim unit=m/s # a comment\n";
+    let f = parse(src).unwrap();
+    assert_eq!(f.map.devices.len(), 0);
+    assert_eq!(f.map.signals.len(), 3);
+    assert!(f.map.signals.iter().all(|s| s.binding == Binding::Sim));
+    assert_eq!(f.map.signals[1].unit.as_deref(), Some("mm"));
+    assert_eq!(f.map.signals[1].dir, Dir::Out);
+    f.map.validate().unwrap();
+    let text = render(&f);
+    assert_eq!(
+        text,
+        "in sw bool sim\nout total int sim unit=mm\nin rate real sim unit=m/s\n"
+    );
+    assert_eq!(parse(&text).unwrap(), f, "print then parse keeps the meaning");
+    // Beside a device, in any order.
+    let mixed =
+        parse("in a bool box di:0\nin b bool sim\ndevice rio modbus-tcp h:502\nout c bool rio coil:0\n")
+            .unwrap();
+    mixed.map.validate().unwrap();
+    assert_eq!(parse(&render(&mixed)).unwrap(), mixed);
+}
+
+#[test]
+fn a_sim_line_takes_no_address_and_no_option_but_a_unit() {
+    let bad = [
+        "in a bool sim 1",
+        "in a bool sim di:0",
+        "in a bool sim poll_ms=5",
+        "out a bool sim safe=true",
+        "in a bool sim wired=ifm/if6123",
+        "in a bool sim unit=",
+        "in a bool sim unit=mm unit=cm",
+        "in a bool sim bogus=1",
+        "in a nope sim",
+        "device sim modbus-tcp h:502",
+        "in a bool sim\nin b bool sim poll_ms=5\n",
+    ];
+    for src in bad {
+        let errs = parse(src).expect_err(src);
+        assert!(
+            !errs.is_empty() && errs.iter().all(|(n, why)| *n >= 1 && !why.is_empty()),
+            "{src}: {errs:?}"
+        );
+    }
+    let errs = parse("in a bool sim\nin b bool sim poll_ms=5\n").unwrap_err();
+    assert_eq!(errs.len(), 1);
+    assert_eq!(errs[0].0, 2, "the line number");
+    assert!(errs[0].1.contains("poll_ms"), "{errs:?}");
+    let errs = parse("device sim modbus-tcp h:502").unwrap_err();
+    assert!(errs[0].1.contains("sim"), "{errs:?}");
+}
+
+#[test]
+fn sim_names_stay_unique_with_the_device_points() {
+    let f = parse("in a bool sim\nin a bool box di:0\n").unwrap();
+    assert!(f.map.validate().is_err());
+}
+
+// ---- share lines: a Skipper's own Modbus TCP tables (docs/EDGE.md) ----
+
+const SHARES: &str = "\
+device rio modbus-tcp 192.168.3.50
+in  start bool rio di:1
+# shared with other controllers
+share speed   int  hr:0        # they read
+share run_cmd bool coil:0      # they write
+share at_home bool di:0
+share level   real ir:4:f32
+share pos     int  hr:10:i32sw
+";
+
+#[test]
+fn a_box_accepts_the_share_lines_a_skipper_runs() {
+    let f = parse(SHARES).unwrap();
+    assert_eq!(f.map.signals.len(), 1, "a share is no signal");
+    let shares: Vec<(&str, Ty, &str)> = f
+        .shares
+        .iter()
+        .map(|s| (s.name.as_str(), s.ty, s.address.as_str()))
+        .collect();
+    assert_eq!(
+        shares,
+        [
+            ("speed", Ty::Int, "hr:0"),
+            ("run_cmd", Ty::Bool, "coil:0"),
+            ("at_home", Ty::Bool, "di:0"),
+            ("level", Ty::Real, "ir:4:f32"),
+            ("pos", Ty::Int, "hr:10:i32sw"),
+        ]
+    );
+    let again = parse(&render(&f)).unwrap();
+    assert_eq!(again, f, "the lines survive a render");
+    // The box's project check takes the map as it takes any other.
+    f.map.validate().unwrap();
+}
+
+#[test]
+fn a_malformed_share_line_is_reported_with_its_number() {
+    for (text, why) in [
+        ("share\n", "want share"),
+        ("share a int\n", "want share"),
+        ("share a int hr:0 extra\n", "want share"),
+        ("share a float hr:0\n", "bool, int or real"),
+        ("share 1a int hr:0\n", "identifier"),
+        ("share a int xx:0\n", "goes in ir or hr"),
+        ("share a bool hr:0\n", "goes in di or coil"),
+        ("share a int di:0\n", "goes in ir or hr"),
+        ("share a int hr:x\n", "ADDR"),
+        ("share a int hr:65536\n", "ADDR"),
+        ("share a int hr:0:f32\n", "int's format"),
+        ("share a real hr:0:u16\n", "f32 or f32sw"),
+        ("share a real hr:0\n", "f32 or f32sw"),
+        ("share a bool coil:0:u16\n", "no format"),
+        ("share a int hr:0:u16:more\n", "too many"),
+    ] {
+        let errs = parse(&format!("# first\n{text}")).unwrap_err();
+        assert_eq!(errs.len(), 1, "{text:?}: {errs:?}");
+        assert_eq!(errs[0].0, 2, "{text:?}");
+        assert!(errs[0].1.contains(why), "{text:?}: {errs:?}");
+    }
+    let errs = parse("share a int hr:0\nshare A int hr:1\n").unwrap_err();
+    assert_eq!(errs[0].0, 2);
+    assert!(errs[0].1.contains("shared twice"));
 }

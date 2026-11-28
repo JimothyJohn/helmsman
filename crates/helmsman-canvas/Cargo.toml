@@ -22,11 +22,6 @@ serde_json = "1.0"
 # The desk kept in the browser (desk.rs); serde and serde_derive are
 # already in the workspace through helmsman-plc and helmsman-agent.
 serde = { version = "1.0", features = ["derive"] }
-# A PDF of a specification is recorded in spec.md by its SHA-256 (a kept
-# file is text, so the PDF itself is not stored). Pure Rust, the same
-# version the box and its agent already build (no new crate in Cargo.lock
-# beyond what they pull in), and it compiles for wasm32.
-sha2 = { version = "0.11.1", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
@@ -40,6 +35,8 @@ wasm-bindgen-futures = "0.4"
 # asked to remember, Element for the page's mode.
 # Projects: HtmlInputElement, File and FileList for Upload's file picker;
 # Blob, BlobPropertyBag, Url and HtmlAnchorElement for Download.
+# The sign-in as a real form the browser can fill: HtmlButtonElement,
+# HtmlElement (focus), KeyboardEvent (Esc) and Node (text).
 # CustomEvent(Init) to tell the page's loading screen how starting went.
 web-sys = { version = "0.3", features = [
     "AbortController",
@@ -58,10 +55,16 @@ web-sys = { version = "0.3", features = [
     "FileList",
     "Headers",
     "HtmlAnchorElement",
+    "HtmlButtonElement",
     "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlDocument",
     "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "KeyboardEvent",
     "Location",
     "MessageEvent",
+    "Node",
     "ReadableStream",
     "ReadableStreamDefaultReader",
     "ReferrerPolicy",

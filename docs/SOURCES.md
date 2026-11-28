@@ -317,6 +317,17 @@ What to pull from it, by page:
   3 is explicit; Exclusive Owner / Input Only / Listen Only definitions
   (Listen Only "can only be attached to an existing Exclusive Owner or Input
   Only Connection"). This glossary is your type vocabulary.
+- **`ListIdentity` sent to one address, not only broadcast
+  (`scan-every-interface`, 2026-11-24): no section cited.** The box asks
+  one host with a unicast `ListIdentity` and the whole LAN with the
+  limited broadcast, both to UDP 44818. The Quick Start extract here was
+  not open when this was written, so the claim rests on what was
+  measured instead: a unicast `ListIdentity` to the Novanta MDrive at
+  192.168.33.1 was answered when the broadcast did not reach it from the
+  default-route interface, and the unicast ask is pinned by
+  `crates/helmsman-io/tests/enip.rs` and
+  `crates/helmsman-plc/tests/discover.rs`. Replace this with the spec's
+  section once someone has read it.
 - **p.28–29, Appendix A (EDS):** which sections matter ([Device] matching on
   the first four Identity attributes excluding minor rev; [Connection
   Manager] `ConnectionN` entries; the three application paths config /
@@ -380,7 +391,10 @@ into the code.
   packing with zero padding (§6.1 p.11), 0x10 Write Multiple Registers (§6.12
   p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
   application layer runs over RTU (`rtu.rs`), which also takes reply lengths
-  from it.
+  from it. The edge node's plans (`crates/helmsman-nodecore/src/ioplan.rs`)
+  keep to the same limits: 125 registers a read (§6.3 p.15, §6.4 p.16),
+  123 a write (§6.12 p.30), and 0x0F Write Multiple Coils (§6.11 p.29, which
+  `sim.rs` answers since the node's map work).
 - **Gateway exceptions** (card `gateway-unit-down`;
   `helmsman-io` `driver::Error::is_link`): the exception code table (§7
   pp.47-49) lists 0x0A "Gateway Path Unavailable" (the gateway could not

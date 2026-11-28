@@ -5,7 +5,9 @@
 //! session for `Forward_Open`, and the Class 1 I/O connection around
 //! helmsman-proto's `class1`), a PROFINET IO controller (`profinet`:
 //! helmsman-profinet's state machine on the stack's UDP socket and raw
-//! frames beside it, `ethernet::l2`), and the UDP report line (`report`).
+//! frames beside it, `ethernet::l2`), the UDP report line (`report`), and
+//! the node's own Modbus TCP server for the values its map shares
+//! (`share_server`).
 //!
 //! Next door, crates/helmsman-node is the same idea on the Xtensa
 //! ESP32-POE2 with its own toolchain; this crate is the one that runs on
@@ -15,7 +17,10 @@
 extern crate alloc;
 
 pub mod beacon;
+pub mod bind;
 pub mod board;
+pub mod check;
+pub mod dial;
 pub mod enip;
 pub mod ethernet;
 pub mod flash;
@@ -25,6 +30,7 @@ pub mod ota;
 pub mod profinet;
 pub mod report;
 pub mod server;
+pub mod share_server;
 pub mod state;
 
 /// What esp-backtrace calls once the panic message and the backtrace are

@@ -24,6 +24,8 @@ pub struct SignalInfo {
     pub unit: Option<String>,
     /// Where it comes from or goes to, as JSON (`{"kind":"device",...}`).
     pub binding: Json,
+    /// A placeholder no device backs (`sim` in the I/O map).
+    pub sim: bool,
     /// Who drives it: a module, `calendar`, or nobody (`None`): an input
     /// read from a device, or an output no module drives (it stays safe).
     pub writer: Option<String>,
@@ -75,6 +77,7 @@ impl Catalog {
                     Some(Binding::Local { channel }) => json!({ "kind": "box", "channel": channel }),
                     Some(Binding::Module { module }) => json!({ "kind": "module", "module": module }),
                     Some(Binding::Screen { tile }) => json!({ "kind": "screen", "tile": tile }),
+                    Some(Binding::Sim) => json!({ "kind": "sim" }),
                     None => json!({ "kind": "calendar" }),
                 };
                 let driver = || {
@@ -94,6 +97,7 @@ impl Catalog {
                 Some(SignalInfo {
                     unit: table.unit(i).map(str::to_string),
                     safe: table.safe(i),
+                    sim: table.is_sim(i),
                     name,
                     ty,
                     dir,

@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
-# make ship: promote the release train and show, feature by feature, that
-# live does what dev does (docs/PARITY.md). Nick runs it; nothing else
-# promotes (the dev -> default merge stays his, by this command).
+# The release train's two hops (Nick, 2026-11-25): dev -> staging -> the
+# default branch, in all four repositories (docs/PARITY.md).
+#
+#   make staging  (scripts/ship.sh --staging)  the four dev tips, checked,
+#                 go to each repository's staging branch. Nothing deploys.
+#   make ship     (scripts/ship.sh)  the four staging tips, checked, go to
+#                 the default branches (production); the relay is deployed
+#                 and live is shown to do what staging does, feature by
+#                 feature. Nick runs it; nothing else promotes into a
+#                 default branch.
+#
+# "The candidate" below is the tip being promoted: dev's for make staging,
+# staging's for make ship. make ship never takes anything from dev: what
+# has not been through make staging is named and left where it is.
 #
 #   scripts/ship.sh             check the candidate, ask, promote, deploy,
 #                               wait for live, check live, report
+#   scripts/ship.sh --staging   check dev's tips and promote them to
+#                               staging (no question, no deploy, no live
+#                               half; --dry-run checks only)
 #   scripts/ship.sh --dry-run   the candidate half only: nothing promoted
 #   scripts/ship.sh --yes       no question before promoting
 #   scripts/ship.sh --live-only the live half only (after a ship whose
@@ -16,28 +30,32 @@
 # checkout are origin/dev's (SHIP_LOCAL_SCRIPTS=1 runs local copies).
 #
 # Steps:
-#   0. playground: when the canvas has changed since dev's committed page
-#      was built, the page is rebuilt at the dev tip
+#   0. playground (make staging): when the canvas has changed since dev's
+#      committed page was built, the page is rebuilt at the dev tip
 #      (scripts/build-playground.sh, with the relay stack's DemoUrl and
 #      DemoDesignUrl, or HELMSMAN_FREE_CHAT_URL / HELMSMAN_DESIGN_URL when
 #      set) and merged into dev by a pull request before anything is
 #      checked. Without this the site kept a page six days old through a
-#      ship (2026-11-21). --dry-run only says the page is stale.
-#   1. candidate: scripts/compat.sh --candidate (the four dev tips against
+#      ship (2026-11-21). --dry-run only says the page is stale. make ship
+#      builds nothing: a stale page on staging refuses it (make staging).
+#   1. candidate: scripts/compat.sh --candidate (the four tips against
 #      each other's contracts, and their CI), then `helmsman-compat parity`
-#      on the box compat built at dev, and scripts/parity-tabs.py on dev's
-#      committed playground (what master will serve).
+#      on the box compat built there, and scripts/parity-tabs.py on the
+#      candidate's committed playground (what master will serve), with the
+#      tabs only a box's page has (Help) on that box serving its own canvas.
 #   2. promote: each repository whose candidate commit (compat.sh's
-#      target/compat/train.txt) is ahead of its default branch gets a
+#      target/compat/train.txt) is ahead of the branch it goes to gets a
 #      ship/<stamp> branch at that commit and a pull request from it into
-#      the default branch, merged (a merge commit). What lands on dev after
-#      the candidate was checked is neither shipped nor in the way. agent-relay is then deployed from a
+#      staging (make staging) or the default branch (make ship), merged (a
+#      merge commit). What lands after the candidate was checked is neither
+#      promoted nor in the way. make staging ends here. For make ship,
+#      agent-relay is then deployed from a
 #      throwaway worktree at main (`make deploy`, which keeps the stack's
 #      settings), so the relay that is live is the one that was checked.
 #   3. live: scripts/live-state.sh --at each candidate commit until every
 #      row but the try box says live (the site's Pages build takes minutes), then parity on a box
-#      built at the new master held to dev's docs/FEATURES.md, and the
-#      tabs on the public site.
+#      built at the new master held to the candidate's docs/FEATURES.md, and the
+#      tabs on the public site (the box-only ones on that box).
 #   4. report: target/ship/report.md, every feature with its candidate and
 #      live outcome. A feature that passed on the candidate and fails live
 #      is a regression: the report names it and a draft pull request
@@ -50,7 +68,7 @@
 # deploy what ../agent-relay/scripts/deploy.sh needs (AWS credentials,
 # SAM, cargo-lambda). Run it from a real terminal: a box that reads the
 # LAN is not involved, but the relay deploy and gh may ask for things.
-# Exit: 0 shipped and live matches, 1 a check failed or live regressed,
+# Exit: 0 shipped and live matches (make staging: promoted), 1 a check failed or live regressed,
 # 2 something could not run, 3 Nick said no.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -59,17 +77,26 @@ MAIN=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
 REPOS=${COMPAT_REPOS:-$(dirname "$MAIN")}
 OUT=$ROOT/target/ship
 SITE=${HELMSMAN_SITE:-https://helmsman.advin.io}
-DRY=0 YES=0 LIVE_ONLY=0 REPORT_ONLY=0
+DRY=0 YES=0 LIVE_ONLY=0 REPORT_ONLY=0 STAGING=0
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY=1 ;;
     --yes) YES=1 ;;
+    --staging) STAGING=1 ;;
     --live-only) LIVE_ONLY=1 ;;
     --report) REPORT_ONLY=1 ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,58p' "$0"; exit 0 ;;
     *) echo "ship.sh: unknown argument $a (--help)" >&2; exit 2 ;;
   esac
 done
+# FROM: the branch whose tips are the candidate. make staging has no live
+# half, so the flags that only run or reprint it are refused.
+if [ "$STAGING" = 1 ]; then
+  FROM=dev
+  [ "$LIVE_ONLY" = 0 ] && [ "$REPORT_ONLY" = 0 ] || { echo "ship.sh: --staging has no live half (--live-only and --report belong to make ship)" >&2; exit 2; }
+else
+  FROM=staging
+fi
 mkdir -p "$OUT"
 say() { printf '\n== %s\n' "$*"; }
 die() { echo "ship.sh: $*" >&2; exit 2; }
@@ -99,6 +126,8 @@ default_of() {
 }
 src_of() { [ "$1" = helmsman ] && echo "$MAIN" || echo "$REPOS/$1"; }
 slug() { git -C "$(src_of "$1")" remote get-url origin | sed -E 's#(git@github.com:|https://github.com/)##; s#\.git$##'; }
+# base_of REPO -> the branch this run promotes into
+base_of() { [ "$STAGING" = 1 ] && echo staging || default_of "$1"; }
 REPOS_ALL="helmsman agent-relay helmsman-devices helmsman-hardware"
 TRAIN=$ROOT/target/compat/train.txt
 # candidate REPO -> the commit compat.sh checked for it (empty without a run)
@@ -130,10 +159,10 @@ wait_merged() {
 }
 
 if [ "$REPORT_ONLY" = 1 ]; then
-  H_DEV=$(git -C "$MAIN" rev-parse origin/dev); H_LIVE=$(git -C "$MAIN" rev-parse origin/master)
+  H_DEV=$(git -C "$MAIN" rev-parse origin/staging); H_LIVE=$(git -C "$MAIN" rev-parse origin/master)
   DEV_DIR=$ROOT/target/compat/src/helmsman@${H_DEV:0:12}
   FEATURES=$DEV_DIR/docs/FEATURES.md
-  [ -f "$FEATURES" ] || die "--report needs a run's checkout of dev at $DEV_DIR"
+  [ -f "$FEATURES" ] || die "--report needs a run's checkout of staging at $DEV_DIR"
 else
 # ---- 1. candidate ----------------------------------------------------------
 
@@ -142,12 +171,18 @@ gh auth status >/dev/null 2>&1 || die "gh is not signed in"
 
 # ---- 0. the playground -----------------------------------------------------
 
-if [ "$LIVE_ONLY" = 0 ]; then
+if [ "$LIVE_ONLY" = 0 ] && [ "$STAGING" = 0 ]; then
+  git -C "$MAIN" fetch -q origin staging dev || die "fetching helmsman failed"
+  if page_stale origin/staging; then
+    [ "$DRY" = 1 ] || die "staging's playground page is older than its canvas; make staging rebuilds it and promotes it"
+    say "playground: staging's page is older than its canvas; make staging rebuilds it"
+  fi
+elif [ "$LIVE_ONLY" = 0 ]; then
   git -C "$MAIN" fetch -q origin dev || die "fetching helmsman failed"
   if ! page_stale origin/dev; then
     :
   elif [ "$DRY" = 1 ]; then
-    say "playground: dev's page is older than its canvas; a real ship rebuilds it first"
+    say "playground: dev's page is older than its canvas; a real run rebuilds it first"
   else
     say "playground: dev's page is older than its canvas; rebuilding it at the dev tip"
     command -v trunk >/dev/null || die "the playground rebuild needs trunk (cargo install trunk --locked)"
@@ -163,37 +198,39 @@ if [ "$LIVE_ONLY" = 0 ]; then
     if git -C "$wt" diff --cached --quiet; then
       echo "  the build came out the same as dev's page"
     else
-      git -C "$wt" commit -q -m "site: rebuild the playground at the dev tip (make ship)" &&
+      git -C "$wt" commit -q -m "site: rebuild the playground at the dev tip (make staging)" &&
         # The page carries a 7 MB wasm; the default HTTP buffer drops it ("unexpected disconnect").
         git -C "$wt" -c http.postBuffer=524288000 push -q -u origin "$br" || die "pushing $br failed; worktree left at $wt"
       url=$(gh pr create --repo "$(slug helmsman)" --base dev --head "$br" \
         --title "site: rebuild the playground at the dev tip" \
-        --body "make ship: the canvas changed after dev's committed page was built, so master would serve an old page. Built by scripts/build-playground.sh; auto-merge takes it in once CI is green." 2>&1 | tail -1)
+        --body "make staging: the canvas changed after dev's committed page was built, so master would serve an old page. Built by scripts/build-playground.sh; auto-merge takes it in once CI is green." 2>&1 | tail -1)
       case "$url" in https://*) echo "  $url" ;; *) die "opening the playground pull request failed: $url" ;; esac
       wait_merged "$url" 40 || die "$url did not merge in 40 min; nothing promoted"
     fi
     git -C "$MAIN" worktree remove "$wt" && git -C "$MAIN" branch -q -D "$br"
     git -C "$MAIN" fetch -q origin dev
-    page_stale origin/dev && die "dev's page is stale again: the canvas changed while the rebuild merged; run make ship again"
+    page_stale origin/dev && die "dev's page is stale again: the canvas changed while the rebuild merged; run make staging again"
   fi
 fi
 
 if [ "$LIVE_ONLY" = 0 ]; then
-  say "candidate: contracts and CI (scripts/compat.sh --candidate)"
-  scripts/compat.sh --candidate
+  say "candidate: contracts and CI at the $FROM tips (scripts/compat.sh --candidate)"
+  scripts/compat.sh --candidate --helmsman "origin/$FROM" --relay "origin/$FROM" \
+    --devices "origin/$FROM" --hardware "origin/$FROM"
   st=$?
   [ "$st" = 0 ] || { echo "ship.sh: the candidate's contracts or CI are not green (target/compat/report.md); nothing promoted" >&2; exit "$st"; }
 fi
 
-# The checkouts and the box compat made at the dev tip: the commits it
+# The checkouts and the box compat made at the candidate: the commits it
 # checked, which a --live-only run takes from the last ship's train.
+# (H_DEV and DEV_DIR keep their names from when the candidate was always dev.)
 H_DEV=$(candidate helmsman)
-[ -n "$H_DEV" ] || { [ "$LIVE_ONLY" = 1 ] && H_DEV=$(git -C "$MAIN" rev-parse origin/dev); }
+[ -n "$H_DEV" ] || { [ "$LIVE_ONLY" = 1 ] && H_DEV=$(git -C "$MAIN" rev-parse "origin/$FROM"); }
 [ -n "$H_DEV" ] || die "compat.sh left no train ($TRAIN)"
 DEV_DIR=$ROOT/target/compat/src/helmsman@${H_DEV:0:12}
-[ -d "$DEV_DIR" ] || { mkdir -p "$ROOT/target/compat/src"; git clone -q --shared --no-checkout "$MAIN" "$DEV_DIR" && git -C "$DEV_DIR" checkout -q --detach "$H_DEV"; } || die "no checkout of dev at $DEV_DIR"
+[ -d "$DEV_DIR" ] || { mkdir -p "$ROOT/target/compat/src"; git clone -q --shared --no-checkout "$MAIN" "$DEV_DIR" && git -C "$DEV_DIR" checkout -q --detach "$H_DEV"; } || die "no checkout of $FROM at $DEV_DIR"
 FEATURES=$DEV_DIR/docs/FEATURES.md
-[ -f "$FEATURES" ] || die "dev ($H_DEV) has no docs/FEATURES.md"
+[ -f "$FEATURES" ] || die "$FROM ($H_DEV) has no docs/FEATURES.md"
 (cargo build -q --locked -p helmsman-compat) || die "building helmsman-compat failed"
 CHECK=$ROOT/target/debug/helmsman-compat
 
@@ -206,8 +243,17 @@ build_box() {
   echo "$target/debug/helmsman-plc"
 }
 
+# build_ui SHA LABEL -> the box's canvas build at that commit (make canvas-web
+# there), for the tabs only a box's page has: the playground has no Help tab.
+build_ui() {
+  local dir=$ROOT/target/compat/src/helmsman@${1:0:12} target=$ROOT/target/compat/build/helmsman-$2
+  echo "  build the box's canvas at ${1:0:12} ($2)" >&2
+  (cd "$dir" && CARGO_TARGET_DIR="$target" scripts/canvas-web.sh >"$OUT/ui-$2.log" 2>&1) || { tail -20 "$OUT/ui-$2.log" >&2; return 1; }
+  echo "$dir/target/canvas-dist"
+}
+
 # The relays. The candidate's agent journeys run on the stub model behind
-# the relay compat.sh built at agent-relay's dev tip (never a stale local
+# the relay compat.sh built at agent-relay's candidate (never a stale local
 # build); live's on the deployed relay, found as compat.sh --live finds it.
 RELAY_DEV=$ROOT/target/compat/build/agent-relay-dev/debug/agent-relay-local
 LIVE_URL=${COMPAT_LIVE_URL:-$(grep -oE 'https://[a-z0-9.-]+\.on\.aws' "$HOME/github/helmsman-try/scratch/run-box.sh" 2>/dev/null | head -1)}
@@ -233,30 +279,36 @@ tabs() {
 }
 
 if [ "$LIVE_ONLY" = 0 ]; then
-  say "candidate: feature journeys on a box built at dev (${H_DEV:0:12})"
-  BOX_DEV=$(build_box "$H_DEV" dev) || die "building the box at dev failed ($OUT/build-dev.log)"
-  [ -x "$RELAY_DEV" ] || die "no relay built at agent-relay's dev tip ($RELAY_DEV): compat.sh builds it"
+  say "candidate: feature journeys on a box built at $FROM (${H_DEV:0:12})"
+  BOX_DEV=$(build_box "$H_DEV" dev) || die "building the box at $FROM failed ($OUT/build-dev.log)"
+  [ -x "$RELAY_DEV" ] || die "no relay built at agent-relay's $FROM tip ($RELAY_DEV): compat.sh builds it"
   parity candidate "$BOX_DEV" --relay-bin "$RELAY_DEV"; c1=$?
-  say "candidate: every tab on dev's playground page"
-  tabs candidate --dist "$DEV_DIR/docs" --path /playground; c2=$?
+  say "candidate: every tab on $FROM's playground page, and the box-only ones on its box's page"
+  UI_DEV=$(build_ui "$H_DEV" dev) || die "building the box's canvas at $FROM failed ($OUT/ui-dev.log)"
+  tabs candidate --dist "$DEV_DIR/docs" --path /playground --box "$BOX_DEV" --box-ui "$UI_DEV"; c2=$?
   if [ "$c1" != 0 ] || [ "$c2" != 0 ]; then
-    echo "ship.sh: a feature fails on the candidate itself; fix it on dev first. Nothing promoted." >&2
+    echo "ship.sh: a feature fails on the candidate itself; fix it on dev first$([ "$STAGING" = 1 ] || echo ", then make staging"). Nothing promoted." >&2
     exit 1
   fi
 fi
 
 # ---- 2. promote ------------------------------------------------------------
 
-ahead() { gh api "repos/$(slug "$1")/compare/$(default_of "$1")...$(candidate "$1")" --jq .ahead_by 2>/dev/null; }
+ahead() { gh api "repos/$(slug "$1")/compare/$(base_of "$1")...$(candidate "$1")" --jq .ahead_by 2>/dev/null; }
+# waiting REPO -> commits on dev that staging lacks (make ship leaves them)
+waiting() { gh api "repos/$(slug "$1")/compare/staging...dev" --jq .ahead_by 2>/dev/null; }
 
 if [ "$LIVE_ONLY" = 0 ]; then
   say "the promotion"
   TODO=""
   for r in $REPOS_ALL; do
     n=$(ahead "$r")
-    [ -n "$n" ] || die "GitHub did not say how far $r's dev is ahead"
-    printf '  %-18s %s is %s commits ahead of %s\n' "$r" "$(candidate "$r" | cut -c1-12)" "$n" "$(default_of "$r")"
+    [ -n "$n" ] || die "GitHub did not say how far $r's $FROM is ahead of $(base_of "$r") (has $r a staging branch?)"
+    printf '  %-18s %s is %s commits ahead of %s\n' "$r" "$(candidate "$r" | cut -c1-12)" "$n" "$(base_of "$r")"
     [ "$n" = 0 ] || TODO="$TODO $r"
+    if [ "$STAGING" = 0 ]; then
+      w=$(waiting "$r"); [ "${w:-0}" = 0 ] || printf '  %-18s (dev holds %s more that staging lacks: not shipped; make staging takes them)\n' "" "$w"
+    fi
   done
   if [ -z "$TODO" ]; then
     echo "  nothing to promote"
@@ -264,7 +316,7 @@ if [ "$LIVE_ONLY" = 0 ]; then
     echo "ship.sh: --dry-run; the candidate is green and nothing was promoted"
     exit 0
   else
-    if [ "$YES" = 0 ]; then
+    if [ "$YES" = 0 ] && [ "$STAGING" = 0 ]; then
       # Read from the terminal itself, after dropping anything typed ahead
       # during the long checks, with carriage returns and spaces taken off:
       # on 2026-11-21 a typed "ship" was refused after `gh run watch` had
@@ -277,20 +329,21 @@ if [ "$LIVE_ONLY" = 0 ]; then
     fi
     stamp=$(date -u +%Y-%m-%dT%H%MZ)
     for r in $TODO; do
-      s=$(slug "$r"); base=$(default_of "$r"); sha=$(candidate "$r"); br=ship/$(echo "$stamp" | tr -d ':-')
-      # A branch at the checked commit, so a merge into dev since is not shipped with it.
+      s=$(slug "$r"); base=$(base_of "$r"); sha=$(candidate "$r"); br=ship/$(echo "$stamp" | tr -d ':-')
+      # A branch at the checked commit, so a merge into $FROM since is not promoted with it.
       gh api "repos/$s/git/refs" -f ref="refs/heads/$br" -f sha="$sha" >/dev/null || die "creating $br at ${sha:0:12} in $s failed"
-      url=$(gh pr create --repo "$s" --base "$base" --head "$br" --title "Promote dev to $base ($stamp)" \
-        --body "make ship: the candidate ${sha:0:12} from dev, parity green (helmsman target/ship/report.md)." 2>&1 | tail -1)
+      url=$(gh pr create --repo "$s" --base "$base" --head "$br" --title "Promote $FROM to $base ($stamp)" \
+        --body "make $([ "$STAGING" = 1 ] && echo staging || echo ship): the candidate ${sha:0:12} from $FROM, contracts, CI and parity green on it." 2>&1 | tail -1)
       case "$url" in https://*) ;; *) die "opening the $r promotion failed: $url" ;; esac
       echo "  $r: $url (${sha:0:12})"
       gh pr merge "$url" --merge >/dev/null 2>&1 || gh pr merge "$url" --merge --auto >/dev/null 2>&1 || die "merging $url failed"
-      wait_merged "$url" 30 || die "$url did not merge in 30 min"
+      # staging requires the PR's own checks (gate), so its merge waits for a CI run.
+      wait_merged "$url" 60 || die "$url did not merge in 60 min"
       gh api -X DELETE "repos/$s/git/refs/heads/$br" >/dev/null 2>&1 || true
       echo "$r $(gh pr view "$url" --json mergeCommit --jq .mergeCommit.oid)" >>"$OUT/promoted.txt"
     done
-    case " $TODO " in
-      *" agent-relay "*)
+    case "$STAGING $TODO " in
+      "0 "*" agent-relay "*)
         say "deploy the relay from main"
         rel=$(src_of agent-relay); wt=$rel/.claude/worktrees/ship-main
         git -C "$rel" fetch -q origin main || die "fetching agent-relay failed"
@@ -304,6 +357,12 @@ if [ "$LIVE_ONLY" = 0 ]; then
         ;;
     esac
   fi
+fi
+
+if [ "$STAGING" = 1 ]; then
+  echo
+  echo "ship.sh: staging holds the candidate in every repository; nothing is deployed. make ship takes staging to production."
+  exit 0
 fi
 
 # ---- 3. live ---------------------------------------------------------------
@@ -323,14 +382,15 @@ done
 cat "$OUT/live-state.txt"
 [ "$live" = 1 ] || die "not live after 20 min (above); check again with scripts/ship.sh --live-only"
 
-say "live: feature journeys on a box built at master, held to dev's features"
+say "live: feature journeys on a box built at master, held to the candidate's features"
 git -C "$MAIN" fetch -q origin master
 H_LIVE=$(git -C "$MAIN" rev-parse origin/master)
 BOX_LIVE=$(build_box "$H_LIVE" live) || die "building the box at master failed ($OUT/build-live.log)"
 [ -n "$LIVE_URL" ] && [ -r "$LIVE_TOKEN" ] || die "live parity needs the deployed relay: COMPAT_LIVE_URL and a readable COMPAT_LIVE_TOKEN ($LIVE_TOKEN)"
 parity live "$BOX_LIVE" --url "$LIVE_URL" --token "$LIVE_TOKEN"
-say "live: every tab on $SITE/playground/"
-tabs live --site "$SITE"
+say "live: every tab on $SITE/playground/, and the box-only ones on master's box's page"
+UI_LIVE=$(build_ui "$H_LIVE" live) || die "building the box's canvas at master failed ($OUT/ui-live.log)"
+tabs live --site "$SITE" --box "$BOX_LIVE" --box-ui "$UI_LIVE"
 
 fi
 
@@ -355,7 +415,7 @@ tab_outcome() { grep -q -E "^ok +tab:$2\$" "$1" 2>/dev/null && echo ok || echo F
 {
   echo "# make ship, $(date -u +%Y-%m-%dT%H:%MZ)"
   echo
-  echo "candidate: helmsman dev ${H_DEV:0:12}; live: master ${H_LIVE:0:12}, $SITE"
+  echo "candidate: helmsman staging ${H_DEV:0:12}; live: master ${H_LIVE:0:12}, $SITE"
   echo
   echo "| feature check | candidate | live |"
   echo "|---|---|---|"

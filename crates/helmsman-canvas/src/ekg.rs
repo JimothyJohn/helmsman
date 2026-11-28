@@ -15,6 +15,7 @@
 use eframe::egui::{self, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke};
 
 use crate::playground_view::{LANE_HANDLE_W, SCALE_W, lane_points, scale_labels};
+use crate::st_view::brand;
 use crate::theme::Theme;
 
 /// The blank ahead of the head, as a share of the window.
@@ -274,22 +275,100 @@ pub fn pin_auto(
     pinned
 }
 
+/// What a signal is, as far as a lane's look and number go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// TRUE draws green and filled, FALSE a flat grey line.
+    Bool,
+    /// Whole numbers.
+    Int,
+    /// A REAL: decimals follow the lane's scale.
+    Real,
+    /// A TIME, in ms: shown in ms or s.
+    Time,
+}
+
+/// The widest the label column grows; a longer name is cut and shown whole
+/// on hover.
+pub const LABEL_MAX_W: f32 = 168.0;
+
+/// The label column for `names`: wide enough for the longest, at least
+/// [`LANE_HANDLE_W`], at most [`LABEL_MAX_W`].
+pub fn label_width<'a>(painter: &Painter, names: impl Iterator<Item = &'a String>) -> f32 {
+    names
+        .map(|n| {
+            painter
+                .layout_no_wrap(
+                    n.to_ascii_lowercase(),
+                    FontId::monospace(crate::theme::MIN_TEXT),
+                    Color32::WHITE,
+                )
+                .size()
+                .x
+                + 14.0
+        })
+        .fold(LANE_HANDLE_W, f32::max)
+        .min(LABEL_MAX_W)
+        .ceil()
+}
+
+/// The decimals a REAL lane shows: one more than its scale's step has.
+fn decimals((_, _, step): (f64, f64, f64)) -> usize {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let d = (-step.log10().floor()).max(0.0) as usize;
+    (d + 1).min(4)
+}
+
+/// `v` as a lane shows it: TRUE or FALSE, a whole number, a REAL to the
+/// scale's decimals, a TIME in ms or s; then the unit.
+#[must_use]
+pub fn value_text(kind: Kind, v: f64, range: (f64, f64, f64), unit: Option<&str>) -> String {
+    let mut out = match kind {
+        Kind::Bool => return if v == 0.0 { "FALSE" } else { "TRUE" }.into(),
+        Kind::Int => format!("{v:.0}"),
+        Kind::Real => format!("{v:.*}", decimals(range)),
+        Kind::Time if v.abs() >= 1000.0 => format!("{:.1} s", v / 1000.0),
+        Kind::Time => format!("{v:.0} ms"),
+    };
+    if let Some(u) = unit.filter(|u| !u.is_empty() && kind != Kind::Time) {
+        out.push(' ');
+        out.push_str(u);
+    }
+    out
+}
+
+/// A lane's scale label for `v`.
+#[must_use]
+pub fn axis_text(kind: Kind, v: f64, range: (f64, f64, f64)) -> String {
+    match kind {
+        Kind::Bool => if v == 0.0 { "FALSE" } else { "TRUE" }.into(),
+        Kind::Int => format!("{v:.0}"),
+        _ => crate::playground::tick_label(v, range.2),
+    }
+}
+
 /// What one lane is drawn with.
 pub struct Lane<'a> {
     pub name: &'a str,
     pub color: Color32,
-    /// The live value as text, beside the head; none with no sample.
-    pub number: Option<String>,
+    /// The live value, shown beside the head; none with no sample.
+    pub value: Option<f64>,
+    /// What the signal is: it picks the lane's look and its decimals.
+    pub kind: Kind,
+    /// The unit, where the box reports one.
+    pub unit: Option<&'a str>,
+    /// Width of the label column ([`label_width`]).
+    pub label_w: f32,
     /// How strongly the lane pops, 0 to 1 ([`Flashes::strength`]).
     pub pop: f32,
 }
 
 /// The x range of the traces in a trend drawn in `rect`.
 #[must_use]
-pub fn trace_x(rect: Rect) -> (f32, f32) {
+pub fn trace_x(rect: Rect, label_w: f32) -> (f32, f32) {
     (
-        rect.left() + LANE_HANDLE_W,
-        (rect.right() - SCALE_W).max(rect.left() + LANE_HANDLE_W + 1.0),
+        rect.left() + label_w,
+        (rect.right() - SCALE_W).max(rect.left() + label_w + 1.0),
     )
 }
 
@@ -308,36 +387,45 @@ pub fn paint_lane(
     runs: &Runs,
     range: (f64, f64, f64),
 ) {
-    let (x0, x1) = trace_x(rect);
+    let (x0, x1) = trace_x(rect, lane.label_w);
+    let range = if lane.kind == Kind::Bool {
+        (0.0, 1.0, 1.0)
+    } else {
+        range
+    };
     let band = Rect::from_min_max(Pos2::new(rect.left(), top), Pos2::new(rect.right(), top + height));
     if lane.pop > 0.0 {
         painter.rect_filled(band, CornerRadius::ZERO, t.accent.gamma_multiply(0.30 * lane.pop));
     }
     // The name, one row, cut with an ellipsis where it would run on into
-    // the trace.
+    // the trace. Inter (a name is not a live value). A BOOL lane's trace is
+    // green or grey whatever its palette colour, so its name is plain ink:
+    // "run" in red beside a green trace read as a fault.
+    let ink = if lane.kind == Kind::Bool { t.fg } else { lane.color };
     let mut job = egui::text::LayoutJob::simple_singleline(
         lane.name.to_ascii_lowercase(),
-        FontId::monospace(crate::theme::MIN_TEXT),
+        FontId::proportional(crate::theme::MIN_TEXT),
         if lane.pop > 0.0 {
-            t.fg.lerp_to_gamma(lane.color, 1.0 - lane.pop)
+            t.fg.lerp_to_gamma(ink, 1.0 - lane.pop)
         } else {
-            lane.color
+            ink
         },
     );
-    job.wrap.max_width = LANE_HANDLE_W - 10.0;
+    job.wrap.max_width = lane.label_w - 10.0;
     job.wrap.max_rows = 1;
     job.wrap.break_anywhere = true;
     let name = painter.layout_job(job);
     painter.galley(
         Pos2::new(rect.left() + 6.0, top + (height - name.size().y) / 2.0),
         name,
-        lane.color,
+        ink,
     );
+    // Hairlines: the separator and the scale's lines are thin and faint.
     painter.line_segment(
         [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
-        Stroke::new(1.0, t.rule),
+        Stroke::new(0.5, t.rule),
     );
-    scale_labels(painter, t, rect, top, height, range);
+    scale_labels(painter, t, rect, top, height, range, lane.kind);
     let (lo, hi, _) = range;
     let y_of = |v: f64| {
         #[allow(clippy::cast_possible_truncation)]
@@ -348,13 +436,21 @@ pub fn paint_lane(
     #[allow(clippy::cast_possible_truncation)]
     let x_of = |share: f64| x0 + width * share as f32;
     let head_x = x_of(sweep.head());
+    let grid = Stroke::new(0.5, t.rule.gamma_multiply(0.6));
+    for y in [y_of(hi), y_of(lo)] {
+        painter.line_segment([Pos2::new(x0, y), Pos2::new(x1, y)], grid);
+    }
     painter.line_segment(
         [
             Pos2::new(head_x, top + 2.0),
             Pos2::new(head_x, top + height - 2.0),
         ],
-        Stroke::new(1.0, t.rule),
+        Stroke::new(0.5, t.rule),
     );
+    let base = y_of(lo);
+    let on_y = y_of(hi);
+    let green = t.ink(brand::GREEN);
+    let flat = t.muted.gamma_multiply(0.7);
     for (k, run) in runs.iter().enumerate() {
         let pts = lane_points(run.iter().map(|&(s, v)| (x_of(s), y_of(v))));
         if pts.len() < 2 {
@@ -362,7 +458,13 @@ pub fn paint_lane(
         }
         let age_of = |p: Pos2| sweep.age(k == 1, f64::from((p.x - x0) / width));
         for (alpha, seg) in bands(&pts, age_of) {
-            if seg.len() > 1 {
+            if seg.len() < 2 {
+                continue;
+            }
+            if lane.kind == Kind::Bool {
+                paint_bool(painter, t.dark, &seg, (on_y, base), green, flat, alpha);
+            } else {
+                fill_under(painter, &seg, base, lane.color.gamma_multiply(alpha), 0.25);
                 painter.add(egui::Shape::line(
                     seg,
                     Stroke::new(1.8, lane.color.gamma_multiply(alpha)),
@@ -373,15 +475,19 @@ pub fn paint_lane(
     let Some(&(_, now_v)) = runs[1].last().or_else(|| runs[0].last()) else {
         return;
     };
+    let tip_color = if lane.kind == Kind::Bool {
+        if now_v == 0.0 { flat } else { green }
+    } else {
+        lane.color
+    };
     let tip = Pos2::new(head_x, y_of(now_v));
-    painter.circle_filled(tip, 8.0, lane.color.gamma_multiply(0.25));
-    painter.circle_filled(tip, 3.5, lane.color.lerp_to_gamma(Color32::WHITE, 0.55));
-    if let Some(number) = &lane.number {
-        let galley = painter.layout_no_wrap(
-            number.clone(),
-            FontId::monospace(crate::theme::MIN_TEXT),
-            lane.color,
-        );
+    if lane.kind != Kind::Bool || now_v != 0.0 {
+        painter.circle_filled(tip, 8.0, tip_color.gamma_multiply(0.25));
+    }
+    painter.circle_filled(tip, 3.5, tip_color.lerp_to_gamma(Color32::WHITE, 0.55));
+    if let Some(v) = lane.value {
+        let number = value_text(lane.kind, v, range, lane.unit);
+        let galley = painter.layout_no_wrap(number, FontId::monospace(crate::theme::MIN_TEXT), tip_color);
         let size = galley.size();
         let right = head_x + 12.0 + size.x <= x1 + SCALE_W - 8.0;
         let at_x = if right {
@@ -395,7 +501,82 @@ pub fn paint_lane(
             CornerRadius::same(3),
             t.chart.gamma_multiply(0.88),
         );
-        painter.galley(at, galley, lane.color);
+        painter.galley(at, galley, tip_color);
+    }
+}
+
+/// The area under a step polyline down to `base`, `color` at `a_top`
+/// alpha at the line fading to nothing at the base.
+fn fill_under(painter: &Painter, pts: &[Pos2], base: f32, color: Color32, a_top: f32) {
+    let top = color.gamma_multiply(a_top);
+    let none = Color32::TRANSPARENT;
+    let mut mesh = egui::Mesh::default();
+    for w in pts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        // A step's rise has no width; its tread is what holds the area.
+        if b.x - a.x < 0.01 || a.y >= base - 0.5 {
+            continue;
+        }
+        let i = u32::try_from(mesh.vertices.len()).unwrap_or(0);
+        for (p, c) in [
+            (a, top),
+            (b, top),
+            (Pos2::new(b.x, base), none),
+            (Pos2::new(a.x, base), none),
+        ] {
+            mesh.colored_vertex(p, c);
+        }
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    }
+    if !mesh.is_empty() {
+        painter.add(egui::Shape::mesh(mesh));
+    }
+}
+
+/// A BOOL lane's band: a flat grey line while FALSE, and while TRUE a
+/// filled green step (a glow under it on the dark page, a heavier line on
+/// the light one), the same look as a TRUE wire.
+fn paint_bool(
+    painter: &Painter,
+    dark: bool,
+    seg: &[Pos2],
+    (on_y, base): (f32, f32),
+    green: Color32,
+    flat: Color32,
+    alpha: f32,
+) {
+    let is_on = |p: Pos2| (p.y - on_y).abs() < 0.5;
+    let mut start = 0;
+    while start + 1 < seg.len() {
+        // A run of segments of one state; a rise or fall belongs to TRUE.
+        let on = is_on(seg[start]) || is_on(seg[start + 1]);
+        let mut end = start + 1;
+        while end + 1 < seg.len() && (is_on(seg[end]) || is_on(seg[end + 1])) == on {
+            end += 1;
+        }
+        let run = seg[start..=end].to_vec();
+        if on {
+            fill_under(painter, &run, base, green.gamma_multiply(alpha), 0.3);
+            if dark {
+                for (w, a) in [(9.0, 0.08), (4.5, 0.18)] {
+                    painter.add(egui::Shape::line(
+                        run.clone(),
+                        Stroke::new(w, green.gamma_multiply(a * alpha)),
+                    ));
+                }
+            }
+            painter.add(egui::Shape::line(
+                run,
+                Stroke::new(if dark { 1.8 } else { 2.4 }, green.gamma_multiply(alpha)),
+            ));
+        } else {
+            painter.add(egui::Shape::line(
+                run,
+                Stroke::new(1.0, flat.gamma_multiply(alpha)),
+            ));
+        }
+        start = end;
     }
 }
 

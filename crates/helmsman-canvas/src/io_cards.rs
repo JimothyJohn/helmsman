@@ -6,16 +6,18 @@
 //! with no scan needed: the first output an input affects, the first
 //! signal that drives an output, and "…" when there are more.
 //!
-//! Everything else is one gesture away. A double-click on the card (or a
-//! click on the "…") opens its details in place: every source in three
-//! groups that tell apart at a glance (signals read from outside, state
-//! the program keeps from one scan to the next, the function blocks it
-//! reads), the wiring in full and how often the name is in the code. The
-//! two glyphs at the card's right go to the point: `< >` finds it in the
-//! code, and again steps to its next use ([`crate::find::Find::name`]);
-//! the diagram glyph lights every block that reads or writes it and
-//! frames them ([`crate::st_view::Viewer::show_signal`]). A tap on an
-//! output's card lights the path that sets it, as before.
+//! Everything else is one gesture away. A click on the card (or on the
+//! "…") opens its details in place, and another closes them (Nick,
+//! 2026-11-26; a double-click before): every source in three groups that
+//! tell apart at a glance (signals read from outside, state the program
+//! keeps from one scan to the next, the function blocks it reads), the
+//! wiring in full and how often the name is in the code. The three glyphs
+//! at the card's right go to the point: `< >` finds it in the code, and
+//! again steps to its next use ([`crate::find::Find::name`]); the diagram
+//! glyph lights every block that reads or writes it, frames the first
+//! use, and again the next ([`crate::st_view::Viewer::show_signal`]); the
+//! graph glyph puts it on the Trend. A click on an output's card also
+//! lights the path that sets it, and on an input's, where it is.
 //!
 //! The tab shows its cards one to a row, or as tiles (the list and grid
 //! glyphs at its top), and Inputs and Outputs each fold away behind the
@@ -27,6 +29,7 @@
 use eframe::egui::{self, Align, Color32, Layout, Margin, Rect, RichText, Sense, Stroke, Vec2};
 use helmsman_diagram::{Source, SourceKind};
 
+use crate::assign::Designation;
 use crate::editor::Chrome;
 use crate::glyphs::Icon;
 use crate::theme::{BODY, theme};
@@ -34,8 +37,29 @@ use crate::tips::Tip;
 
 /// What the tab leaves free at its right for the scroll bar, pt.
 pub const BAR: f32 = 12.0;
-/// The narrowest a tile gets before the grid drops a column, pt.
-const TILE: f32 = 96.0;
+/// The narrowest a tile gets before the grid drops a column, pt: 88 since
+/// the side panes' ribbon (2026-11-26) left the right pane 185 pt, where
+/// two tiles of 96 no longer fit and the grid went to one a row; 80 since
+/// the floating chrome's margins (2026-11-27) left it 169.
+const TILE: f32 = 80.0;
+
+/// The width of a card's glyph strip, pt: three glyphs and their gaps. An
+/// input's control leaves this much free at its right end, so the glyphs
+/// that show over it never cover a click target.
+#[must_use]
+pub fn strip_width() -> f32 {
+    3.0 * crate::glyphs::ROW * 0.85 + 2.0 * 2.0
+}
+
+fn reserve_id() -> egui::Id {
+    egui::Id::NULL.with("io card head reserve")
+}
+
+/// A head's controls at its right end, `w` wide: the hover glyphs are drawn
+/// left of them, over the name, never over a control.
+pub fn reserve_right(ui: &egui::Ui, w: f32) {
+    ui.data_mut(|d| d.insert_temp(reserve_id(), w));
+}
 
 /// One output of the program and what sets it, from the diagram alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,91 +110,6 @@ fn block_word(fb: &str) -> &'static str {
     }
 }
 
-/// A source as a card names it: `start`, `timer t1`.
-fn source_name(s: &Source) -> String {
-    let n = s.name.to_ascii_lowercase();
-    match s.kind {
-        SourceKind::Block => format!("{} {n}", block_word(&s.fb)),
-        SourceKind::Input | SourceKind::Kept => n,
-    }
-}
-
-/// An output's sources in the order a card lists them: signals read from
-/// outside, then the blocks it reads, then what the program keeps.
-fn ordered(card: &OutputCard) -> Vec<&Source> {
-    let of = |k: SourceKind| card.signals.iter().filter(move |s| s.kind == k);
-    of(SourceKind::Input)
-        .chain(of(SourceKind::Block))
-        .chain(of(SourceKind::Kept))
-        .collect()
-}
-
-/// The one line a card says of its point's part in the control scheme.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Summary {
-    /// `driven by`, `affects`, or the whole of it when nothing is named.
-    pub lead: &'static str,
-    /// The first name, lower case.
-    pub first: Option<String>,
-    /// How many more there are behind the "…".
-    pub more: usize,
-    /// All of it, for the tooltip.
-    pub all: String,
-}
-
-/// What the card of a point with these links says; `None` when no
-/// diagram says anything of it.
-#[must_use]
-pub fn summary(links: &Links) -> Option<Summary> {
-    let bare = |lead: &'static str, all: &str| Summary {
-        lead,
-        first: None,
-        more: 0,
-        all: all.to_string(),
-    };
-    match links {
-        Links::Output(None) | Links::Input(None) => None,
-        Links::Output(Some(c)) if !c.driven => Some(bare(
-            "nothing sets it",
-            "No statement of the program assigns this output.",
-        )),
-        Links::Output(Some(c)) => {
-            let all = ordered(c);
-            let Some(first) = all.first() else {
-                return Some(bare(
-                    "set from constants",
-                    "No signal, kept value or block is behind it.",
-                ));
-            };
-            let names: Vec<String> = all.iter().map(|s| source_name(s)).collect();
-            Some(Summary {
-                lead: "driven by",
-                first: Some(source_name(first)),
-                more: all.len() - 1,
-                all: format!(
-                    "Everything this output finally depends on, through every statement that sets it: {}.",
-                    names.join(", ")
-                ),
-            })
-        }
-        Links::Input(Some(outs)) => {
-            let Some(first) = outs.first() else {
-                return Some(bare(
-                    "no output depends on it",
-                    "No output of the program depends on this input.",
-                ));
-            };
-            let names: Vec<String> = outs.iter().map(|n| n.to_ascii_lowercase()).collect();
-            Some(Summary {
-                lead: "affects",
-                first: Some(first.to_ascii_lowercase()),
-                more: outs.len() - 1,
-                all: format!("The outputs that depend on this input: {}.", names.join(", ")),
-            })
-        }
-    }
-}
-
 /// What a card shows now.
 #[allow(clippy::struct_excessive_bools)] // independent flags, as `Chrome`'s are
 pub struct Row<'a> {
@@ -193,6 +132,14 @@ pub struct Row<'a> {
     pub uses: Option<usize>,
     /// The details offer to simulate the input as a device.
     pub simulate: bool,
+    /// Still simulated (a SIM badge and a dashed outline) or on a device
+    /// (solid, naming it); `None` when the point is neither.
+    pub designation: Option<Designation>,
+    /// It is on the Trend: its trend glyph shows on.
+    pub trended: bool,
+    /// The program's diagram has a block that reads or writes it: the
+    /// diagram glyph has something to show (off, and saying why, when not).
+    pub on_diagram: bool,
 }
 
 /// What was asked of a card this frame.
@@ -209,21 +156,107 @@ pub struct Asked {
     pub diagram: bool,
     /// Simulate the input as a device.
     pub simulate: bool,
+    /// Put it on the Trend, or take it off.
+    pub trend: bool,
 }
 
 /// An output's first line, or an input's where it has no control: its
 /// glyph (a tile has none), and `text` in `color`, cut to the column.
 /// `wrap`: a row's line wraps at the column so a long name shows whole;
 /// a tile's is cut to its narrow width.
-pub fn value(ui: &mut egui::Ui, glyph: Option<&'static str>, color: Color32, text: &str, wrap: bool) {
+pub fn value(ui: &mut egui::Ui, glyph: Option<&'static str>, color: Color32, text: &str, on: Option<bool>) {
+    value_with(ui, glyph, color, color, text, on);
+}
+
+/// A BOOL's glyph looks on or off (Nick, 2026-11-27): lit on a soft disc
+/// of `on_color` when on, `off_color` dimmed to 35% when off. A point that
+/// is no BOOL (`on` is `None`) is drawn in `on_color` as it is.
+pub fn state_glyph(
+    ui: &mut egui::Ui,
+    glyph: &'static str,
+    size: f32,
+    on_color: Color32,
+    off_color: Color32,
+    on: Option<bool>,
+) {
+    let ink = match on {
+        Some(false) => off_color.gamma_multiply(0.35),
+        _ => on_color,
+    };
+    let r = crate::glyph_lib::show(ui, glyph, size, ink, crate::glyph_lib::tip(glyph));
+    if on == Some(true) {
+        ui.painter()
+            .circle_filled(r.rect.center(), size * 0.62, on_color.gamma_multiply(0.18));
+        crate::glyph_lib::paint(ui.painter(), r.rect, glyph, ink);
+    }
+}
+
+/// A BOOL's icon as the control of an input: [`state_glyph`]'s look on a
+/// rounded ground that eases in on hover and press, as the glyph buttons
+/// do. `sense` is a click for a switch, click and drag for a push button.
+pub fn state_button(
+    ui: &mut egui::Ui,
+    glyph: &'static str,
+    size: f32,
+    on_color: Color32,
+    off_color: Color32,
+    on: Option<bool>,
+    sense: Sense,
+) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
+    let ground = crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT);
+    ui.painter().rect_filled(rect, 5, ground);
+    crate::theme::focus_ring(ui, &r, rect, 5);
+    let ink = match on {
+        Some(false) => off_color.gamma_multiply(0.35),
+        _ => on_color,
+    };
+    if on == Some(true) {
+        ui.painter()
+            .circle_filled(rect.center(), size * 0.62, on_color.gamma_multiply(0.18));
+    }
+    crate::glyph_lib::paint(ui.painter(), rect, glyph, ink);
+    r
+}
+
+/// [`value`] with its own colour for the glyph while the point is off: a
+/// lamp is green on and red off (Nick, 2026-11-27), its name muted.
+pub fn value_with(
+    ui: &mut egui::Ui,
+    glyph: Option<&'static str>,
+    color: Color32,
+    glyph_off: Color32,
+    text: &str,
+    on: Option<bool>,
+) {
     ui.horizontal(|ui| {
         if let Some(glyph) = glyph {
-            crate::glyph_lib::show(ui, glyph, crate::glyphs::ROW, color, crate::glyph_lib::tip(glyph));
+            state_glyph(ui, glyph, crate::glyphs::ROW * 0.85, color, glyph_off, on);
         }
-        let label =
-            egui::Label::new(RichText::new(text).monospace().size(BODY).color(color)).selectable(false);
-        let label = if wrap { label.wrap() } else { label.truncate() };
-        ui.add(label).tip(text.to_string());
+        // One line, cut at the card's edge with its whole text on hover
+        // (Nick, 2026-11-27: the compact view on one line).
+        // A reading is its name (Inter, cut to what is left) and, at the
+        // card's right end, its value (mono, a slot as wide as its text,
+        // never cut): numeric columns are right-aligned. The hover has
+        // "name = value" whole.
+        if let Some((name, val)) = text.split_once(" = ") {
+            let slot = crate::theme::live_slot(ui, val, 0);
+            let room = (ui.available_width() - slot - ui.spacing().item_spacing.x).max(20.0);
+            ui.allocate_ui_with_layout(
+                Vec2::new(room, crate::glyphs::ROW),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    ui.set_width(room);
+                    let label =
+                        egui::Label::new(RichText::new(name).size(BODY).color(color)).selectable(false);
+                    ui.add(label.truncate()).tip(text.to_string());
+                },
+            );
+            crate::theme::live(ui, val, color, 0).tip(text.to_string());
+        } else {
+            let label = egui::Label::new(RichText::new(text).size(BODY).color(color)).selectable(false);
+            ui.add(label.truncate()).tip(text.to_string());
+        }
     });
 }
 
@@ -335,46 +368,6 @@ fn links_ui(ui: &mut egui::Ui, links: &Links) {
     }
 }
 
-/// The one line of [`summary`]: the lead, the first name, and "…" when
-/// there are more. True when the "…" was clicked.
-fn summary_ui(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, s: &Summary, width: f32) -> bool {
-    let t = theme(ui);
-    let mut more = false;
-    ui.horizontal(|ui| {
-        let dots = if s.more > 0 { 22.0 } else { 0.0 };
-        let room = (width - dots - ui.spacing().item_spacing.x).max(1.0);
-        let mut job = egui::text::LayoutJob::default();
-        let font = egui::FontId::proportional(BODY);
-        job.append(s.lead, 0.0, egui::TextFormat::simple(font, t.muted));
-        if let Some(first) = &s.first {
-            job.append(
-                first,
-                6.0,
-                egui::TextFormat::simple(egui::FontId::monospace(BODY), t.fg),
-            );
-        }
-        ui.allocate_ui_with_layout(Vec2::new(room, 0.0), Layout::top_down(Align::Min), |ui| {
-            ui.set_max_width(room);
-            ui.add(egui::Label::new(job).wrap().selectable(false))
-                .tip(s.all.clone())
-        });
-        if s.more > 0 {
-            let r = ui
-                .add(
-                    egui::Label::new(RichText::new("…").size(BODY).strong().color(t.accent))
-                        .sense(Sense::click()),
-                )
-                .tip(format!(
-                    "{} more. Click, or double-click the card, for all of them.",
-                    s.more
-                ));
-            chrome.hit(format!("io more {}", key.to_ascii_lowercase()), r.rect);
-            more = r.clicked();
-        }
-    });
-    more
-}
-
 /// Draws the card: `head` draws its first line (the point's control, or
 /// [`value`]) in the width it is given. Returns what was asked, the
 /// card's response for a menu to hang from, and what `head` returned.
@@ -394,11 +387,12 @@ pub fn show<R>(
     let was: Option<Rect> = ui.data(|d| d.get_temp(id));
     let resp = ui.interact(was.unwrap_or(Rect::NOTHING), id, Sense::click());
     let mut asked = Asked::default();
-    let mut glyphs = Rect::NOTHING;
     let (fill, stroke) = look(row.tile, row.selected, &t);
+    let sim = row.designation.as_ref().is_some_and(Designation::is_simulated);
+    // A simulated card's outline is dashed, drawn over the frame below.
     let frame = egui::Frame::new()
         .fill(fill)
-        .stroke(stroke)
+        .stroke(if sim { Stroke::NONE } else { stroke })
         .corner_radius(6)
         .inner_margin(Margin::same(margin));
     let out = frame.show(ui, |ui| {
@@ -409,49 +403,124 @@ pub fn show<R>(
             for v in [&mut w.hovered, &mut w.active, &mut w.inactive] {
                 v.expansion = 0.0;
             }
-            return head(ui);
+            let r = head(ui);
+            designation_line(ui, chrome, row);
+            return r;
         }
-        let side = crate::glyphs::ROW;
-        let gap = ui.spacing().item_spacing.x;
-        let room = (inner - 2.0 * side - 2.0 * gap).max(1.0);
-        let r = ui
-            .horizontal_top(|ui| {
-                let r = ui
-                    .allocate_ui_with_layout(Vec2::new(room, side), Layout::top_down(Align::Min), |ui| {
-                        ui.set_width(room);
-                        head(ui)
-                    })
-                    .inner;
-                let code = crate::glyphs::button_sized(
-                    ui,
-                    Icon::Code,
-                    side,
-                    true,
-                    false,
-                    &format!("Finds {name} in the code. Click again for its next use."),
-                );
-                chrome.hit(format!("io code {name}"), code.rect);
-                asked.code = code.clicked();
-                let diagram = crate::glyphs::button_sized(
-                    ui,
-                    Icon::Diagram,
-                    side,
-                    true,
-                    false,
-                    &format!("Shows {name} on the diagram: every block that reads or writes it."),
-                );
-                chrome.hit(format!("io diagram {name}"), diagram.rect);
-                asked.diagram = diagram.clicked();
-                glyphs = code.rect.union(diagram.rect);
-                r
-            })
-            .inner;
-        if let Some((text, tip)) = &row.real {
-            let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted)).wrap();
-            let l = ui.add(label).tip(tip.clone());
-            chrome.hit(format!("wired {}", row.key), l.rect);
+        // Glyphs a little under the row's size so name and glyphs share
+        // one line in the narrow right pane too (Nick, 2026-11-27).
+        let side = crate::glyphs::ROW * 0.85;
+        let gap = 2.0;
+        // The glyphs show while the pointer is over the card (where it was
+        // drawn last frame, so they do not flicker as they appear), while
+        // its details are open, and while one has keyboard focus (Nick,
+        // 2026-11-27); a closed card at rest is its point alone, using the
+        // room the glyphs would take.
+        let focus_id = id.with("glyph focus");
+        let hovered = was.is_some_and(|w| {
+            ui.input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| w.contains(p) && ui.clip_rect().contains(p))
+        });
+        let focused = ui.data(|d| d.get_temp::<bool>(focus_id)).unwrap_or(false);
+        let glyphs = row.open || hovered || focused;
+        // The card's three glyphs: find in the code, show on the diagram,
+        // put on the Trend.
+        let mut glyph_row = |ui: &mut egui::Ui| {
+            let code = crate::glyphs::button_sized(
+                ui,
+                Icon::Code,
+                side,
+                true,
+                false,
+                &format!("Finds {name} in the code. Click again for its next use."),
+            );
+            chrome.hit(format!("io code {name}"), code.rect);
+            asked.code = code.clicked();
+            let diagram = crate::glyphs::button_sized(
+                ui,
+                Icon::Diagram,
+                side,
+                row.on_diagram,
+                false,
+                &if row.on_diagram {
+                    format!("Shows {name} on the diagram: every block that reads or writes it. Click again for its next use.")
+                } else {
+                    format!("{name} is not on the diagram: the program never reads or writes it.")
+                },
+            );
+            chrome.hit(format!("io diagram {name}"), diagram.rect);
+            asked.diagram = diagram.clicked();
+            // Nick, 2026-11-26: a graph glyph puts the point on the
+            // Trend at the bottom (on while it is there).
+            let trend = crate::glyphs::button_sized(
+                ui,
+                Icon::Trend,
+                side,
+                true,
+                row.trended,
+                &if row.trended {
+                    format!("Takes {name} off the Trend.")
+                } else {
+                    format!("Adds {name} to the Trend at the bottom.")
+                },
+            );
+            chrome.hit(format!("io trend {name}"), trend.rect);
+            asked.trend = trend.clicked();
+            let has = code.has_focus() || diagram.has_focus() || trend.has_focus();
+            ui.data_mut(|d| d.insert_temp(focus_id, has));
+        };
+        // The head always has the card's full width, so nothing moves when
+        // the pointer enters or leaves (Nick, 2026-11-27). The glyphs are
+        // drawn over the right end of that line, on a backdrop of the
+        // card's fill with a soft fade at its left edge; they come after
+        // the head, so their clicks win over the control under them.
+        ui.data_mut(|d| d.insert_temp(reserve_id(), 0.0_f32));
+        let head_out = ui.allocate_ui_with_layout(Vec2::new(inner, side), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(inner);
+            head(ui)
+        });
+        let r = head_out.inner;
+        if glyphs {
+            let line = head_out.response.rect;
+            let w = strip_width();
+            let line_right = line.right() - ui.data(|d| d.get_temp::<f32>(reserve_id())).unwrap_or(0.0);
+            let fade = 18.0;
+            let h = side.max(line.height().min(side + 6.0));
+            let x1 = line_right;
+            let x0 = x1 - w;
+            let back = Rect::from_min_max(egui::pos2(x0 - fade, line.top()), egui::pos2(x1, line.top() + h));
+            let solid = Rect::from_min_max(egui::pos2(x0, back.top()), back.right_bottom());
+            let clear = fill.gamma_multiply(0.0);
+            let mut mesh = egui::Mesh::default();
+            let (l, r_) = (back.left(), x0);
+            let (top, bot) = (back.top(), back.bottom());
+            mesh.colored_vertex(egui::pos2(l, top), clear);
+            mesh.colored_vertex(egui::pos2(r_, top), fill);
+            mesh.colored_vertex(egui::pos2(r_, bot), fill);
+            mesh.colored_vertex(egui::pos2(l, bot), clear);
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            ui.painter().add(egui::Shape::mesh(mesh));
+            ui.painter().rect_filled(solid, 0.0, fill);
+            let mut g = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(solid)
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            g.spacing_mut().item_spacing.x = gap;
+            glyph_row(&mut g);
         }
         if row.open {
+            // The rest is in the details: the SIM badge (the dashed
+            // outline says it on the card), the wiring, the links.
+            if sim {
+                badge(ui, chrome, row);
+            }
+            if let Some((text, tip)) = &row.real {
+                let label = egui::Label::new(RichText::new(text).size(BODY).color(t.muted)).wrap();
+                let l = ui.add(label).tip(tip.clone());
+                chrome.hit(format!("wired {}", row.key), l.rect);
+            }
             ui.horizontal_wrapped(|ui| links_ui(ui, &row.links));
             if !row.place.is_empty() {
                 ui.add(egui::Label::new(RichText::new(row.place).size(BODY).color(t.muted)).wrap())
@@ -475,32 +544,30 @@ pub fn show<R>(
                     asked.simulate = b.clicked();
                 }
             });
-        } else if let Some(s) = summary(&row.links)
-            && summary_ui(ui, chrome, row.key, &s, inner)
-        {
-            asked.details = true;
         }
         r
     });
     let rect = out.response.rect;
     ui.data_mut(|d| d.insert_temp(id, rect));
     chrome.hit(format!("io card {name}"), rect);
-    // A double-click anywhere on the card but its two glyphs, its control
-    // included (a switch flipped twice is where it was).
-    let double = ui.rect_contains_pointer(rect)
-        && ui.input(|i| {
-            i.pointer.button_double_clicked(egui::PointerButton::Primary)
-                && i.pointer.interact_pos().is_some_and(|p| !glyphs.contains(p))
-        });
-    asked.details |= double;
+    if sim {
+        dashed_outline(ui.painter(), rect, stroke);
+        chrome.hit(format!("io dashed {name}"), rect);
+    } else if row.designation.is_some() {
+        chrome.hit(format!("io solid {name}"), rect);
+    }
+    // One click on the card (not on its glyphs or its control, which are
+    // in front of it) opens or closes its details: its dependencies and
+    // its device (Nick, 2026-11-26; a double-click before).
     asked.tapped = resp.clicked();
+    asked.details |= asked.tapped;
     let what = if row.open {
-        "Double-click to close its details."
+        "Click to close its details."
     } else {
-        "Double-click for its details."
+        "Click for its details: what it drives and its device."
     };
     let tip = if row.input {
-        format!("{name}: {what}\n{}", row.place)
+        format!("{name}: shows where it is on the diagram. {what}\n{}", row.place)
     } else {
         format!(
             "Click to light what drives {name} on the diagram. {what}\n{}",
@@ -510,6 +577,52 @@ pub fn show<R>(
     let resp = resp.tip(tip.trim_end().to_string());
     ui.add_space(4.0);
     (asked, resp, out.inner)
+}
+
+/// `rect`'s outline as dashes, rounded corners cut square.
+pub fn dashed_outline(painter: &egui::Painter, rect: Rect, stroke: Stroke) {
+    let corners = [
+        rect.left_top(),
+        rect.right_top(),
+        rect.right_bottom(),
+        rect.left_bottom(),
+        rect.left_top(),
+    ];
+    painter.extend(egui::Shape::dashed_line(&corners, stroke, 5.0, 3.0));
+}
+
+/// The word SIM as a card shows it.
+fn badge_text(ui: &egui::Ui) -> RichText {
+    RichText::new(Designation::BADGE)
+        .strong()
+        .size(BODY)
+        .color(theme(ui).muted)
+}
+
+/// A simulated card's badge: its own line under the first.
+fn badge(ui: &mut egui::Ui, chrome: &mut Chrome, row: &Row) {
+    let name = row.key.to_ascii_lowercase();
+    let r = ui
+        .add(egui::Label::new(badge_text(ui)).selectable(false))
+        .tip(format!("{name} is simulated: no device is wired to it."));
+    chrome.hit(format!("io sim {name}"), r.rect);
+}
+
+/// A tile's one line under its value: SIM, or the device and channel.
+fn designation_line(ui: &mut egui::Ui, chrome: &mut Chrome, row: &Row) {
+    let t = theme(ui);
+    match &row.designation {
+        Some(Designation::Simulated) => badge(ui, chrome, row),
+        Some(d @ Designation::Physical { .. }) => {
+            let name = row.key.to_ascii_lowercase();
+            let text = RichText::new(d.label()).size(BODY).color(t.muted);
+            let r = ui
+                .add(egui::Label::new(text).truncate().selectable(false))
+                .tip(format!("{name} is on {}.", d.label()));
+            chrome.hit(format!("io phys {name}"), r.rect);
+        }
+        None => {}
+    }
 }
 
 /// A card's fill and outline. A tile is a flat snapshot (Nick,
@@ -721,43 +834,6 @@ mod tests {
         // A name that ends inside a multi-byte letter of a source.
         let odd = [card("X", vec![src("ÄB", SourceKind::Input, "")], true)];
         assert_eq!(affects(&odd, "a"), [] as [String; 0]);
-    }
-
-    #[test]
-    fn the_summary_names_the_first_and_counts_the_rest() {
-        let c = card(
-            "LAMP",
-            vec![
-                src("LATCH", SourceKind::Kept, ""),
-                src("T1", SourceKind::Block, "TON"),
-                src("START", SourceKind::Input, ""),
-                src("STOP", SourceKind::Input, ""),
-            ],
-            true,
-        );
-        let s = summary(&Links::Output(Some(&c))).unwrap();
-        assert_eq!(
-            (s.lead, s.first.as_deref(), s.more),
-            ("driven by", Some("start"), 3)
-        );
-        assert!(s.all.contains("start, stop, timer t1, latch"), "{}", s.all);
-        let only_block = card("L", vec![src("C1", SourceKind::Block, "CTU")], true);
-        let s = summary(&Links::Output(Some(&only_block))).unwrap();
-        assert_eq!((s.first.as_deref(), s.more), (Some("counter c1"), 0));
-        let undriven = card("L", vec![], false);
-        let s = summary(&Links::Output(Some(&undriven))).unwrap();
-        assert_eq!((s.lead, s.first, s.more), ("nothing sets it", None, 0));
-        let constant = card("L", vec![], true);
-        assert_eq!(
-            summary(&Links::Output(Some(&constant))).unwrap().lead,
-            "set from constants"
-        );
-        let s = summary(&Links::Input(Some(vec!["LAMP".into(), "HORN".into()]))).unwrap();
-        assert_eq!((s.lead, s.first.as_deref(), s.more), ("affects", Some("lamp"), 1));
-        let s = summary(&Links::Input(Some(vec![]))).unwrap();
-        assert_eq!((s.lead, s.first, s.more), ("no output depends on it", None, 0));
-        assert_eq!(summary(&Links::Input(None)), None);
-        assert_eq!(summary(&Links::Output(None)), None);
     }
 
     #[test]

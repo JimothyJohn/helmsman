@@ -844,7 +844,8 @@ status is scan health, memory and fieldbus links. What exists:
   1 frame reads as a program with no map): one `device NAME modbus-tcp
   IP[:PORT] [unit=N]` line and `in NAME bool DEV di:N` / `out NAME bool
   DEV coil:N` lines, bool points only, indexes 0..15 (two image bytes a
-  direction). `PUT /api/io_map` (`{"text"}` or `text/plain`, the token)
+  direction; since 2026-11-24 a map takes up to 16 devices of two drivers and
+  numeric points, "Sixteen devices on one node" below, with these addresses kept). `PUT /api/io_map` (`{"text"}` or `text/plain`, the token)
   and the settings page's map form parse it first (`helmsman_nodecore::
   iomap`: the bad line comes back as a 422), write it, and restart; at
   boot the I/O task takes the block's address, unit and the counts from
@@ -870,6 +871,435 @@ status is scan health, memory and fieldbus links. What exists:
   without a cable"). **Left in this phase:** an I/O map setting for the block's address and point
   names; writes from the canvas (deploy, controls) need a token field in
   the canvas, today they are `curl` with the bearer.
+
+### Sixteen devices on one node (2026-11-24, card `node-multi-device`)
+
+**On the board, 2026-11-24** (the Waveshare ESP32-P4-ETH on USB power, no
+PoE module, flashed from the branch; logs in the worktree's `target/bench/`).
+Runs 1 to 5 below passed; what is still not run is listed after them.
+
+1. **The map already on flash.** The factory one-device map booted as it
+   was: `rio` up, the chase running, `di0`.. at `%IX0.0`.. and `do0`.. at
+   `%QX0.0`.. as before.
+2. **Three devices, one absent.** The E1213 on Modbus TCP (three inputs,
+   three coils, its DI-00 counter as `ir:16:u32`), a Modbus TCP server on
+   the Studio (`hr:0:u16`, `hr:5:f32`, an output on `hr:10:u16`) and
+   192.168.3.99, where nothing lives. `/api/devices` read `rio` up, `sim`
+   up, `gone` down with its error; the float read 21.5 as the server held
+   it; a program that adds 1000 to the server's seconds counter (`%IW34`)
+   into `%QW32` was seen by the server as writes to `hr10` once a second.
+3. **A device that leaves and comes back.** Over 240 s the server was
+   stopped at 60 s and started at 150 s: its points went `stale` and held
+   their last value, `rio` stayed up, the API answered throughout, no
+   overrun, lateness 141 us at most, heap 220 KB of 288 KB and flat; the
+   server was up again within 15 s of its restart.
+4. **EtherNet/IP and Modbus TCP together.** The E1213 as `enip-io
+   profile=moxa-e1213` with the Modbus server beside it: both up, the
+   chase's outputs read back from the unit over Modbus from the Studio
+   (`0100 0010 1000` in turn), 0 overruns in 7350 scans, lateness 94 us at
+   most, heap 219 KB.
+5. **What the first try found.** With the absent address in the map the
+   node kept scanning and answered nothing, no ping and no API, and the
+   Modbus server on the same wire never got a connection. smoltcp keeps an
+   aborted socket's endpoint until its RST has gone out, and towards an
+   address nobody answers at it never does, so the socket asked for that
+   neighbour every second for good and each ask silences every other
+   lookup for a second (`iface/neighbor.rs`, `SILENT_TIME`). A dial nobody
+   answered now clears the socket's endpoint and pushes the next dial back
+   from its end (`dial::give_up`). The one-block node on dev has the same
+   code path; it was not run there with its block absent.
+
+What was run on the host: the parser, the layout and the codecs
+(`crates/helmsman-nodecore`, with `crates/helmsman-io/tests/node_map.rs`
+holding them to the box's own Modbus and `enip-io` drivers and the simulated
+Modbus device), and `crates/helmsman-node-p4` built and linted for the
+target.
+
+Nick, 2026-11-24: one node drives up to 16 devices at once, any mix of Modbus TCP
+and EtherNet/IP (Class 1); points are bool, int and real; the map text stays
+the box's format and driver names, so one map text means the same on a box and
+on a node; a node has one IP address, so a device on another subnet is out.
+No PROFINET, serial or IO-Link, and no `device:NAME` profile lines (the
+programming side flattens a library device into plain lines before it sends
+the map).
+
+**What a node takes** (`helmsman_nodecore::iomap`; the module docs hold the
+grammar). `device NAME modbus-tcp|enip-io IPV4[:PORT] [KEY=VALUE ...]`, 1 to 16
+of them, then `in|out NAME bool|int|real DEVICE ADDRESS`, with the box's spellings:
+
+| driver | `in` takes | `out` takes |
+| --- | --- | --- |
+| `modbus-tcp` (`unit=`) | `di:N`, `ir:N[:FMT]`, `hr:N[:FMT]` | `coil:N`, `hr:N[:FMT]` |
+| `enip-io` (`profile=moxa-e1213` or `config= o2t=P:N t2o=P:N`) | `di:N`, `in:BYTE.BIT`, `in:OFFSET:FMT` | `do:N`, `out:BYTE.BIT`, `out:OFFSET:FMT` |
+
+Modbus `FMT` is `u16 i16 u32 u32sw i32 i32sw f32 f32sw`; EtherNet/IP `FMT` is
+`u8 i8 u16 i16 u32 i32 f32`, little-endian. A node refuses, with the line and
+the reason, what it cannot run: `eds=` (no files), `key=`, `io_port=`,
+`device_io_port=` and `sweep=` (one I/O socket, UDP 2222, and addresses not
+identities), another EtherNet/IP port than 44818, two EtherNet/IP devices at
+one address, a point outside its assembly, an output on an input-only
+connection, an RPI under 10 ms (or outside the E1213 profile's 100 ms to 3 s), a
+type that is not the address's, two points of one direction on one bit or
+register, `coil` read as an `in` and `di`/`ir` written as an `out`. `poll_ms=`,
+`timeout_ms=` and `safe=` are read and ignored (as `timeout_ms` always was here;
+a device's own comms-loss state is its safe state). Three devices:
+
+```text
+device rio   modbus-tcp 192.168.3.60 unit=1
+device drive enip-io    192.168.33.1 config=1 o2t=112:36 t2o=100:16 rpi_ms=20
+device press modbus-tcp 192.168.3.71:502
+in  estop  bool rio   di:0
+out motor  bool rio   coil:0
+in  pos    int  drive in:4:i32
+out accel  int  drive out:4:u32
+in  level  real press hr:5:f32
+in  ready  bool drive in:0.1
+out run    bool drive out:0.0
+```
+
+The `drive` line is the MDrive's connection from docs/devices/novanta-mdrive.md
+(assemblies 100 and 112, the 4-byte run/idle header on O->T) written without
+an EDS. The E1213's own line is `profile=moxa-e1213`; docs/devices/moxa-iologik-e1213.md
+holds what the unit allows (one Class 1 connection of either kind, so the E1213
+is on Modbus or on EtherNet/IP in a map, not both). The protocol claims are the
+ones the box's drivers already cite in docs/SOURCES.md (the Modbus Application
+Protocol entry, whose limits the plans keep: 125 registers a read, 123 a write;
+the E1213 EDS and the device-bench entries for `enip-io`).
+
+**The process image.** Each direction (`%I`, `%Q`) is 192 bytes: 64 bytes of
+bools, then 128 of numbers. The rule depends on the map text alone.
+
+- **Bool.** Device *k* (0 for the first `device` line) owns a 4-byte window at
+  byte 4*k*. A bool numbered *n* (`di:N`, `coil:N`, `do:N`; `in:B.b` is `8B+b`,
+  below 32) is bit `n % 8` of byte `4k + n / 8`. For the first device that is
+  `%IX(n/8).(n%8)`, so **every one-device bool map keeps the addresses it
+  had** (`iomap/tests.rs` pins the fixtures and all 16 of each direction). A
+  bool never moves when another device's points change; reordering the
+  `device` lines moves windows.
+- **Number** (int, real). In the order the lines are written, per direction,
+  each takes the next slot from byte 64: 2 bytes for `u8 i8 u16 i16`
+  (`%IW32`, `%IW33`, ...; 8-bit values widened, `i8` sign-extended), 4 bytes
+  for `u32 i32 f32` (`%ID17`, ...), aligned to its size, little-endian. A real
+  is declared `x AT %ID17 : REAL` (an IEEE single), an `i16` as `INT` at `%IW`,
+  a `u32` as `UDINT`. Append new numeric points at the end of the map to keep
+  the others' addresses.
+
+`GET /api/io_map` carries an `image` list (`name`, `dir` `I`/`Q`, `address`)
+beside the text, and `/api/signals` lists each named point as before (inputs by
+image position, then outputs, then the program's ports), with numbers as JSON
+numbers.
+
+**Sim points** (`in|out NAME bool|int|real sim [unit=..]`) are placeholders
+with no device and no address: a value in the node's memory, FALSE or 0 at boot
+(a deploy keeps it), and a map may hold them with no `device` line at all.
+`sim` is a reserved device id. A sim `in` is set with `PUT /api/signals/{name}`
+(`{"value": true | 12 | 3.5}`, the token; 409 for any other signal, 400 for a
+value of the wrong kind, an integer outside `i32`, or a real that is not a
+finite `f32`) and the program reads it as the `VAR_INPUT` of that name; a sim
+`out` is the program's `VAR_OUTPUT` of that name, read back in `/api/signals`,
+and drives nothing. `/api/signals` carries `"sim": true` on them. They are
+placed after the whole map is read, from the top of each area down (bool
+windows from the last device number, 4-byte numeric slots from the end), so
+a device point's address never changes when one is added; a map in which they
+would meet a device point is refused. The one-block ESP32 boards refuse them.
+
+Limits (constants in `iomap.rs`, tested at and past each): 16 devices, 32 points
+a device, 96 points in all, bool numbers 0 to 31, 128 bytes of numbers each
+direction, assemblies of at most 128 bytes, 4096 bytes of map text. The text
+shares the 8 KiB program slot with the program (`program::MAX_SOURCE`, 8140
+bytes together): a full map leaves about 4 KiB for the program, and a map in the
+old 2048 limit leaves what it did. **Raising `MAX_TEXT` from 2048 has a cost:** a
+node that is rolled back to a firmware older than this reads a slot whose map
+is over 2048 bytes as no program at all (its frame check), and one with a
+several-device map under 2048 as a map that does not parse (the factory map
+runs). The frame is unchanged (version 2): an old one-device map on flash boots
+as it was.
+
+**Tasking** (`crates/helmsman-node-p4/src/io.rs`). One task a device from a pool
+of 16 (a pool, not one task for all, because each device has its own socket and
+its own timeouts and a device that is down must cost the others nothing), plus
+one cyclic task if any device is EtherNet/IP. Modbus: each round reads what the
+map names (discrete inputs from bit 0; registers in spans, joined when the gap
+is under 8 and at most 125 registers) and writes (coils from coil 0 to the highest
+named, as the single block always did; holding registers only where a point names
+them, adjacent ones together), then records up or down, the error text and the
+reconnect count in that device's `DeviceLive`. EtherNet/IP: the device's task
+owns the explicit session and `Forward_Open` (as `bin/enip.rs`, which stays the
+single-device bench image), then hands the producer and consumer to the cyclic
+task, which on UDP 2222 sends each device's output assembly every RPI from the
+shared image, gives each T->O packet to the connection of the device it came
+from, and flags a connection with no packets for its timeout; the device's task
+then closes, waits 2 s and opens again with the outputs the image holds. The
+scan loop touches none of this: it copies the image under one short critical
+section, as before. `/api/devices` lists every device with its own state, error
+and address.
+
+*Comms-loss behaviour is unchanged for the single Modbus device*: the node keeps
+trying, a down link leaves the last inputs in the image and the outputs where
+the program put them, and the device's own safe state covers a silent node. What
+did change, and shows: a point on a device that is down is listed `stale` with
+that device's error (it was `good` with an old value); a device with no point in
+the map reads `unknown` (it was `up` without a request); and a device that keeps
+failing waits its turn to dial, one failed dial in the whole node every 2 s
+(`dial.rs`): smoltcp resolves one neighbour a second for the stack, and a few
+absent devices retrying every 2 s would have starved the lookups of the live
+ones and of the report sink (the 2026-11-08 run). With many absent devices an
+absent one is therefore tried less often.
+
+**RAM** (computed from the linked image and the sources; nothing measured on a
+board). The statics of 16 devices: `ethernet::RESOURCES` for 24 sockets 35 076 B
+(10 sockets were about 14.6 KB: 1.46 KB a socket), the task pool 17 280 B (16
+futures of 1 080 B), 16 TCP socket buffers of 320 + 320 B 10 240 B, the I/O
+socket 4096 + 2048 B and its metadata, and the 192-byte images. The main stack
+the build reports went from 56 504 B on the dev tip to 14 784 B with the heap
+unchanged, under the 32 KiB floor `node-build.sh` holds, so `HEAP_SIZE` in
+`bin/node.rs` is **288 KiB, down from 320**; the stack is now 47 552 B. The heap
+holds, at full size, the map (about 4 KB of text twice, 96 points of about 60 B,
+the plans) and the signal list (96 entries, copied on each API request), about
+40 to 50 KB more than the one-block node (an estimate from the sizes, not a measurement), against 32 KB less heap: **a large
+program (the 12 KB cell used 253 KB of the 320 KB) now spills into PSRAM
+sooner**, which the board must be asked about (item 4 below).
+
+**Bench runs still to do** (the ones above are done):
+
+1. The MDrive on EtherNet/IP as a second kind of device. It is on
+   192.168.33.1 and a node has one address, so it has to be given an
+   address on the node's subnet first (Nick, 2026-11-24: devices are
+   re-addressed, a node takes no extra addresses).
+2. The E1213 and the MDrive on EtherNet/IP together (two connections, one
+   UDP socket, T->O routed by source address).
+3. Pull one device's cable mid-run (run 3 above stopped a server instead):
+   the outputs of a lost EtherNet/IP device come back with the image's
+   values after the reopen; the node's report line shows the count.
+4. Heap and stack with 16 devices and the 12 KB cell: the report line's heap
+   used, peak and PSRAM figures, and the scan's execution time against the
+   dev tip's (51 to 72 us for the chase; 1 ms for the cell).
+5. The 16 devices at once (a simulated server on the Studio per address
+   alias) against the neighbour-lookup rule above, with half of them absent.
+
+### A map is saved once its devices answered the node (2026-11-24, card `node-comms-check`)
+
+Nick, 2026-11-24: "I do like being able to verify that there's not a comms
+issue before downloading the map to the Skipper", and the download is
+blocked until every device answers. The machine that wrote the map reaching
+a device says nothing about the node reaching it (another subnet, another
+switch port, a device holding its one connection for someone else), so the
+node asks, from its own port.
+
+- **`POST /api/io_map/check`** (the token; `{"text"}` or `text/plain`): the
+  map is parsed (422 with its line, as a save), then the node asks each
+  device in turn and answers 202 at once; 409 while a check runs.
+- **`GET /api/io_map/check`**: `state` (`none`, `running`, `done`),
+  `passed`, `may_save`, `age_ms`, the checked `text`, and a `devices` list
+  with each one's `state` (`waiting`, `answered` with `ms`, `failed` with
+  `error`).
+- **`PUT /api/io_map`** saves a text only when the last check was of exactly
+  that text, every device in it answered, and it finished less than ten
+  minutes ago (`check::FRESH_MS`); otherwise 409 with the reason and the
+  check. The page's form is one button: a text that has not passed is
+  checked (the page reloads while it runs and lists who answered), and the
+  same text sent again once it has passed is saved.
+- **What is asked** (`crates/helmsman-node-p4/src/check.rs`): a Modbus TCP
+  device is connected to and asked for the first read the map names on it
+  (the unit id and the address as well as the cable), or only connected to
+  when the map reads nothing from it; an EtherNet/IP device is connected to
+  and a session is registered and dropped. Nothing is written and no I/O
+  connection is opened: a check moves no output and takes no device from
+  its owner, and it runs beside the node's own I/O. So it does not prove an
+  assembly's size or an output's address; the first scan after the save
+  does, in `/api/devices`.
+- **A device on another subnet is not dialled.** With a static address and
+  no gateway the node fails it at once with the address it needs
+  (`check::off_subnet`), which tells a misaddressed device from a silent
+  one.
+- **The record is in RAM.** A restart forgets it, and a map is then checked
+  again before it is saved. The ESP32 nodes (`crates/helmsman-node`) have
+  no check and save a map as they did.
+
+- **The canvas sends the map** (card `node-comms-check`, part 2). A page
+  that watches a Skipper by address knows it by `"snapshot":"node"` in the
+  `GET /api/io_map` reply (`BoxState::io_map_node`; a box's reply carries
+  a snapshot id). Its Devices tab then has a "Skipper map" row whose
+  button opens a window (`crates/helmsman-canvas/src/node_map.rs`), not the
+  236 pt panel: the map text in a monospace editor, **Check devices**
+  (`POST /api/io_map/check`, then `GET` once a second for two minutes, a
+  line per device with its time or the node's own reason, cut to 240
+  printable characters), **Download** (`PUT /api/io_map`), and **Discard
+  edits**. Download is drawn only when the check's `may_save` is true and
+  its `text` equals the window's text character for character; one more
+  character withdraws it. A 200 says the Skipper is restarting and the
+  page's map read shows the new text when it is back; a 409 shows the
+  node's reason and the device list of its reply; a 422 shows the line.
+  Without a token the buttons say what is needed and nothing is sent. A
+  node that answers 404 to the check route (the ESP32 boards) is told so
+  in the window, and no Check or Download is offered: such a board saves a
+  map from its own page as before. Calls go through the transport Deploy
+  uses, so they carry the `?box=` origin and the bearer token.
+
+**On the board, 2026-11-24** (the P4, a four-device map): the E1213 on
+`enip-io` answered in 47 ms and the Studio's Modbus server in 45 ms while
+both were being driven by the running map; 192.168.3.99 was `link: connect
+timed out`; the MDrive's line read "192.168.33.1 is not on this node's
+network (192.168.3.56/24, no gateway): give the device an address there".
+`PUT /api/io_map` of that text was 409 before the check ("has not been
+checked") and after it ("gone, drive did not answer this node"), and the
+node kept running its old map. That board then went off USB (its serial
+port left the Studio, so not a firmware restart) and did not come back.
+
+**A check that passes, then the save (2026-11-24, a second P4, MAC
+e8:f6:0a:eb:37:b0, at 192.168.33.56/24 beside the MDrive):** the map of
+docs/devices/novanta-mdrive.md's drive (`enip-io`, assemblies 112 and 100)
+was checked: `done`, `passed`, `may_save` true, the drive answered in
+25 ms; `PUT /api/io_map` of the same text saved and restarted the node,
+which came up with `drive` up and the image addresses the program used.
+A program on that map then slewed the drive back and forth, watched live
+in a canvas page through `?box=`.
+
+**Editing the program from the canvas (2026-11-24, Nick: "It's running
+but I can't make any changes").** A box page edits through projects, which
+a node does not have, so a node's program was read-only in the canvas. An
+engineer (signed in with the node's token) now edits the running module in
+the Code pane and Deploy sends it whole as `PUT /api/modules/{name}`; the
+node compiles it and keeps the old program running if it will not, and
+the canvas says which. Two faults hid this on the bench: the canvas's
+write calls (Deploy, and the map window's Check and Download) went to the
+page's own server instead of the `?box=` origin, and the P4 served two
+HTTP connections, one of which each open page's values stream holds for
+good, so with two pages open every other request was reset. The P4 now
+serves four (`server::CONNECTIONS`; about 4 KiB of heap and 2 KiB of main
+stack each: 41.9 KiB of stack left, against 45.9 with two). A deploy from
+a headless Chromium through a `?box=` page answered 201 and the node ran
+the edited source.
+
+**The agent for a Skipper (2026-11-24, Nick: "Studio box writes").** A
+Skipper has no agent and no projects: the box on the programming side
+has both. A page that box served, opened with `?box=` naming the Skipper,
+signs in to the box (user and password: projects and the agent) and holds
+the Skipper's token (its writes); each call goes where it belongs (reads
+of the live view and a module deploy to the Skipper, everything else to
+the box). The box needs `--site` for its page to reach another origin
+(its `connect-src` names `http:` then). A project for a Skipper carries
+the Skipper's map as its `io.map` (the same text) and a program that
+binds by name; Deploy saves and checks it on the box, refuses what the
+box's lint holds, and sends the program (its function blocks with it, the
+requirement tests and the map not) to the Skipper as
+`PUT /api/modules/{name}`. The box's approval policy is the box's and is
+not asked: the Skipper takes a write on its token. On the bench, through
+a headless Chromium: a sign-in on the box, the Skipper's token, the agent
+asked "keep the drive disabled with slew 0, and set its run current to
+70" wrote that into the project with a requirement test; Deploy sent it,
+the Skipper answered 201, and the drive's `PR RC` read 70.
+
+The node now binds a program's `VAR_INPUT` and `VAR_OUTPUT` to the map's
+points by name, as a box does, so a program the agent wrote on a box runs
+on a Skipper unchanged (`helmsman-node-p4/src/bind.rs`; the matching and the
+image write are `ioplan::bindings` and `put_at`, host-tested). Names compare
+without regard to case; an input binds only to an `in` point and an output
+only to an `out` point; a port with no point is left alone. Located
+variables (`AT %QD18`) work as before. A point written by both a located
+variable and a name-bound output takes the name-bound value, which is
+applied after the scan. Proven on the host only; not yet run on a board.
+
+### Sharing values: the Skipper's own Modbus TCP tables (2026-11-25)
+
+Nick, 2026-11-25: "the Skipper should have its own ModbusTCP/EthernetIP/
+Profinet/EtherCAT registers so that it can communicate with other Skippers
+and PLCs on the network. Obviously we can only incorporate ModbusTCP and
+EthernetIP for now." What is decided (his interview answers): values are
+shared by name in io.map; others may read every shared value and write only
+what is marked; Modbus TCP first, the EtherNet/IP adapter later; the listener
+is off until the map shares something. This section is Modbus TCP. Nothing
+here is run on a board yet: the image builds, and the server is held by the
+host tests (helmsman-nodecore `modbus_server`, `iomap`; helmsman-io
+`tests/node_map.rs`, which asks it with the box's own Modbus client codec).
+
+**The grammar.** One line per value, in the map beside the `device`, `in`
+and `out` lines:
+
+```text
+# shared with other controllers
+share speed   int  hr:0        # they read
+share run_cmd bool coil:0      # they write
+share at_home bool di:0
+share level   real ir:4:f32
+share pos     int  hr:10:i32sw
+```
+
+`share NAME TYPE TABLE:ADDR[:FMT]`. `bool` takes `di` (discrete input) or
+`coil`; `int` and `real` take `ir` (input register) or `hr` (holding
+register), with the `FMT` a modbus-tcp point has: `u16` (the default) `i16`
+`u32` `u32sw` `i32` `i32sw` `f32` `f32sw`. A `real` needs `f32` or `f32sw`,
+an `int` any of the others; the `sw` formats send the low word first. A
+32-bit value takes two registers. NAME is a `VAR_INPUT` or `VAR_OUTPUT` of
+the running program and binds by name, as the points do, case-insensitively.
+A map may hold 32 shares, and a map of shares alone (no `device` line) is a
+map. The node refuses a line with its line number: a type the table does not
+hold (`bool` in `hr`, `int` in `coil`), a format on a coil, a format of the
+wrong kind, an address that overlaps another share of the same table
+(`hr:0:u32` and `hr:1`; `hr:0` and `ir:0` do not overlap, the tables are
+separate), a name shared twice, and a name that is also an `in` point (an
+input has one source, a point or another controller; an `out` point of the
+same name is fine). Names are ST identifiers of at most 32 characters, and
+the map text keeps its 4096-byte limit.
+
+**What another controller may do.** Reads of any shared address: function
+codes 1 and 2 (coils, discrete inputs, for bool shares) and 3 and 4 (holding,
+input registers, for int and real shares), from the spec's quantity limits
+(App §6.1 to 6.4). Writes, function codes 5, 6, 15 and 16, only where the
+share is a `VAR_INPUT` of the program in a `coil` or `hr` table: that is the
+variable the other controller drives. The program sees the register's value
+as its input each scan, and the value starts at 0 or false and survives a
+redeploy. A share of a `VAR_OUTPUT` is the program's own: others read it, the
+node publishes it after each scan, and it reads 0 or false while the program
+is stopped or faulted. A share with no variable of its name in the program
+reads 0 or false and is listed `"bound": false`. `di` and `ir` shares are
+read only by the protocol itself (it has no write for them), so share
+outputs there; an input in `di` or `ir` stays 0.
+
+**What it answers** (App §7 p.47). Exception 02, illegal data address: a read
+that touches an address no share holds (the whole request is refused; a
+master reads the ranges the map names); any write to an address that is not
+a writable share, whether unshared or the program's own output. Exception
+03, illegal data value: a quantity of 0 or over the limits, a PDU of the
+wrong length or byte count, a coil value other than 0xFF00 or 0x0000, a write
+that covers only part of a 32-bit share (FC 6 cannot write one; FC 16 must
+write both registers in one request), and a REAL written as NaN or infinity.
+Exception 01 for any other function code. A write is all or nothing: a
+request with one bad address changes nothing. The unit id is not checked: any
+unit answers, and the reply carries the request's (a node is one device).
+A frame that is not Modbus TCP (protocol id not 0, length outside 2 to 254)
+closes the connection.
+
+**The server.** TCP port 502 on the node's address, started only when the map
+has a `share` line (the boot line says `modbus server: off` or `on, port
+502, N shared value(s)`; `GET /api/io_map` says it too). Two connections at
+a time (`share_server::CONNECTIONS`; a third finds nothing listening and is
+refused), each with 512-byte buffers: about 2 KiB of heap in all, and 2
+sockets of the stack's table. A frame has 3 s to complete, a quiet
+connection is closed after 60 s (a master polling more slowly reconnects), a
+reply the peer does not take within 2 s ends the connection, and TCP
+keep-alive drops a peer that vanished. The scan loop never touches a socket:
+it and the server meet at one bank of bytes (132, `Live::bank`), each
+holding it for a copy, and the server answers from a copy it took and
+commits only the writes it approved. A peer that sends without stopping
+yields to the executor after every frame. The ESP32 boards (`helmsman-node`,
+one Modbus block) refuse a map with a share line, and a box (which
+masters devices and serves no Modbus) reads and keeps the lines, so one
+io.map can hold a project's Skipper and its box.
+
+**What it shows.** `GET /api/io_map` gains `"modbus_port"` (502, or null while
+nothing is shared) and `"shares"`: for each, `name`, `type`, `address` (`hr:0`,
+`ir:4:f32`), `access` (`read` or `read/write`, from the running program),
+`bound` and the live `value`. A shared name is a program port, so it is also
+in `GET /api/signals` and the values stream with its value, as any port with
+no point is.
+
+**Not done.** EtherNet/IP (an adapter listening on 44818 and 2222 with an
+assembly built from the same lines) is the next card; PROFINET and EtherCAT
+are not planned. No test against a real PLC or another Skipper yet, and the
+image has not been flashed: the first on-board check is a read of each
+function code from the Studio (`/usr/bin/python3 -I`, a few requests at a
+time) before any other controller is pointed at it.
 
 ### Updating a node without a cable (2026-11-18)
 

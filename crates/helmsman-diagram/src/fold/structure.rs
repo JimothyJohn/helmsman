@@ -35,8 +35,8 @@
 //!   an arm, one with no statement after it, and an empty one (`(**)`) name
 //!   nothing.
 //! - **Title**: the text without the markers (`(*` `*)`, `/*` `*/`, `//`),
-//!   trimmed, first line only, at most [`TITLE`] characters (longer is cut
-//!   and ends in `…`).
+//!   trimmed, first line only, at most [`SHOWN`] characters on the tab
+//!   (longer is cut and ends in `…`); the key below uses the first [`TITLE`].
 //! - **Key**: `section:{pou}:{title}`, and `section:{pou}:{title}#2`, `#3`
 //!   for a title used again in the POU.
 //!
@@ -65,6 +65,8 @@ use crate::model::Diagram;
 
 /// The longest section title, in characters.
 pub const TITLE: usize = 40;
+/// The longest a section tab shows of its comment, in characters.
+pub const SHOWN: usize = 90;
 
 /// Whether a run of statements is worth a block of its own.
 fn worth(d: &Diagram, run: &[usize]) -> bool {
@@ -101,6 +103,10 @@ pub fn arms(d: &Diagram) -> Vec<Fold> {
 struct Note {
     /// The title (see the module docs); never empty.
     title: String,
+    /// The same line as a reader sees it: cut far later than `title`, so a
+    /// tab names its comment whole (the key keeps the short `title`, so
+    /// saved folds still match).
+    shown: String,
     /// Where the first thing after it that is not trivia starts.
     next: usize,
 }
@@ -160,14 +166,17 @@ fn notes(src: &str) -> Vec<Note> {
         if first.is_empty() {
             continue;
         }
-        let title = if first.chars().count() > TITLE {
-            let cut: String = first.chars().take(TITLE - 1).collect();
-            format!("{}…", cut.trim_end())
-        } else {
-            first.to_string()
+        let cut_at = |n: usize| {
+            if first.chars().count() > n {
+                let cut: String = first.chars().take(n - 1).collect();
+                format!("{}…", cut.trim_end())
+            } else {
+                first.to_string()
+            }
         };
         out.push(Note {
-            title,
+            title: cut_at(TITLE),
+            shown: cut_at(SHOWN),
             next: skip_trivia(b, end),
         });
     }
@@ -181,18 +190,18 @@ fn notes(src: &str) -> Vec<Note> {
 pub fn sections(d: &Diagram, src: &str) -> Vec<Fold> {
     let notes = notes(src);
     // The title of the section each top-level statement starts, if any.
-    let mut starts: Vec<(usize, String)> = Vec::new();
+    let mut starts: Vec<(usize, String, String)> = Vec::new();
     for (at, &s) in d.top.iter().enumerate() {
         let Some(stmt) = d.stmts.get(s) else { continue };
         let offset = offset_in(src, stmt.pos);
         if let Some(note) = notes.iter().rev().find(|n| n.next == offset) {
-            starts.push((at, note.title.clone()));
+            starts.push((at, note.title.clone(), note.shown.clone()));
         }
     }
     let mut seen: Vec<&str> = Vec::new();
     let mut out = Vec::new();
-    for (i, (at, title)) in starts.iter().enumerate() {
-        let to = starts.get(i + 1).map_or(d.top.len(), |(next, _)| *next);
+    for (i, (at, title, shown)) in starts.iter().enumerate() {
+        let to = starts.get(i + 1).map_or(d.top.len(), |(next, ..)| *next);
         let run = &d.top[*at..to];
         let before = seen.iter().filter(|t| **t == title).count();
         seen.push(title);
@@ -204,7 +213,7 @@ pub fn sections(d: &Diagram, src: &str) -> Vec<Fold> {
         } else {
             format!("section:{}:{title}#{}", d.pou, before + 1)
         };
-        let fold = Fold::over_stmts(d, key, FoldKind::Section, title, run);
+        let fold = Fold::over_stmts(d, key, FoldKind::Section, shown.as_str(), run);
         if !fold.nodes.is_empty() {
             out.push(fold);
         }
@@ -318,6 +327,31 @@ pub fn statements(d: &Diagram, src: &str) -> Vec<Fold> {
         }
     }
     out
+}
+
+/// The source of each statement of `d` as it is written in `src`, line
+/// breaks and comments kept, by its index into [`Diagram::stmts`]: what
+/// the closest rung of the zoom ladder draws ([`super::ladder`]). Empty
+/// for a source that does not parse, or a POU the source lacks.
+#[must_use]
+pub fn sources(d: &Diagram, src: &str) -> HashMap<usize, String> {
+    let Ok(unit) = ast::parse(src) else {
+        return HashMap::new();
+    };
+    let Some(pou) = unit.pous.iter().find(|p| p.name.eq_ignore_ascii_case(&d.pou)) else {
+        return HashMap::new();
+    };
+    let mut ends = HashMap::new();
+    spans(src, &pou.body, &mut ends);
+    d.stmts
+        .iter()
+        .enumerate()
+        .filter_map(|(k, s)| {
+            let start = offset_in(src, s.pos);
+            let text = ends.get(&start).and_then(|&end| src.get(start..end))?;
+            Some((k, text.to_string()))
+        })
+        .collect()
 }
 
 /// The byte offset of a 1-based line and column (the lexer counts bytes).

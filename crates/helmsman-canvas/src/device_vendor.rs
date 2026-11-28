@@ -1,6 +1,6 @@
 //! The vendor's file for a device the library does not know (card
 //! `device-profile-propose-box`, option (a), Nick 2026-11-15): a button on
-//! the found device's row picks the file (an EDS, an IODD, a manual), posts
+//! the New device form (From the vendor's file…) picks the file (an EDS, an IODD, a manual), posts
 //! it to the box as a drop-in (`POST /api/dropins`) and, once the box has
 //! kept it, asks the agent in chat for a device profile, carrying the
 //! drop-in's id (`POST /api/chat` `{message, session, dropins: [id]}`). The
@@ -54,7 +54,7 @@ const MAX_NAME: usize = 100;
 const MAX_SAID: usize = 400;
 
 /// The button's text.
-pub const BUTTON: &str = "Build from vendor file…";
+pub const BUTTON: &str = "From the vendor's file…";
 
 /// What kind of file it is, by its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,8 +133,7 @@ pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
 }
 
 /// What the box's refusal of an upload (`status`, its `body`) says, in
-/// words for the engineer, naming `name`: the same sentences for the
-/// vendor's file and for a PDF of a specification.
+/// words for the engineer, naming `name`.
 #[must_use]
 pub fn refusal_words(status: u16, body: &str, name: &str) -> String {
     let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
@@ -228,7 +227,7 @@ pub fn upload_request(call: PCall, name: &str, bytes: Vec<u8>, kind: File) -> PR
     }
 }
 
-/// The found device the file is for.
+/// The device the file is for: what the New device form has typed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub address: String,
@@ -595,18 +594,17 @@ impl VendorUi {
         }
     }
 
-    /// The button and the words beside it, under a found device's row.
+    /// The button and the words beside it, in the New device form. `target`
+    /// is what the form has typed (an address, or none).
     pub fn show_row(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome, target: &Target) {
         let t = theme(ui);
         let offer = self.offer();
-        let me = self.target.as_ref().is_some_and(|x| x.address == target.address);
-        let busy = me && !matches!(self.stage, Stage::Idle);
+        let busy = !matches!(self.stage, Stage::Idle);
         let tip = match &offer {
-            Ok(()) => "Pick the vendor's file for this device: an EDS, an IODD, or a manual (a PDF up to 2 MB, text up to 1 MB). The box keeps it in memory, and Helmsman reads it and proposes a profile with the channel names. You check the names above before anything is saved.".to_string(),
+            Ok(()) => "Pick the vendor's file for this device: an EDS, an IODD, or a manual (a PDF up to 2 MB, text up to 1 MB). The box keeps it in memory, and Helmsman reads it and proposes a profile with the channel names. You check the names on the Devices tab before anything is saved.".to_string(),
             Err(why) => why.clone(),
         };
         ui.horizontal_wrapped(|ui| {
-            ui.add_space(22.0);
             let b = ui
                 .add_enabled(
                     offer.is_ok(),
@@ -614,7 +612,7 @@ impl VendorUi {
                         .min_size(Vec2::new(0.0, TAP * 0.7)),
                 )
                 .tip(tip.as_str());
-            chrome.hit(format!("vendor file {}", target.address), b.rect);
+            chrome.hit("vendor file", b.rect);
             if b.clicked() {
                 self.start(target.clone());
             }
@@ -623,13 +621,13 @@ impl VendorUi {
             && !busy
             && !why.is_empty()
         {
-            ui.indent(("vendor why", &target.address), |ui| {
+            ui.indent("vendor why", |ui| {
                 ui.set_max_width(ui.available_width() - BAR);
                 ui.add(egui::Label::new(RichText::new(why).color(t.muted)).wrap());
             });
         }
-        if let Some(n) = self.note.clone().filter(|n| n.address == target.address) {
-            ui.indent(("vendor note", &target.address), |ui| {
+        if let Some(n) = self.note.clone() {
+            ui.indent("vendor note", |ui| {
                 ui.set_max_width(ui.available_width() - BAR);
                 let color = match n.tone {
                     Tone::Info => t.muted,
@@ -637,7 +635,7 @@ impl VendorUi {
                     Tone::Error => theme(ui).ink(RED),
                 };
                 let r = ui.add(egui::Label::new(RichText::new(&n.text).color(color)).wrap());
-                chrome.hit(format!("vendor note {}", target.address), r.rect);
+                chrome.hit("vendor note", r.rect);
             });
         }
     }

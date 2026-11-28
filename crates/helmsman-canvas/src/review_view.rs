@@ -69,6 +69,9 @@ pub struct ReviewView {
     /// sends it.
     pub user_input: String,
     pub password_input: String,
+    /// In the browser, the Proposals screen's "Sign in…" asked for the
+    /// header's sign-in form (the one a browser saves the password of).
+    pub open_login: bool,
     /// The role picked to sign in with its PIN (boxes without accounts).
     pub role_input: String,
     pub pin_input: String,
@@ -78,6 +81,10 @@ pub struct ReviewView {
     /// The origin this page watches by address (`?box=ORIGIN`), when it
     /// does: the sign-in panel then asks for that origin's token.
     pub remote: Option<String>,
+    /// This browser holds a token for [`Self::remote`]: writes to the
+    /// watched node carry it. Apart from the session, which on a page a
+    /// box served is that box's sign-in.
+    pub token_held: bool,
     /// Which POU of the diagram diff is shown.
     pub pou: usize,
     pub cam: Cam,
@@ -126,10 +133,12 @@ impl ReviewView {
             state: Review::new(),
             user_input: String::new(),
             password_input: String::new(),
+            open_login: false,
             role_input: ROLES[0].to_string(),
             pin_input: String::new(),
             token_input: String::new(),
             remote: None,
+            token_held: false,
             pou: 0,
             cam: Cam::default(),
             rects: Vec::new(),
@@ -223,7 +232,12 @@ impl ReviewView {
     pub fn login_ui(&mut self, ui: &mut egui::Ui) {
         if let Some(origin) = self.remote.clone() {
             self.token_ui(ui, &origin);
-            return;
+            // A page a box served also signs in to that box (its projects
+            // and its agent); a page from anywhere else has only the token.
+            if !self.served_by_a_box() {
+                return;
+            }
+            ui.separator();
         }
         let t = theme(ui);
         let head = if self.state.signed_in().is_some() {
@@ -234,7 +248,7 @@ impl ReviewView {
         ui.label(RichText::new(head).strong()).tip(SESSION);
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("● {who}")).color(t.accent))
+                ui.label(RichText::new(format!("● {who}")).color(t.ink(crate::st_view::brand::GREEN)))
                     .tip("Approvals and edits are made as this user.");
                 let out = ui
                     .button("Sign out")
@@ -293,10 +307,12 @@ impl ReviewView {
         ui.label(RichText::new("Token").strong()).tip(TOKEN_TIP);
         ui.label(RichText::new(origin).color(t.muted))
             .tip("The node or box this page watches, from its address.");
-        if self.state.session.is_some() {
+        if self.token_held {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("● token kept for this address").color(t.accent))
-                    .tip("Deploy, Save, Stop and Run send it; the node checks it on every write.");
+                ui.label(
+                    RichText::new("● token kept for this address").color(t.ink(crate::st_view::brand::GREEN)),
+                )
+                .tip("Deploy, Save, Stop and Run send it; the node checks it on every write.");
                 let out = ui
                     .button("Forget")
                     .tip("Drops the token from this browser. Watching goes on; writes stop.");
@@ -307,7 +323,10 @@ impl ReviewView {
                         crate::web::set_token(None);
                         crate::web::forget_token(origin);
                     }
-                    self.state.session = None;
+                    self.token_held = false;
+                    if self.state.session.as_ref().and_then(|s| s.user.as_deref()) == Some("token") {
+                        self.state.session = None;
+                    }
                     self.state.login_problem = None;
                 }
             });
@@ -338,7 +357,12 @@ impl ReviewView {
                     #[cfg(not(target_arch = "wasm32"))]
                     let _ = &token;
                     self.token_input.clear();
-                    self.state.session = Some(crate::node_token::session());
+                    self.token_held = true;
+                    // With no box behind the page the token is the only
+                    // sign-in there is; a box's own session is kept.
+                    if !self.served_by_a_box() {
+                        self.state.session = Some(crate::node_token::session());
+                    }
                     self.state.login_problem = None;
                 }
                 None => {
@@ -352,8 +376,26 @@ impl ReviewView {
         }
     }
 
+    /// Whether a box served this page: it said how it signs in.
+    fn served_by_a_box(&self) -> bool {
+        matches!(self.state.credentials(), Some("accounts" | "pins"))
+    }
+
     /// A user name and masked password; whether "Sign in" was asked for.
     fn account_fields(&mut self, ui: &mut egui::Ui) -> bool {
+        // In the browser the sign-in is the header's real form, so the
+        // browser can save the password (Nick, 2026-11-26): here, a
+        // button that opens it.
+        if cfg!(target_arch = "wasm32") {
+            let b = ui
+                .button("Sign in…")
+                .tip("Opens the sign-in form at the top right. Your browser can save the password from it.");
+            self.rects.push(("open sign in".into(), b.rect));
+            if b.clicked() {
+                self.open_login = true;
+            }
+            return false;
+        }
         let user = ui
             .add(
                 egui::TextEdit::singleline(&mut self.user_input)

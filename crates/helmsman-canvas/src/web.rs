@@ -83,6 +83,15 @@ pub fn set_base(origin: &str) {
     BASE.with(|b| *b.borrow_mut() = Some(origin.trim_end_matches('/').to_string()));
 }
 
+/// Whether `url` goes to the base origin ([`set_base`]).
+fn is_remote(url: &str) -> bool {
+    BASE.with(|b| {
+        b.borrow()
+            .as_ref()
+            .is_some_and(|base| url.starts_with(base.as_str()))
+    })
+}
+
 /// `url` on the base origin, when one is set; `url` itself otherwise.
 fn absolute(url: &str) -> String {
     BASE.with(|b| match &*b.borrow() {
@@ -91,13 +100,23 @@ fn absolute(url: &str) -> String {
     })
 }
 
-/// The `?box=ORIGIN` of this page, if it names one.
+/// The node this page watches: its `?box=ORIGIN`, else the one the box
+/// that served it names (`--node`, a `<meta name="helmsman-node">` in its
+/// head; Nick, 2026-11-24: "the box knows its Skipper"), so the plain
+/// address watches it. Both pass the same check.
 #[must_use]
 pub fn box_origin() -> Option<String> {
     let query = web_sys::window()
         .and_then(|w| w.location().search().ok())
         .unwrap_or_default();
-    crate::app::box_origin(&query)
+    crate::app::box_origin(&query).or_else(|| {
+        let content = web_sys::window()?
+            .document()?
+            .query_selector("meta[name=helmsman-node]")
+            .ok()??
+            .get_attribute("content")?;
+        crate::app::box_origin(&format!("?box={content}"))
+    })
 }
 
 /// An open `EventSource` and the callbacks it holds; closed when dropped.
@@ -243,7 +262,7 @@ async fn get(url: &str) -> (Option<String>, Result<String, String>) {
 
 async fn get_body(url: &str, build: &mut Option<String>) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("GET")?;
+    let (init, headers) = init("GET", url)?;
     init.set_headers(&headers);
     // A reply that never comes would leave its read "asked" for ever.
     let controller = web_sys::AbortController::new().map_err(|e| text(&e))?;
@@ -293,14 +312,6 @@ pub fn wants_monitor() -> bool {
         .and_then(|w| w.location().search().ok())
         .unwrap_or_default();
     crate::app::wants_monitor(&query)
-}
-
-/// The page's query string (`?a&b=c`, or empty).
-#[must_use]
-pub fn query() -> String {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .unwrap_or_default()
 }
 
 /// Whether this page starts the guided tour ([`crate::app::wants_tour`]
@@ -561,12 +572,16 @@ impl Http {
 /// CORS, no cookie (the page has none there), and the token the person
 /// gave for it ([`set_token`]) as `Authorization: Bearer`, which the node
 /// answers a preflight for.
-fn init(method: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
+fn init(method: &str, url: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
     let init = web_sys::RequestInit::new();
     init.set_method(method);
     init.set_cache(web_sys::RequestCache::NoStore);
     let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
-    let remote = BASE.with(|b| b.borrow().is_some());
+    // Only a call that goes to the base origin is cross-origin: on a page
+    // a box served with `?box=` pointing at a Skipper, the box's own
+    // routes (sign-in, projects, the agent) stay same-origin with the
+    // session cookie, and the Skipper's get its token.
+    let remote = is_remote(url);
     if remote {
         init.set_mode(web_sys::RequestMode::Cors);
         init.set_credentials(web_sys::RequestCredentials::Omit);
@@ -604,7 +619,7 @@ async fn fetch(
     ctype: Option<&str>,
 ) -> Result<Answer, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init(method)?;
+    let (init, headers) = init(method, url)?;
     if let Some(b) = &body {
         if let Some(t) = ctype {
             headers.set("Content-Type", t).map_err(|e| text(&e))?;
@@ -711,7 +726,7 @@ async fn chat(
 
     let seq = req.seq;
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("POST")?;
+    let (init, headers) = init("POST", &req.url)?;
     headers
         .set("Content-Type", "application/json")
         .map_err(|e| text(&e))?;
@@ -785,7 +800,16 @@ impl ProjHttp {
                 .as_ref()
                 .map(|b| JsValue::from(web_sys::js_sys::Uint8Array::from(b.as_slice())));
             let ctype = body.as_ref().map(|_| req.ctype);
-            let answer = fetch(req.method, &req.url, body, ctype)
+            // A call to the watched node goes to the `?box=` origin, as
+            // the reads do: relative, it reached the page's own server (a
+            // PUT of a module answered 501 there, 2026-11-24). The rest
+            // are the serving box's own (projects, its agent).
+            let url = if req.call.on_node() {
+                absolute(&req.url)
+            } else {
+                req.url.clone()
+            };
+            let answer = fetch(req.method, &url, body, ctype)
                 .await
                 .unwrap_or_else(|why| Answer {
                     status: 0,
@@ -854,10 +878,10 @@ thread_local! {
     static VENDOR_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why that file was not read, said beside its button.
     static VENDOR_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-    /// A file picked for a specification (`spec_mode.rs`).
-    static SPEC_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
-    /// Why that file was not read, said in the specification's window.
-    static SPEC_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// A file picked for the design's documents (`documents.rs`).
+    static DOCUMENTS_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why that file was not read, said in the design window.
+    static DOCUMENT_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The pane layout file picked for View › Pane layouts… › Import.
     static LAYOUTS_PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
     /// Why that file was not read, said in the popup.
@@ -886,38 +910,28 @@ pub fn pick_vendor_file(ctx: &egui::Context) {
     );
 }
 
-/// Opens the picker for a specification's `.md` or `.txt` file; a file
-/// too large is refused before it is read ([`crate::spec_mode::pick_refusal`]).
-pub fn pick_spec_file(ctx: &egui::Context, pdf: bool) {
-    if pdf {
-        pick_into(
-            crate::spec_mode::ACCEPT_BOX,
-            ctx,
-            crate::spec_mode::pick_refusal_box,
-            &SPEC_PICKED,
-            &SPEC_ERRORS,
-        );
-    } else {
-        pick_into(
-            crate::spec_mode::ACCEPT,
-            ctx,
-            crate::spec_mode::pick_refusal,
-            &SPEC_PICKED,
-            &SPEC_ERRORS,
-        );
-    }
+/// Opens the picker for a document's `.md` or `.txt` file; a file too
+/// large is refused before it is read ([`crate::documents::pick_refusal`]).
+pub fn pick_document_file(ctx: &egui::Context) {
+    pick_into(
+        crate::documents::ACCEPT,
+        ctx,
+        crate::documents::pick_refusal,
+        &DOCUMENTS_PICKED,
+        &DOCUMENT_ERRORS,
+    );
 }
 
-/// The specification's files picked since the last call: name and bytes.
+/// The documents' files picked since the last call: name and bytes.
 #[must_use]
-pub fn take_spec_picked() -> Vec<(String, Vec<u8>)> {
-    SPEC_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+pub fn take_documents_picked() -> Vec<(String, Vec<u8>)> {
+    DOCUMENTS_PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
-/// Why the specification's files picked since the last call were not read.
+/// Why the documents' files picked since the last call were not read.
 #[must_use]
-pub fn take_spec_errors() -> Vec<String> {
-    SPEC_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
+pub fn take_document_errors() -> Vec<String> {
+    DOCUMENT_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
 /// Opens the picker for a pane layout file (`crate::pane_layout`); the
@@ -1148,4 +1162,233 @@ impl crate::sim_projects::Storage for LocalProjects {
             .set_item(PROJECTS_BACKUP_SLOT, value)
             .map_err(|e| text(&e))
     }
+}
+
+/// Puts what the page copied on the clipboard where the browser will not
+/// let egui do it: a page served over plain HTTP from a LAN address is not
+/// a secure context, so `navigator.clipboard` is missing and every Copy
+/// button, Ctrl+C and selection copy did nothing (Nick, 2026-11-24: "The
+/// copy buttons don't do shit"). There the frame's copy commands are taken
+/// here and copied the older way, through a hidden text area and
+/// `execCommand("copy")`, while the click that asked is still the page's
+/// user gesture. In a secure context egui's own copy is left alone.
+pub fn take_copies(ctx: &egui::Context) {
+    let Some(window) = web_sys::window() else { return };
+    if window.is_secure_context() {
+        return;
+    }
+    let texts: Vec<String> = ctx.output_mut(|o| {
+        let mut taken = Vec::new();
+        o.commands.retain(|c| match c {
+            egui::OutputCommand::CopyText(t) => {
+                taken.push(t.clone());
+                false
+            }
+            _ => true,
+        });
+        taken
+    });
+    for t in texts {
+        if let Err(why) = copy_by_command(&window, &t) {
+            web_sys::console::warn_1(&JsValue::from_str(&format!("copy failed: {why}")));
+        }
+    }
+}
+
+fn copy_by_command(window: &web_sys::Window, copied_text: &str) -> Result<(), String> {
+    let document = window.document().ok_or("no document")?;
+    let body = document.body().ok_or("no body")?;
+    let area: web_sys::HtmlTextAreaElement = document
+        .create_element("textarea")
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|_| "not a textarea".to_string())?;
+    area.set_value(copied_text);
+    // Off screen, and never scrolls the page or shows a keyboard.
+    let _ = area.set_attribute("readonly", "");
+    let _ = area.set_attribute("style", "position:fixed;top:-1000px;left:-1000px;opacity:0");
+    body.append_child(&area).map_err(|e| text(&e))?;
+    area.select();
+    let html: web_sys::HtmlDocument = document
+        .dyn_into()
+        .map_err(|_| "not an HTML document".to_string())?;
+    let copied = html.exec_command("copy").map_err(|e| text(&e));
+    let _ = body.remove_child(&area);
+    match copied {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("the browser refused the copy".into()),
+        Err(why) => Err(why),
+    }
+}
+
+thread_local! {
+    /// A user name and password the sign-in form handed over, not taken yet.
+    /// Held only until the next frame passes them to the login call.
+    static LOGIN_SUBMITTED: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+    /// The sign-in form was closed (Esc or Cancel).
+    static LOGIN_CLOSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+const LOGIN_ID: &str = "helmsman-login";
+
+fn css(c: egui::Color32) -> String {
+    let [r, g, b, _] = c.to_array();
+    format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+/// Shows the box sign-in as a real HTML form, so the browser's own
+/// password manager can save and fill it; the canvas draws no password
+/// field of its own for it. Call every frame the sign-in is open: the
+/// form is made once, then its colours, the box's words (`problem`) and
+/// the button follow. A submit arrives through [`take_login`], Esc or
+/// Cancel through [`take_login_closed`]. The password is never stored by
+/// the page: it passes from the field to the login call and no further.
+pub fn show_login_form(ctx: &egui::Context, t: &crate::theme::Theme, problem: Option<&str>, busy: bool) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Some(root) = doc
+        .get_element_by_id(LOGIN_ID)
+        .or_else(|| make_login_form(&doc, ctx))
+    else {
+        return;
+    };
+    let _ = root.set_attribute(
+        "style",
+        &format!(
+            "--bg:{};--fg:{};--muted:{};--rule:{};--accent:{};--bad:{}",
+            css(t.panel),
+            css(t.fg),
+            css(t.muted),
+            css(t.rule),
+            css(t.accent),
+            css(t.ink(egui::Color32::from_rgb(255, 110, 100))),
+        ),
+    );
+    if let Ok(Some(p)) = root.query_selector(".problem") {
+        p.set_text_content(Some(problem.unwrap_or("")));
+    }
+    if let Ok(Some(b)) = root.query_selector("button[type=submit]")
+        && let Ok(b) = b.dyn_into::<web_sys::HtmlButtonElement>()
+    {
+        b.set_disabled(busy);
+    }
+}
+
+fn make_login_form(doc: &web_sys::Document, ctx: &egui::Context) -> Option<web_sys::Element> {
+    let root = doc.create_element("div").ok()?;
+    root.set_id(LOGIN_ID);
+    root.set_inner_html(
+        "<style>\
+#helmsman-login{position:fixed;top:56px;right:12px;z-index:10;width:min(320px,calc(100vw - 24px));\
+box-sizing:border-box;padding:14px;background:var(--bg);color:var(--fg);border:1px solid var(--rule);\
+border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.4);font:18px/1.3 Inter,system-ui,sans-serif}\
+#helmsman-login h2{margin:0 0 10px;font-size:18px;font-weight:700}\
+#helmsman-login input{display:block;width:100%;box-sizing:border-box;margin:0 0 8px;padding:6px 8px;\
+font:inherit;color:var(--fg);background:transparent;border:1px solid var(--rule);border-radius:4px}\
+#helmsman-login input:focus{outline:2px solid var(--accent);outline-offset:0}\
+#helmsman-login button{font:inherit;padding:5px 12px;margin-right:8px;color:var(--fg);background:transparent;\
+border:1px solid var(--rule);border-radius:4px;cursor:pointer}\
+#helmsman-login button[type=submit]{border-color:var(--accent);font-weight:700}\
+#helmsman-login button:disabled{opacity:.5;cursor:default}\
+#helmsman-login .problem{margin:8px 0 0;color:var(--bad)}\
+</style>\
+<form method=\"post\" action=\"#\" autocomplete=\"on\">\
+<h2>Sign in</h2>\
+<input type=\"text\" name=\"username\" autocomplete=\"username\" placeholder=\"user\" \
+title=\"Your user name on this box.\" aria-label=\"user\" autocapitalize=\"none\" spellcheck=\"false\">\
+<input type=\"password\" name=\"password\" autocomplete=\"current-password\" placeholder=\"password\" \
+title=\"Your password. Enter signs in. Your browser can remember it.\" aria-label=\"password\">\
+<button type=\"submit\" title=\"Signs in to this box. Sessions end after an hour, or 15 minutes unused.\">Sign in</button>\
+<button type=\"button\" class=\"cancel\" title=\"Closes this without signing in (Esc).\">Cancel</button>\
+<p class=\"problem\" role=\"alert\"></p>\
+</form>",
+    );
+    let form = root.query_selector("form").ok()??;
+    let on_submit = {
+        let root = root.clone();
+        let ctx = ctx.clone();
+        Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            e.prevent_default();
+            let value = |sel: &str| {
+                root.query_selector(sel)
+                    .ok()
+                    .flatten()
+                    .and_then(|i| i.dyn_into::<web_sys::HtmlInputElement>().ok())
+                    .map(|i| i.value())
+                    .unwrap_or_default()
+            };
+            let pair = (value("input[name=username]"), value("input[name=password]"));
+            LOGIN_SUBMITTED.with(|s| *s.borrow_mut() = Some(pair));
+            ctx.request_repaint();
+        })
+    };
+    form.add_event_listener_with_callback("submit", on_submit.as_ref().unchecked_ref())
+        .ok()?;
+    on_submit.forget();
+    let close = {
+        let ctx = ctx.clone();
+        Closure::<dyn FnMut()>::new(move || {
+            LOGIN_CLOSED.with(|c| c.set(true));
+            ctx.request_repaint();
+        })
+    };
+    if let Ok(Some(cancel)) = root.query_selector(".cancel") {
+        let _ = cancel.add_event_listener_with_callback("click", close.as_ref().unchecked_ref());
+    }
+    // Keys typed in the form are the form's: the canvas must not see them
+    // (a letter would be a shortcut). Esc closes.
+    let keys = {
+        let ctx = ctx.clone();
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+            e.stop_propagation();
+            if e.key() == "Escape" {
+                LOGIN_CLOSED.with(|c| c.set(true));
+                ctx.request_repaint();
+            }
+        })
+    };
+    let _ = root.add_event_listener_with_callback("keydown", keys.as_ref().unchecked_ref());
+    let _ = root.add_event_listener_with_callback("keyup", keys.as_ref().unchecked_ref());
+    keys.forget();
+    close.forget();
+    doc.body()?.append_child(&root).ok()?;
+    if let Ok(Some(user)) = root.query_selector("input[name=username]")
+        && let Ok(user) = user.dyn_into::<web_sys::HtmlElement>()
+    {
+        let _ = user.focus();
+    }
+    Some(root)
+}
+
+/// Removes the sign-in form (after a sign-in, or when it is closed): the
+/// browser then offers to save the password it saw submitted.
+pub fn hide_login_form() {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Some(root) = doc.get_element_by_id(LOGIN_ID) {
+        root.remove();
+        // The keyboard back to the page's canvas: left on the bare page
+        // after Esc, Cancel or a sign-in, no key reached the app until a
+        // click on it (the tester's find, 2026-11-27).
+        if let Some(canvas) = doc
+            .get_element_by_id("canvas")
+            .and_then(|c| c.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = canvas.focus();
+        }
+    }
+}
+
+/// The user name and password the form was submitted with, if it was.
+#[must_use]
+pub fn take_login() -> Option<(String, String)> {
+    LOGIN_SUBMITTED.with(|s| s.borrow_mut().take())
+}
+
+/// Whether the form was closed with Esc or Cancel since the last call.
+#[must_use]
+pub fn take_login_closed() -> bool {
+    LOGIN_CLOSED.with(std::cell::Cell::take)
 }

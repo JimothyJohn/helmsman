@@ -124,8 +124,32 @@ fn a_label_the_library_does_not_know_writes_nothing() {
     assert_eq!(map(&h), before);
 }
 
+/// One click on the I/O tab's card `key`, under its first line and clear
+/// of its control and glyphs: opens its details, or closes them.
+fn toggle_details(h: &mut Harness, key: &str) {
+    // A click just before would make this a double click.
+    h.wait(1.0);
+    let r = h.rect(key);
+    h.click(eframe::egui::pos2(r.center().x, r.bottom() - 6.0));
+    h.wait(0.3);
+}
+
+/// Where the line `key` is drawn inside the right pane (the Devices tab
+/// on the left may draw a line of that name too).
+fn in_right_pane(h: &Harness, key: &str) -> Option<eframe::egui::Rect> {
+    let edge = h.size.x - crate::editor::RIGHT_W - 8.0;
+    h.app
+        .chrome
+        .hits
+        .iter()
+        .find(|(k, r)| k == key && r.left() >= edge)
+        .map(|(_, r)| *r)
+}
+
+/// Nick, 2026-11-27: the wiring line is in a card's details, not on its
+/// one line.
 #[test]
-fn the_playground_io_tab_says_what_is_wired_inside_the_default_width() {
+fn the_playground_io_tab_says_what_is_wired_in_a_cards_details_inside_the_default_width() {
     let mut h = playground(
         "in start bool box di:0 wired=ifm/if6123\nin stop bool box di:1\nout motor bool box do:0 wired=ifm/if6123\n",
     );
@@ -134,18 +158,12 @@ fn the_playground_io_tab_says_what_is_wired_inside_the_default_width() {
     h.press("tab io");
     h.wait(0.3);
     let tab = h.rect("tab io");
-    // Every point has a card, and its second line says what it is in
-    // the real world: what is wired to it. The line is named for the
-    // program's point.
-    assert!(h.has("wired MOTOR"), "the line under the output");
-    assert!(
-        h.has("wired START"),
-        "and under the input, which has a card of its own now"
-    );
-    assert!(
-        !h.has("wired STOP"),
-        "nothing wired and no device declared: no line"
-    );
+    for name in ["MOTOR", "START", "STOP"] {
+        assert!(
+            in_right_pane(&h, &format!("wired {name}")).is_none(),
+            "{name}: no wiring line on a closed card"
+        );
+    }
     // The playground has no box: what its own reading of the library found.
     h.app
         .sim
@@ -156,22 +174,8 @@ fn the_playground_io_tab_says_what_is_wired_inside_the_default_width() {
         .insert("ifm/if6123".into(), long_brief());
     h.wait(0.3);
     let edge = h.size.x - crate::editor::RIGHT_W;
-    let line = h.rect("wired MOTOR");
-    assert!(
-        line.left() >= edge - 8.0 && line.right() <= h.size.x,
-        "the line {line:?} stays in the pane's {} pt default width",
-        crate::editor::RIGHT_W
-    );
-    // The card gives the line the room it needs (it is not cut short);
-    // the pane keeps its width.
-    assert!(line.height() > 30.0, "the long line wraps on the card: {line:?}");
-    assert!(!h.elided("ifm"), "and nothing of it is cut");
-    // The card's details say it in full.
-    let at = line.center();
-    h.click(at);
-    h.click(at);
-    h.wait(0.3);
-    let line = h.rect("wired MOTOR");
+    toggle_details(&mut h, "io card motor");
+    let line = in_right_pane(&h, "wired MOTOR").expect("the open output says what is wired to it");
     assert!(
         line.left() >= edge - 8.0 && line.right() <= h.size.x,
         "the open line {line:?} stays in the pane's {} pt default width",
@@ -182,6 +186,20 @@ fn the_playground_io_tab_says_what_is_wired_inside_the_default_width() {
         "it wraps in words, not a letter a line: {line:?}"
     );
     assert!(line.height() > 25.0, "the long name wraps: {line:?}");
+    assert!(!h.elided("ifm"), "and nothing of it is cut");
+    toggle_details(&mut h, "io card motor");
+    assert!(in_right_pane(&h, "wired MOTOR").is_none(), "closed again");
+    toggle_details(&mut h, "io card start");
+    assert!(
+        in_right_pane(&h, "wired START").is_some(),
+        "the input's details say it too"
+    );
+    toggle_details(&mut h, "io card start");
+    toggle_details(&mut h, "io card stop");
+    assert!(
+        in_right_pane(&h, "wired STOP").is_none(),
+        "nothing wired and no device declared: no line, open or not"
+    );
     assert!(
         (h.rect("tab io").left() - tab.left()).abs() <= 1.0,
         "the pane grew: {tab:?} -> {:?}",
@@ -215,6 +233,7 @@ fn on_a_box_the_io_tab_says_what_is_wired_and_the_picker_asks_the_box() {
         quality: "good".into(),
         point_error: None,
         forced: false,
+        sim: false,
     });
     // Recording what is on a point is an edit: an engineer's.
     h.app.review.as_mut().unwrap().state.session = Some(crate::review::Session {
@@ -263,7 +282,10 @@ fn on_a_box_the_io_tab_says_what_is_wired_and_the_picker_asks_the_box() {
     // The I/O tab: the open project's map names it, so the live row says what it is.
     h.press("tab io");
     h.wait(0.3);
-    assert!(h.has("wired part"), "the line under the live row");
+    assert!(
+        in_right_pane(&h, "wired part").is_none(),
+        "the live row's one line has no wiring (Nick, 2026-11-27)"
+    );
     h.app
         .boxv
         .as_mut()
@@ -272,7 +294,8 @@ fn on_a_box_the_io_tab_says_what_is_wired_and_the_picker_asks_the_box() {
         .wired
         .insert("ifm/if6123".into(), long_brief());
     h.wait(0.3);
-    let line = h.rect("wired part");
+    toggle_details(&mut h, "io card part");
+    let line = in_right_pane(&h, "wired part").expect("its details say what is wired to it");
     assert!(
         line.left() >= h.size.x - crate::editor::RIGHT_W - 8.0 && line.right() <= h.size.x,
         "the line {line:?} stays in the pane's default width"

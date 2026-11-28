@@ -8,14 +8,21 @@ usage: python3 -I scripts/canvas-smoke.py [--dist DIR] [--out DIR] [--box]
                                      needs cargo build -p helmsman-plc)
 
 Serves DIR (default target/canvas-dist) on a free loopback port and drives
-?playground: panes and tabs by hotkey and click, a typed edit, Deploy, the
-diagram's "why" click, the Monitor, light mode, and a phone-width Monitor.
+?playground: a first visit (nothing kept, the old front door's key kept,
+an old ?playground&front link) opening on the editor, panes and tabs by
+hotkey and click, the view keys (L the Log,
+T the Trend, Z fit, Space run and stop), the side pane's ribbon, a typed
+edit, Deploy, the diagram's "why" click, Scan for Device and a found device
+added by name, the Monitor, light mode, and a phone-width Monitor.
 With --box it also starts target/debug/helmsman-plc on another free port
 serving the same dist, with projects on, HTTPS and OPC UA off and the CIP
 ports ephemeral so it cannot collide with a bench box, under a fresh state
 directory with an engineer account (alice / alice-engineer-pw), and drives
-the box-served page signed out, then signed in. Everything is stopped at
-the end.
+the box-served page signed out, then signed in through the sign-in form
+(#helmsman-login, a real HTML form the browser's password manager can
+save: its fields, Esc, Cancel, letters typed in it, the Proposals screen's
+Sign in…, a wrong password, and the password nowhere in storage, a URL or
+the console). Everything is stopped at the end.
 
 --browser picks the engine (default chromium; all runs the three, WebKit
 standing in for Safari). With all, each engine runs twice: as the engine
@@ -63,6 +70,7 @@ import threading
 import time
 import urllib.request
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 from playwright.sync_api import sync_playwright
 
 PLC = None  # set in main: target/debug/helmsman-plc
@@ -87,8 +95,9 @@ EXPECTED = ("/__seed", "status of 404", "status of 401", "status of 409", "statu
 
 
 # Every tab in the left pane, in its first order (2026-11-13: one pane, the
-# Agent first; a tab can be docked in a right pane).
-PANES = ("claude", "code", "io", "devices", "files", "history")
+# Agent first; a tab can be docked in a right pane). Help (?) is last, on a
+# box only: the simulation leaves it out (2026-11-26).
+PANES = ("claude", "code", "io", "devices", "files", "help")
 
 
 def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
@@ -104,56 +113,112 @@ def layout(left=1, pane="code", rights="", scan=0, trend=1, msgs=1, light=0):
 # Parts of the 1400x860 layout that hold still while a program runs, in
 # points (x, y, width, height): a step that must change one is checked
 # against it. The clock, the diagram's values and the trend never hold.
+# Re-measured with the native harness at 1400 x 860 on 2026-11-27, when
+# the chrome started to float 8 pt in from the edges under a taller header
+# (docs/UI.md "Look and feel").
 LEFT = (0, 100, 300, 200)
 # Where a right pane's tabs show once one is docked there.
-RIGHT_TABS = (1180, 56, 210, 30)
-# The trend is the whole bottom strip since 2026-11-23, from the far left.
-BOTTOM_TABS = (0, 545, 1400, 315)
-# The Messages, under the left pane's tab content and above the trend since
-# 2026-11-23 (what a deploy says is there, not in a line under the header).
-MESSAGES = (0, 330, 320, 200)
+RIGHT_TABS = (1180, 96, 210, 42)
+# The trend is the bottom strip from the left pane's edge since 2026-11-24
+# (the left pane has the page's whole height).
+BOTTOM_TABS = (323, 585, 1070, 270)
+# The Log (the Messages, renamed 2026-11-26): a tab of the bottom panel, its
+# list to the right of the panel's tab strip (the strip at x 331..364 with
+# the left pane's frame ending near 298 pt); layout()'s msgs=1 shows it. What a deploy says
+# is there, not in a line under the header.
+MESSAGES = (364, 589, 1020, 250)
 # The diagram.
-DIAGRAM = (330, 60, 1000, 500)
+DIAGRAM = (330, 130, 1000, 440)
+# View › Pane layouts…'s popup, in the middle of the page.
+LAYOUTS_POPUP = (540, 290, 320, 340)
+# The Devices tab's Scan for Device under the (empty) list, the simulated
+# E1213 it finds under it, and the small form's Add (2026-11-26). Measured
+# with the native harness at 1400 x 860 points.
+SCAN_FOR_DEVICE = (93, 235)
+FOUND_DEVICE = (151, 269)
+QUICK_ADD = (36, 499)
+# The left pane's hide button on its ribbon, at the pane's vertical middle,
+# and shut, the strip's expand glyph at the same height (2026-11-26).
+RIBBON_LEFT = (280, 470)
+STRIP_LEFT = (28, 470)
+# The simulation's run state in the diagram's header ("running", its clock
+# beside it).
+RUN_STATE = (900, 92, 190, 32)
 # The tabs are glyphs (2026-11-11), all seven in the left pane's row since
 # 2026-11-13 (29.4 pt each at 320 pt).
-TAB_AGENT = (23, 70)
-TAB_CODE = (60, 70)
-TAB_IO = (97, 70)
-TAB_HISTORY = (210, 70)
-# One tab docked on the right: after the pane's chevron.
-TAB_RIGHT_FIRST = (1229, 71)
+TAB_AGENT = (32, 118)
+TAB_CODE = (74, 118)
+TAB_IO = (114, 118)
+# One tab docked on the right: the first of its row.
+TAB_RIGHT_FIRST = (1218, 118)
 # The fold arrow of the Code tab's second line, in the gutter.
-FOLD_LINE_2 = (14, 168)
+FOLD_LINE_2 = (24, 245)
 # The one menu (the three-line glyph, 2026-11-23), its four submenus, the
 # View submenu's "Pane layouts…" item and, on a box's page, its Proposals
 # item (the box's View menu has two more rows above Pane layouts:
 # Proposals and Simulate in this browser). The submenus open to the right
 # of the menu. Measured with the native harness, 1400 x 860 points.
-MENU = (182, 26)
-MENU_FILE = (201, 64)
-MENU_EDIT = (202, 92)
-MENU_VIEW = (207, 120)
-MENU_HELP = (206, 148)
-VIEW_PANE_LAYOUTS = (396, 541)
-VIEW_PANE_LAYOUTS_BOX = (396, 615)
+MENU = (190, 40)
+MENU_FILE = (215, 78)
+MENU_EDIT = (215, 108)
+MENU_VIEW = (215, 138)
+MENU_HELP = (215, 168)
+VIEW_PANE_LAYOUTS = (404, 545)
+# The box's View menu lists the Help tab above Pane layouts (2026-11-26).
+# Re-measured with the native harness on a signed-in box page on
+# 2026-11-27 (`view layouts` at 269..539, 646..676): (396, 615) had become
+# View › Help.
+VIEW_PANE_LAYOUTS_BOX = (404, 661)
 VIEW_PROPOSALS_BOX = (396, 198)
-LAYOUT_DEFAULT = (668, 330)
-LAYOUT_PROGRAMMING = (668, 368)
-HEADER_RIGHT = (1150, 8, 200, 36)
+LAYOUT_DEFAULT = (669, 324)
+LAYOUT_PROGRAMMING = (669, 363)
+# The header's right end (Editor | Monitor, Sign in or the user, Help),
+# its items centred at y 40 under the floating chrome (2026-11-27).
+HEADER_RIGHT = (1130, 20, 260, 40)
+# The header's Editor | Monitor toggle, each side.
+TOGGLE_EDITOR = (1255, 40)
+TOGGLE_MONITOR = (1312, 40)
 MOD = "ControlOrMeta"
+# The header's Sign in, and the Proposals screen's "Sign in…" on a box
+# signed out, in points. Re-measured on 2026-11-27 under the floating
+# chrome (the header is 85 pt tall, its items centred at y 40): the
+# header's from the native harness (`sign in` at 1263..1341, 25..55), the
+# Proposals screen's from the smoke's screenshot.
+HEADER_SIGN_IN = (1302, 40)
+PROPOSALS_SIGN_IN = (54, 181)
+# The Monitor's bottom panel: its Trend tab, the first of the strip at the
+# page's left (native harness, 1400 x 860: `bottom trend` 24..57, 591..624).
+MONITOR_TREND_TAB = (40, 607)
+# The Deploy sheet ("What changes on the machine") on a box: its Cancel.
+# The sheet's Deploy and Cancel are pinned to its bottom edge, which sits a
+# fixed 58 pt above the window's (what it shows scrolls above them), so
+# the button is found from the window's height, whatever the sheet holds:
+# measured with the native harness at 1400 x 860 and 1400 x 1180 for two
+# programs on 2026-11-27 (`deploy sheet cancel` at 377..457, H-88..H-58).
+# The program has no I/O, so the box needs no map.
+SHEET_CANCEL = (417, H - 73)
+SHEET_PROGRAM = "PROGRAM tally\nVAR\n  n : INT;\nEND_VAR\nn := n + 1;\nEND_PROGRAM\n"
+# The box sign-in in the browser build is a real HTML form, so the
+# browser's password manager can fill and save it (Nick, 2026-11-26).
+LOGIN = "#helmsman-login"
+WRONG_PASSWORD = "not-alices-pw-4821"
 
 
 class Run:
     """One page: its console log and numbered screenshots."""
 
-    def __init__(self, page, out, prefix):
+    def __init__(self, page, out, prefix, expect=()):
         self.page = page
         self.out = out
         self.prefix = prefix
+        # Console lines this page's own steps cause, beside EXPECTED.
+        self.expect = tuple(expect)
         self.n = 0
         self.console = []
         self.same = []
+        self.urls = []
         page.on("console", lambda m: self.console.append((m.type, m.text)))
+        page.on("request", lambda q: self.urls.append(q.url))
         page.on("pageerror", lambda e: self.console.append(("pageerror", str(e))))
 
     def shot(self, name):
@@ -169,7 +234,7 @@ class Run:
         """`do`, then a screenshot; `watch` (a region) must have changed,
         or with `stays` must not have: a build without the free chat shows
         "Describing a change is not available in this build." in the tab,
-        with no spec button or window to open, so a click or typing there
+        with no design button or window to open, so a click or typing there
         leaves the pane as it was."""
         before = self.look(watch)
         do()
@@ -193,20 +258,13 @@ class Run:
         return self.same + [
             f"[{t}] {x[:300]}"
             for (t, x) in self.console
-            if t in ("error", "pageerror") and not any(e in x for e in EXPECTED)
+            if t in ("error", "pageerror") and not any(e in x for e in EXPECTED + self.expect)
         ]
 
 
-# "From a spec..." in the Agent tab of a new project, and the box its window
-# draws in the middle of the page, in points.
-AGENT_SPEC = (78, 308)
-SPEC_WINDOW = (380, 285, 640, 330)
-
-# The front door's "Fail the high switch" and "Open the editor", in points
-# at the smoke's 1400 x 860 window (crates/helmsman-canvas/src/front.rs).
-FRONT_FAIL_HIGH = (596, 688)
-FRONT_OPEN_EDITOR = (1264, 33)
-
+# "Design a machine..." in the Agent tab of a new project (about where the
+# button sits), in points.
+AGENT_DESIGN = (78, 308)
 
 def open_app(ctx, base, query, lay):
     page = ctx.new_page()
@@ -224,8 +282,6 @@ def playground(ctx, base, out):
     r.wait(3000)
     r.shot("editor")
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT)
-    # The History tab (2026-11-13): a built-in example has no versions.
-    r.click(*TAB_HISTORY); r.wait(600); r.shot("history-tab")
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT)
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
@@ -238,20 +294,34 @@ def playground(ctx, base, out):
         r.key(f"{MOD}+f")
     r.step("find-off-canvas", find_off_canvas, LEFT)
     r.step("find-closed", lambda: r.key("Escape"), LEFT, 400)
-    # Fold the VAR_OUTPUT section by its gutter arrow (line 2), then open it.
+    # Fold the section on line 2 (traffic.st's VAR_INPUT) by its gutter arrow,
+    # then open it.
     r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
     r.click(*FOLD_LINE_2); r.wait(300)
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
     # This build has no free chat: the tab says so (UNAVAILABLE_TEXT) and a
-    # click or typing on it changes nothing. (With a chat URL: "From a
-    # spec..." opens its window; text typed into it shows.)
-    r.step("spec-window", lambda: r.click(*AGENT_SPEC), LEFT, stays=True)
-    r.step("spec-typed", lambda: (r.click(700, 370), r.page.keyboard.type("The conveyor starts on the start button.")), LEFT, stays=True)
+    # click or typing on it changes nothing. (With a design entry:
+    # "Design a machine..." opens its window; text typed into it shows.)
+    # The pointer off the tab first: the tab's hover eases out (docs/UI.md
+    # "Look and feel", finish 10), which would read as the click's change.
+    r.page.mouse.move(*AGENT_DESIGN); r.wait(400)
+    r.step("design-window", lambda: r.click(*AGENT_DESIGN), LEFT, stays=True)
+    # (Typing here is no longer a no-op: with no field focused a letter is a
+    # view's key, so the page switches views; the tests cover the keys.)
     r.key("Escape"); r.wait(400)
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
     r.click(*TAB_CODE); r.wait(400)
     for sub, name in ((MENU_FILE, "file-menu"), (MENU_EDIT, "edit-menu"), (MENU_VIEW, "view-menu"), (MENU_HELP, "help-menu")):
         r.click(*MENU); r.wait(300); r.click(*sub); r.wait(500); r.shot(name); r.key("Escape"); r.key("Escape")
+    # Help > Show hotkeys writes each shortcut over its button; one more
+    # click puts the page back as it was.
+    # (One row higher since Help › Front page went, 2026-11-27; measured
+    # with the native harness under the floating chrome the same day.)
+    HELP_HOTKEYS = (354, 303)
+    def hotkeys_menu():
+        r.click(*MENU); r.wait(300); r.click(*MENU_HELP); r.wait(500); r.click(*HELP_HOTKEYS)
+    r.step("hotkeys-on", hotkeys_menu, LEFT, 700)
+    r.step("hotkeys-off", hotkeys_menu, LEFT, 700)
     # Type a comment into the program, then deploy it.
     def edit():
         # A comment typed where the caret lands (egui's End chord moves
@@ -265,7 +335,7 @@ def playground(ctx, base, out):
     r.click(989, 268); r.wait(1000); r.shot("diagram-why")
     # A right click on the GREEN row's AND block opens its menu (Chat about
     # this); Escape shuts it. The diagram never changes the code.
-    r.step("diagram-menu", lambda: r.click(501, 400, "right"), DIAGRAM)
+    r.step("diagram-menu", lambda: r.click(503, 381, "right"), DIAGRAM)
     r.step("diagram-menu-closed", lambda: r.key("Escape"), DIAGRAM, 400)
     # A drag on empty space draws a selection box (the blocks it touches
     # are outlined blue); Escape deselects.
@@ -277,6 +347,26 @@ def playground(ctx, base, out):
     r.step("diagram-deselected", lambda: r.key("Escape"), DIAGRAM, 500)
     r.step("trend-hidden", lambda: r.key("Alt+Shift+Digit2"), BOTTOM_TABS)
     r.key("Alt+Shift+Digit2"); r.wait(400)
+    # The view keys (2026-11-26): T the Trend, L the Log, each shutting the
+    # panel when its tab shows; Z fits the diagram; Space stops and runs
+    # the simulation (on release; a box would ask first).
+    r.page.mouse.move(700, 300); r.wait(200)
+    r.step("key-t-trend", lambda: r.key("t"), BOTTOM_TABS)
+    r.step("key-l-log", lambda: r.key("l"), BOTTOM_TABS)
+    r.step("key-l-shut", lambda: r.key("l"), BOTTOM_TABS)
+    r.key("l"); r.wait(400)
+    def zoomed_in():
+        r.page.mouse.move(700, 300)
+        for _ in range(6):
+            r.page.mouse.wheel(0, -240); r.wait(60)
+    r.step("zoomed-in", zoomed_in, DIAGRAM, 600)
+    r.step("key-z-fit", lambda: r.key("z"), DIAGRAM, 900)
+    r.step("space-stopped", lambda: r.key("Space"), RUN_STATE, 600)
+    r.step("space-running", lambda: r.key("Space"), RUN_STATE, 600)
+    # The left pane's ribbon: its button hides the pane, the strip's glyph
+    # at the same height brings it back.
+    r.step("ribbon-shut", lambda: r.click(*RIBBON_LEFT), LEFT, 700)
+    r.step("ribbon-open", lambda: r.click(*STRIP_LEFT), LEFT, 700)
     # Alt+Shift+5 docks the Code tab on the right, the I/O shown on the
     # left; Alt+Shift+3 hides and shows that pane; the tab dragged back
     # onto the left pane returns.
@@ -297,14 +387,17 @@ def playground(ctx, base, out):
         r.click(*MENU); r.wait(500)
         r.click(*MENU_VIEW); r.wait(1500)
         r.click(*VIEW_PANE_LAYOUTS)
-    r.step("pane-layouts", layouts, LEFT, 1500)
+    r.step("pane-layouts", layouts, LAYOUTS_POPUP, 1500)
     r.step("layout-programming", lambda: r.click(*LAYOUT_PROGRAMMING), RIGHT_TABS, 1000)
     layouts(); r.wait(1500)
     r.step("layout-default", lambda: r.click(*LAYOUT_DEFAULT), RIGHT_TABS, 1000)
-    r.click(1313, 26); r.wait(1500); r.shot("monitor")
-    r.click(1243, 26); r.wait(800); r.shot("editor-again")
+    r.click(*TOGGLE_MONITOR); r.wait(1500); r.shot("monitor")
+    r.click(*TOGGLE_EDITOR); r.wait(800); r.shot("editor-again")
     # A program the checker warns of (RETAIN where it is not kept): marked
-    # in the editor and listed under it, and it still compiles.
+    # in the editor and listed under it, and it still compiles. The Code
+    # tab first: the Default layout above leaves the Agent's tab showing,
+    # and the typing went nowhere (seen in pg-42-warned.png, 2026-11-27).
+    r.click(*TAB_CODE); r.wait(400)
     r.click(130, 300); r.key("Control+a")
     r.page.keyboard.type(
         "FUNCTION_BLOCK Latch\nVAR_INPUT set : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\n"
@@ -321,6 +414,17 @@ def playground(ctx, base, out):
         "lmap := go;\nEND_PROGRAM\n"
     )
     r.wait(3500); r.shot("agent-noticed")
+    # Last on this page: Scan for Device lists the simulated E1213, a click
+    # asks only its name, Add adds it (2026-11-26; Wire it is off until its
+    # walkthrough works). After the program's own steps, because adding
+    # the device copies its profile into the project and the Code tab opens
+    # on that file: the fold, the typed comment and the two programs above
+    # would land in it.
+    r.step("devices-again", lambda: r.key("Alt+Shift+Digit4"), LEFT)
+    r.step("scan-for-device", lambda: r.click(*SCAN_FOR_DEVICE), LEFT, 1200)
+    r.step("found-device-name", lambda: r.click(*FOUND_DEVICE), LEFT, 900)
+    r.step("sim-device-added", lambda: r.click(*QUICK_ADD), LEFT, 1500)
+    r.shot("sim-device-rows")
     problems = r.problems()
     r.page.close()
     # No layout kept: the page opens on the Agent, every tab on the left.
@@ -331,19 +435,120 @@ def playground(ctx, base, out):
     r2 = Run(open_app(ctx, base, "?playground&editor", layout(pane="files", light=1)), out, "pg-light")
     r2.wait(2500); r2.shot("files")
     r2.click(*TAB_AGENT); r2.wait(600); r2.shot("agent-tab")
-    r2.click(1313, 26); r2.wait(1500); r2.shot("monitor")
+    r2.click(*TOGGLE_MONITOR); r2.wait(1500); r2.shot("monitor")
     problems += r2.problems()
     r2.page.close()
-    # A first visit (nothing kept): the front door, its proofs in, then a
-    # fault thrown and the way on to the editor.
-    rf = Run(open_app(ctx, base, "?playground&front", None), out, "pg-front")
-    rf.wait(2800); rf.shot("writing")
-    rf.wait(7000); rf.shot("proved")
-    rf.click(*FRONT_FAIL_HIGH); rf.wait(16000); rf.shot("high-switch-failed")
-    rf.click(*FRONT_OPEN_EDITOR); rf.wait(1500); rf.shot("editor")
-    problems += rf.problems()
-    rf.page.close()
     return problems
+
+
+# What a browser kept from the front door (gone 2026-11-27): the key it
+# set once the visitor went on to the editor.
+OLD_FRONT_KEY = "helmsman-canvas/front"
+
+
+def first_visit(browser, base, out):
+    """A first visit opens on the editor, on the default project, with no
+    front door (Nick, 2026-11-27): each case in a fresh browser context
+    (nothing kept, or only what the case puts there) must show the left
+    pane exactly as `?playground&editor` with nothing kept shows it. The
+    old front door covered the whole page, so it cannot pass. The cases:
+    the public page's `?playground`, the same with the old front door's key
+    in storage, and an old `?playground&front` link."""
+
+    def visit(prefix, query, kept):
+        ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+        page = ctx.new_page()
+        r = Run(page, out, prefix)
+        page.goto(base + "/__seed", wait_until="load")
+        page.evaluate("localStorage.clear()")
+        for k, v in kept.items():
+            page.evaluate(f"localStorage.setItem({json.dumps(k)}, {json.dumps(v)})")
+        page.goto(base + "/" + query, wait_until="load")
+        r.wait(3500)
+        r.shot("opened")
+        left = r.look(LEFT)
+        # A while later: nothing has come up in front of the editor.
+        r.wait(6000)
+        r.shot("later")
+        later = r.look(LEFT)
+        problems = r.problems()
+        ctx.close()
+        return left, later, problems
+
+    want, _, problems = visit("pg-first-reference", "?playground&editor", {})
+    for prefix, query, kept in (
+        ("pg-first-visit", "?playground", {}),
+        ("pg-first-old-key", "?playground", {OLD_FRONT_KEY: "seen"}),
+        ("pg-first-old-link", "?playground&front", {}),
+    ):
+        left, later, found = visit(prefix, query, kept)
+        problems += found
+        if left != want:
+            problems.append(f"[smoke] {prefix}: {query} with {kept or 'nothing'} kept does not open on the editor as ?playground&editor does (see {prefix}-01-opened.png)")
+        elif later != want:
+            problems.append(f"[smoke] {prefix}: {query} left the editor within 10 s (see {prefix}-02-later.png)")
+    return problems
+
+
+def login_form(r, open_with=HEADER_SIGN_IN):
+    """The sign-in form, opened with a click at `open_with` when it is not
+    up; None when no click brings it."""
+    form = r.page.locator(LOGIN)
+    if not form.count():
+        r.click(*open_with)
+        try:
+            form.wait_for(state="visible", timeout=3000)
+        except PlaywrightTimeout:
+            return None
+    return form
+
+
+def said(r):
+    """What the sign-in form's problem line says, or None with no form."""
+    line = r.page.locator(LOGIN + " p.problem")
+    return line.inner_text() if line.count() else None
+
+
+def dom_sign_in(r, user, password):
+    """Sign in through the header's form, as a person (or the browser's
+    password manager) fills it: the problems seen."""
+    form = login_form(r)
+    if form is None:
+        return [f"[smoke] {r.prefix}: no sign-in form ({LOGIN}) to sign in with"]
+    form.locator("input[name=username]").fill(user)
+    pw = form.locator("input[name=password]")
+    pw.fill(password)
+    pw.press("Enter")
+    # The box hashes the password: the answer takes a few seconds. On
+    # success the form leaves the page (the cue a browser offers to save on).
+    try:
+        r.page.locator(LOGIN).wait_for(state="detached", timeout=15000)
+    except PlaywrightTimeout:
+        return [f"[smoke] {r.prefix}: the sign-in form stayed after the right password (it says {said(r)!r})"]
+    return []
+
+
+# Everything a page keeps or shows outside its canvas: storage and its URL.
+KEPT = "() => JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage), location.href, document.title])"
+
+
+def leaks(r, *secrets):
+    """A password in the page's storage, its URL, a request URL or the console."""
+    kept = r.page.evaluate(KEPT)
+    found = []
+    for i, x in enumerate(secrets):
+        where = [
+            name
+            for name, hit in (
+                ("localStorage, sessionStorage or the URL", x in kept),
+                ("a request URL", any(x in u for u in r.urls)),
+                ("the console", any(x in m for _, m in r.console)),
+            )
+            if hit
+        ]
+        if where:
+            found.append(f"[smoke] {r.prefix}: password {i + 1} is in " + " and ".join(where))
+    return found
 
 
 def box(ctx, base, out):
@@ -351,15 +556,14 @@ def box(ctx, base, out):
     r = Run(open_app(ctx, base, "", layout()), out, "box")
     r.wait(4000)
     r.shot("signed-out")
-    # The sign-in popup is open on a signed-out page: its two fields.
-    def sign_in():
-        r.click(1230, 100); r.wait(200)
-        r.page.keyboard.type(USER)
-        r.click(1230, 136); r.wait(200)
-        r.page.keyboard.type(PASSWORD)
-        r.key("Enter")
-    # The box hashes the password: the answer takes a few seconds.
-    r.step("signed-in", sign_in, HEADER_RIGHT, 6000)
+    extra = []
+    # The page asks for a sign-in the moment it opens (docs/help/box.md):
+    # the header's form, filled and sent as a person would.
+    r.step("signed-in", lambda: extra.extend(dom_sign_in(r, USER, PASSWORD)), HEADER_RIGHT, 1500)
+    extra += leaks(r, PASSWORD)
+    # The keys work at once after the form goes (docs/help/keyboard.md: a
+    # view's key works whenever you are not typing in a field): no click
+    # on the canvas first.
     r.step("files", lambda: r.key("Alt+Shift+Digit0"), LEFT, 800)
     r.step("devices", lambda: r.key("Alt+Shift+Digit4"), LEFT, 800)
     # The agent proposes a device profile (this page's session posts it, as
@@ -372,10 +576,22 @@ def box(ctx, base, out):
         data=json.dumps({"name": "moxa-copy", "text": profile, "summary": "Read from the unit's manual: eight inputs, four outputs and four that follow a jumper."}),
         headers={"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base},
     )
-    extra = [] if posted.status == 201 else [f"the proposal was refused: {posted.status} {posted.text()[:200]}"]
+    if posted.status != 201:
+        extra.append(f"the proposal was refused: {posted.status} {posted.text()[:200]}")
     r.wait(4500); r.shot("devices-proposal")
     r.click(*TAB_AGENT); r.wait(800); r.shot("agent-tab")
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")
+    # ? (Shift and /, as a US keyboard types it) opens the Help tab, a
+    # box's only (2026-11-26); L shuts the Log that shows, and opens it.
+    # (Space asking "Stop the machine?" needs a program running: this box
+    # runs none, so box_projects_tests covers it against a real box.)
+    r.page.mouse.move(700, 300); r.wait(200)
+    r.step("help-tab", lambda: r.key("Shift+Slash"), LEFT, 800)
+    # The Help tab opens with the keyboard in its question box, where an L
+    # is a letter: a click on the empty diagram gives the view its keys.
+    r.click(900, 450); r.wait(300)
+    r.step("key-l-log-shut", lambda: r.key("l"), BOTTOM_TABS, 600)
+    r.step("key-l-log", lambda: r.key("l"), BOTTOM_TABS, 600)
     # A pane layout kept on the box (this page's engineer session puts it
     # there), then View › Pane layouts…: the popup lists it under "On
     # this box".
@@ -392,16 +608,174 @@ def box(ctx, base, out):
         r.click(*VIEW_PANE_LAYOUTS_BOX)
     r.step("pane-layouts", layouts, LEFT, 2500)
     r.key("Escape"); r.wait(400)
+    # What changes on the machine (docs/UI.md "Show Changes"): a project
+    # made through the API opens on a reload, and Deploy (Ctrl/Cmd Shift
+    # Enter) opens the sheet against the program the box runs: it checks
+    # and replays, and deploys nothing until its own Deploy; Cancel shuts
+    # it with nothing deployed.
+    hdr = {"Content-Type": "application/json", "X-Helmsman-Request": "1", "Origin": base}
+    for method, url, body in (
+        ("post", "/api/projects", {"name": "smoke-sheet"}),
+        ("put", "/api/projects/smoke-sheet/files/main.st", {"text": SHEET_PROGRAM}),
+    ):
+        q = getattr(r.page.request, method)(base + url, data=json.dumps(body), headers=hdr)
+        if q.status not in (200, 201):
+            extra.append(f"{method.upper()} {url} was refused: {q.status} {q.text()[:200]}")
+    r.page.reload(wait_until="load"); r.wait(5000)
+    r.step("deploy-sheet", lambda: r.key(f"Shift+{MOD}+Enter"), DIAGRAM, 3000)
+    r.step("deploy-sheet-cancel", lambda: r.click(*SHEET_CANCEL), DIAGRAM, 1000)
+    deployed = [u for u in r.urls if u.endswith("/deploy")]
+    if deployed:
+        extra.append(f"[smoke] {r.prefix}: the Deploy sheet deployed before its Deploy was pressed: {deployed}")
     problems = extra + r.problems()
     r.page.close()
     # The Monitor by its URL: the header's switch sits elsewhere once
     # somebody is signed in.
+    # The Monitor (2026-11-26): the program and its lamp in the header, the
+    # device picker first, the Editor's Log and Trend along the bottom.
     m = Run(open_app(ctx, base, "?monitor", layout()), out, "box-monitor")
     m.wait(3000); m.shot("signed-in")
+    # The bottom panel's Trend tab, at the page's left on the Monitor.
+    m.step("monitor-trend", lambda: m.click(*MONITOR_TREND_TAB), BOTTOM_TABS, 800)
     problems += m.problems()
     m.page.close()
     return problems
 
+
+
+# The form's parts, each of which must be there once: a browser's password
+# manager finds the fields by these attributes inside a <form>.
+LOGIN_PARTS = (
+    ("a <form>", "form"),
+    ("the user field", "form input[name=username][autocomplete=username]"),
+    ("the password field", "form input[type=password][name=password][autocomplete=current-password]"),
+    ("a submit button", "form button[type=submit], form input[type=submit]"),
+    ("a Cancel button", "form button[type=button]:has-text('Cancel'), form input[type=button][value=Cancel]"),
+)
+
+
+def box_sign_in_form(browser, base, out):
+    """The box's sign-in form in the browser, signed out, each check on a
+    fresh page: its fields, Esc, Cancel, letters typed in it, the Proposals
+    screen's Sign in…, a refusal, then the right password, and no password
+    anywhere the page keeps or logs."""
+    problems = []
+
+    def fresh(prefix, expect=()):
+        ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
+        r = Run(open_app(ctx, base, "", layout()), out, prefix, expect)
+        r.wait(4000)
+        return ctx, r
+
+    def gone(r, how):
+        try:
+            r.page.locator(LOGIN).wait_for(state="detached", timeout=3000)
+        except PlaywrightTimeout:
+            problems.append(f"[smoke] {r.prefix}: {how} left the sign-in form on the page")
+
+    # Up at load, with every part a password manager needs.
+    ctx, r = fresh("box-form")
+    r.shot("form")
+    if not r.page.locator(LOGIN).is_visible():
+        problems.append(f"[smoke] {r.prefix}: no sign-in form ({LOGIN}) on a signed-out box page")
+    for what, sel in LOGIN_PARTS:
+        n = r.page.locator(LOGIN).locator(sel).count()
+        if n != 1:
+            problems.append(f"[smoke] {r.prefix}: {what} ({sel}) found {n} times in {LOGIN}")
+    url = r.page.url
+    # Letters typed into the form are text, never the canvas's view keys:
+    # P (Proposals) leaves the screen as it was.
+    form = r.page.locator(LOGIN)
+    if form.count():
+        r.step("p-in-password", lambda: form.locator("input[name=password]").press_sequentially("p"), LEFT, 1200, stays=True)
+        r.step("p-in-user", lambda: form.locator("input[name=username]").press_sequentially("pe"), LEFT, 1200, stays=True)
+        if form.locator("input[name=password]").input_value() != "p":
+            problems.append(f"[smoke] {r.prefix}: the password field does not hold the p typed into it")
+        # Esc in the form closes it ...
+        form.locator("input[name=username]").press("Escape")
+        gone(r, "Esc")
+        r.shot("esc")
+    if r.page.url != url:
+        problems.append(f"[smoke] {r.prefix}: typing in the form changed the URL to {r.page.url}")
+    # ... and the view keys are back at once: P opens the Proposals screen.
+    r.step("p-after-esc", lambda: r.key("p"), LEFT, 1500)
+    problems += r.problems()
+    ctx.close()
+
+    # Cancel closes it, and the keys are back.
+    ctx, r = fresh("box-cancel")
+    if r.page.locator(LOGIN).count():
+        r.page.locator(LOGIN + " button:has-text('Cancel')").click()
+        gone(r, "Cancel")
+    r.shot("cancel")
+    r.step("p-after-cancel", lambda: r.key("p"), LEFT, 1500)
+    # The header's Sign in brings it back.
+    r.step("header-sign-in", lambda: r.click(*HEADER_SIGN_IN), HEADER_RIGHT, 800)
+    if not r.page.locator(LOGIN).is_visible():
+        problems.append(f"[smoke] {r.prefix}: the header's Sign in did not open the form after Cancel")
+    problems += r.problems()
+    ctx.close()
+
+    # The Proposals screen's "Sign in…" opens the same form.
+    ctx, r = fresh("box-proposals")
+    if r.page.locator(LOGIN).count():
+        r.page.locator(LOGIN + " button:has-text('Cancel')").click()
+        gone(r, "Cancel")
+    # The canvas gets the keys from a click on an empty part of it.
+    r.click(1000, 400); r.wait(300)
+    r.step("proposals", lambda: r.key("p"), LEFT, 1500)
+    r.click(*PROPOSALS_SIGN_IN)
+    try:
+        r.page.locator(LOGIN).wait_for(state="visible", timeout=3000)
+    except PlaywrightTimeout:
+        problems.append(f"[smoke] {r.prefix}: the Proposals screen's Sign in… did not open {LOGIN}")
+    r.shot("proposals-sign-in")
+    problems += r.problems()
+    ctx.close()
+
+    # A wrong password: the form stays and shows the box's own words; the
+    # right one then signs in and the form goes.
+    ctx, r = fresh("box-refused")
+    form = login_form(r)
+    if form is None:
+        problems.append(f"[smoke] {r.prefix}: no sign-in form to refuse")
+    else:
+        form.locator("input[name=username]").fill(USER)
+        form.locator("input[name=password]").fill(WRONG_PASSWORD)
+        with r.page.expect_response(lambda q: q.url.endswith("/api/login") and q.request.method == "POST", timeout=15000) as answer:
+            form.locator("button[type=submit]").click()
+        a = answer.value
+        r.expect += (f"status of {a.status}",)
+        try:
+            words = json.loads(a.text()).get("error") or a.text()
+        except ValueError:
+            words = a.text()
+        line = r.page.locator(LOGIN + " p.problem[role=alert]")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (line.count() and line.inner_text().strip()):
+            r.wait(100)
+        r.shot("wrong-password")
+        if a.status < 400:
+            problems.append(f"[smoke] {r.prefix}: the box took a wrong password ({a.status})")
+        elif not r.page.locator(LOGIN).is_visible():
+            problems.append(f"[smoke] {r.prefix}: a refused sign-in closed the form")
+        elif not line.count():
+            problems.append(f"[smoke] {r.prefix}: a refused sign-in shows no p.problem[role=alert] (the form says {r.page.locator(LOGIN).inner_text()!r})")
+        elif words.strip() not in line.inner_text():
+            problems.append(f"[smoke] {r.prefix}: the form says {line.inner_text()!r}, the box said {words!r}")
+        problems += dom_sign_in(r, USER, PASSWORD)
+        r.wait(1500)
+        r.shot("signed-in")
+        problems += leaks(r, PASSWORD, WRONG_PASSWORD)
+        # Signed in, a reload shows no form: the session holds.
+        r.page.reload(wait_until="load"); r.wait(4000)
+        if r.page.locator(LOGIN).count():
+            problems.append(f"[smoke] {r.prefix}: a signed-in page shows the sign-in form after a reload")
+        r.shot("reloaded")
+        problems += leaks(r, PASSWORD, WRONG_PASSWORD)
+    problems += r.problems()
+    ctx.close()
+    return problems
 
 # ---- the marketplace install and the Agent's review --------------------------
 
@@ -549,13 +923,7 @@ def market(browser, dist, out):
                 base = f"http://127.0.0.1:{port}"
                 r = Run(open_app(ctx, base, "", layout()), out, f"market-{label}")
                 r.wait(4000)
-                def sign_in():
-                    r.click(1230, 100); r.wait(200)
-                    r.page.keyboard.type(USER)
-                    r.click(1230, 136); r.wait(200)
-                    r.page.keyboard.type(PASSWORD)
-                    r.key("Enter")
-                sign_in(); r.wait(6000)
+                problems += dom_sign_in(r, USER, PASSWORD); r.wait(1500)
                 r.click(*MENU); r.wait(500)
                 r.click(*MENU_VIEW); r.wait(1500)
                 r.click(*VIEW_PROPOSALS_BOX); r.wait(1500)
@@ -754,6 +1122,7 @@ def run_engine(browser, base, out, a, proc, box_port):
     ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
     problems += playground(ctx, base, out)
     ctx.close()
+    problems += first_visit(browser, base, out)
     problems += phone(browser, base, "?playground&editor", out, "pg")
     problems += no_webgl2(browser, base, out)
     if proc:
@@ -761,6 +1130,7 @@ def run_engine(browser, base, out, a, proc, box_port):
         ctx = browser.new_context(viewport={"width": W * K, "height": H * K}, device_scale_factor=S, color_scheme="dark")
         problems += box(ctx, bbase, out)
         ctx.close()
+        problems += box_sign_in_form(browser, bbase, out)
         problems += phone(browser, bbase, "", out, "box")
         problems += market(browser, a.dist, out)
     return problems

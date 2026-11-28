@@ -100,6 +100,7 @@ pub fn signal(s: &SignalInfo, v: Option<Value>, error: Option<&str>) -> Json {
         "dir": dir(s.dir),
         "unit": s.unit,
         "binding": s.binding,
+        "sim": s.sim,
         "writer": s.writer,
         "value": value(v),
         "quality": quality,

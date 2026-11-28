@@ -198,24 +198,6 @@ pub fn wants_tour(query: &str) -> bool {
     has(query, "tour")
 }
 
-/// Whether a page with this query string opens on the front door
-/// (`crate::front`): `?front` always; never with a link that asks for
-/// something else (`?editor`, `?tour`, `?monitor`, a box to watch);
-/// otherwise until this browser has gone on to the editor once (`seen`).
-#[must_use]
-pub fn wants_front(query: &str, seen: bool) -> bool {
-    if has(query, "front") {
-        return true;
-    }
-    !seen
-        && !["editor", "tour", "monitor", "andon", "box"]
-            .iter()
-            .any(|k| has(query, k))
-}
-
-/// Where the browser keeps that the visitor went on from the front door.
-pub const FRONT_KEY: &str = "helmsman-canvas/front";
-
 // Independent UI flags (menu open, served by a box, first frame routed,
 // …), not a state machine in disguise.
 #[allow(clippy::struct_excessive_bools)]
@@ -266,14 +248,15 @@ pub struct App {
     /// command by a publish, so a second click on the same state would
     /// decide, and send, again.
     ctl: Option<ControlSent>,
+    /// Space is down with nothing in the way: `Some(false)` until the
+    /// pointer goes down (a pan), `Some(true)` after it did. Space acts on
+    /// its release, and only when it never turned into a pan.
+    space: Option<bool>,
+    /// The Start/Stop question on a box (Space): whether it stops, and the
+    /// targets it names.
+    confirm: Option<(bool, Vec<String>)>,
     /// The guided tour, while it runs (`?tour`, Help › Take the tour).
     pub tour: Option<crate::tour::Tour>,
-    /// The front door, while it is what the page shows (`crate::front`):
-    /// a first visit to the simulation, `?front`, Help › Front page.
-    pub front: Option<crate::front::Front>,
-    /// The visitor went on to the editor: kept, so the next visit opens
-    /// there.
-    front_seen: bool,
 }
 
 /// A click this frame that lets the diagram's selection go (Nick,
@@ -314,6 +297,7 @@ impl App {
             if let Some(token) = crate::web::remembered_token(&origin) {
                 crate::web::set_token(Some(&token));
                 review.state.session = Some(crate::node_token::session());
+                review.token_held = true;
             }
             review.remote = Some(origin);
             app
@@ -343,15 +327,6 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         if app.source == Source::Sim && crate::web::wants_tour() {
             app.tour = Some(crate::tour::Tour::new());
-        }
-        // A first visit to the simulation opens on the front door.
-        app.front_seen = cc.storage.is_some_and(|s| s.get_string(FRONT_KEY).is_some());
-        #[cfg(target_arch = "wasm32")]
-        let query = crate::web::query();
-        #[cfg(not(target_arch = "wasm32"))]
-        let query = String::new();
-        if app.source == Source::Sim && !app.served_by_box && wants_front(&query, app.front_seen) {
-            app.front = Some(crate::front::Front::new());
         }
         app
     }
@@ -383,9 +358,9 @@ impl App {
             watch_from: None,
             listed: None,
             ctl: None,
+            space: None,
+            confirm: None,
             tour: None,
-            front: None,
-            front_seen: false,
         }
     }
 
@@ -523,33 +498,20 @@ impl App {
         }
     }
 
-    /// From the front door to the editor, on the front door's project.
-    pub fn leave_front(&mut self) {
-        self.front = None;
-        self.front_seen = true;
-        self.screen = Screen::Editor;
-        self.sim
-            .get_or_insert_with(PlaygroundView::new)
-            .open_project(crate::front::PROJECT);
-    }
-
     /// One frame of the whole window. Split from [`eframe::App::ui`] so tests
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        // A field that had the keyboard as the frame began typed this
+        // frame's letters, even if it lets go during the frame: Enter in
+        // the sign-in's password ends its focus, and on a slow page "…pw"
+        // and Enter come in one frame, so the P after it opened Proposals
+        // (the tester's find, 2026-11-26).
+        let typing = ctx.egui_wants_keyboard_input();
         hotkeys::swallow_text(&ctx);
+        glyphs::set_hotkeys(&ctx, self.chrome.hotkeys);
         let now = ctx.input(|i| i.time);
         theme::apply(&ctx, self.chrome.light);
-        // The front door is the whole page until the visitor goes on.
-        if self.source == Source::Sim
-            && let Some(f) = &mut self.front
-        {
-            self.chrome.hits.clear();
-            if crate::front::ui(ui, &mut self.chrome, f) == Some(crate::front::Act::OpenEditor) {
-                self.leave_front();
-            }
-            return;
-        }
         if self.source == Source::Sim && self.screen == Screen::Proposals {
             self.screen = Screen::Editor;
         }
@@ -611,8 +573,12 @@ impl App {
         }
         let session = self.session();
         let engineer = is_engineer(session.as_ref()).is_ok();
+        let token = self.review.as_ref().is_some_and(|r| r.token_held);
+        let watches = self.review.as_ref().is_some_and(|r| r.remote.is_some());
         if let Some(b) = &mut self.boxv {
             b.session = session;
+            b.node_token = token;
+            b.watches_node = watches;
         }
         self.desk();
         // No box ever answered this page: it is the simulation then, by
@@ -674,8 +640,12 @@ impl App {
             }
             (Screen::Editor, Source::Box) => {
                 let session = self.review.as_ref().and_then(|r| r.state.session.clone());
+                let token = self.review.as_ref().is_some_and(|r| r.token_held);
+                let watches = self.review.as_ref().is_some_and(|r| r.remote.is_some());
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.session = session;
+                b.node_token = token;
+                b.watches_node = watches;
                 b.show(ui, &mut self.chrome);
                 if clicked_off_the_diagram(&ctx, &self.chrome)
                     && let Some(v) = &mut b.view
@@ -728,7 +698,10 @@ impl App {
                     },
                     on_box: true,
                 });
-                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, t);
+                let map = b.map_text().0;
+                crate::editor::bottom(ui, &mut self.chrome, b);
+                self.monitor
+                    .show(ui, &b.state, &mut self.chrome, engineer, t, &map);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
@@ -738,11 +711,12 @@ impl App {
                     state: s.session.state(),
                     on_box: false,
                 };
-                self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
+                crate::editor::bottom(ui, &mut self.chrome, s);
+                self.monitor
+                    .show(ui, &*s, &mut self.chrome, engineer, Some(t), "");
             }
         }
         match self.monitor.wish.take() {
-            Some(Wish::Diagram { program, prefix }) => self.open_diagram(&program, &prefix),
             Some(Wish::Act(a)) if self.source == Source::Box => {
                 let targets = self
                     .boxv
@@ -760,9 +734,167 @@ impl App {
         for a in hotkeys::pressed(&ctx) {
             self.act(a, &ctx);
         }
+        let over_diagram = self.screen == Screen::Editor
+            && ctx
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| self.chrome.diagram.contains(p));
+        if !typing {
+            for a in hotkeys::pressed_views(&ctx, over_diagram) {
+                self.view_key(a, now);
+            }
+        }
+        self.space_key(&ctx);
         self.tour_ui(&ctx);
         self.box_popup(&ctx, now);
+        self.confirm_ui(&ctx, now);
         theme::pointer_cursor(&ctx);
+    }
+
+    /// A view's plain letter (`hotkeys::pressed_views`): what a click on
+    /// its tab or screen glyph does. On the Monitor only the screens' keys
+    /// act (it is watch only), and Proposals only where the header has it.
+    fn view_key(&mut self, a: Action, now: f64) {
+        match a {
+            Action::Editor | Action::Monitor => self.flip_screen(),
+            Action::Proposals => {
+                if self.waiting().is_some() {
+                    self.screen = Screen::Proposals;
+                }
+            }
+            _ if self.screen != Screen::Editor => {}
+            // A click on a tab shows it and keeps it open when it is the
+            // one showing, so the letter does the same.
+            Action::Files => self.chrome.show(crate::editor::Pane::Files),
+            Action::Devices => self.chrome.show(crate::editor::Pane::Devices),
+            Action::St => self.chrome.show(crate::editor::Pane::Code),
+            Action::Describe => {
+                self.chrome.show(crate::editor::Pane::Claude);
+                self.chrome.focus_describe = true;
+            }
+            Action::History => {
+                self.chrome.show(crate::editor::Pane::Claude);
+                if let Some(w) = self.workspace() {
+                    w.go_history();
+                }
+            }
+            Action::Io => self.chrome.show(crate::editor::Pane::Io),
+            Action::HelpTab => {
+                self.chrome.show(crate::editor::Pane::Help);
+                self.chrome.focus_help = true;
+            }
+            Action::Messages => self.chrome.toggle_messages(),
+            Action::Trend => self.chrome.toggle_trend(),
+            Action::Fit => {
+                let area = self.chrome.diagram;
+                let viewer = match self.source {
+                    Source::Box => self.boxv.as_mut().and_then(|b| b.view.as_mut()),
+                    Source::Sim => self.sim.as_mut().and_then(|s| s.viewer.as_mut()),
+                };
+                if let Some(v) = viewer {
+                    v.fit(area, now);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Space (Nick, 2026-11-26): run or stop the program, on its release.
+    /// A Space that became a pan (the pointer went down while it was held:
+    /// Space and drag moves the diagram) does nothing. Ignored while a
+    /// field has the keyboard or the question is up. In the simulation it
+    /// is the run glyph; on a box it asks first ([`Self::confirm_ui`]).
+    fn space_key(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() || self.confirm.is_some() || self.screen == Screen::Proposals {
+            self.space = None;
+            return;
+        }
+        let (pressed, released, down) = ctx.input(|i| {
+            let space = |down: bool| {
+                i.events.iter().any(|e| {
+                    matches!(e, egui::Event::Key { key: egui::Key::Space, pressed, repeat: false, modifiers, .. }
+                        if *pressed == down && modifiers.is_none())
+                })
+            };
+            (space(true), space(false), i.pointer.any_down())
+        });
+        if pressed {
+            self.space = Some(false);
+        }
+        if down && let Some(panned) = &mut self.space {
+            *panned = true;
+        }
+        if released && self.space.take() == Some(false) {
+            match self.source {
+                Source::Sim => self.act(Action::RunStop, ctx),
+                Source::Box => {
+                    let Some(b) = &self.boxv else { return };
+                    let targets = self.monitor.targets(&b.state.modules);
+                    if targets.is_empty() {
+                        return;
+                    }
+                    let stopping = b
+                        .state
+                        .modules
+                        .iter()
+                        .any(|m| targets.contains(&m.name) && m.state != "stopped");
+                    self.confirm = Some((stopping, targets));
+                }
+            }
+        }
+    }
+
+    /// The question Space asks on a box: Enter or Space confirms, Esc (or
+    /// a click outside) cancels. Only a yes does what the run glyph does.
+    fn confirm_ui(&mut self, ctx: &egui::Context, now: f64) {
+        let Some((stopping, targets)) = self.confirm.clone() else {
+            return;
+        };
+        let (verb, title) = if stopping {
+            ("Stop", "Stop the machine?")
+        } else {
+            ("Start", "Start the machine?")
+        };
+        let mut yes = ctx.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space));
+        let mut no = false;
+        let m = egui::Modal::new(egui::Id::unique("confirm run stop")).show(ctx, |ui| {
+            let t = theme(ui);
+            ui.set_max_width(460.0);
+            ui.label(RichText::new(title).strong().size(22.0).color(t.fg))
+                .tip("Space asks before it starts or stops a machine.");
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(format!("Programs: {}", targets.join(", ")))
+                    .size(18.0)
+                    .color(t.fg),
+            )
+            .tip("The programs on the box this acts on, the same ones the Run and Stop button takes.");
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                yes |= ui
+                    .button(RichText::new(verb).size(18.0))
+                    .tip("Does it now. Enter or Space does the same.")
+                    .clicked();
+                no |= ui
+                    .button(RichText::new("Cancel").size(18.0))
+                    .tip("Leaves the machine as it is. Esc does the same.")
+                    .clicked();
+            });
+        });
+        if no || m.should_close() {
+            self.confirm = None;
+        } else if yes {
+            self.confirm = None;
+            self.box_control(Action::RunStop, &targets, now);
+        }
+    }
+
+    /// A click on either side of the screen switch: the Editor goes to the
+    /// Monitor, anything else to the Editor.
+    fn flip_screen(&mut self) {
+        self.screen = match self.screen {
+            Screen::Editor => Screen::Monitor,
+            Screen::Monitor | Screen::Proposals => Screen::Editor,
+        };
     }
 
     /// What the page is doing about the box, as a popup
@@ -946,7 +1078,16 @@ impl App {
             Action::St => self.chrome.toggle_code(),
             Action::Panel => self.chrome.right = !self.chrome.right,
             Action::DockRight => self.chrome.send_right(),
-            Action::Trend => self.chrome.trend = !self.chrome.trend,
+            Action::Trend => self.chrome.toggle_trend(),
+            Action::Describe
+            | Action::HelpTab
+            | Action::Io
+            | Action::Messages
+            | Action::Editor
+            | Action::Monitor
+            | Action::Proposals
+            | Action::History
+            | Action::Fit => self.view_key(a, ctx.input(|i| i.time)),
         }
     }
 
@@ -979,6 +1120,12 @@ impl App {
         let (op, names) = match a {
             Action::RunStop if running.is_empty() => ("run", targets.to_vec()),
             Action::RunStop => ("stop", running),
+            // On a Skipper the machine's program keeps running: Reset puts
+            // the simulated inputs back to off or 0, and nothing else.
+            Action::Restart if b.watches_node => {
+                b.reset_sims();
+                return;
+            }
             Action::Restart => ("restart", targets.to_vec()),
             _ => return,
         };
@@ -996,27 +1143,6 @@ impl App {
         });
         for n in names {
             b.projects.control(&n, op);
-        }
-    }
-
-    pub fn open_diagram(&mut self, program: &str, prefix: &str) {
-        self.screen = Screen::Editor;
-        match self.source {
-            Source::Box => {
-                let b = self.boxv.get_or_insert_with(BoxView::new);
-                b.state.set_monitor(false);
-                if !program.is_empty() {
-                    b.state.select(program);
-                }
-                b.open_at = Some(prefix.to_string());
-            }
-            Source::Sim => {
-                if let Some(v) = self.sim.as_mut().and_then(|s| s.viewer.as_mut())
-                    && let Some(k) = v.scopes.iter().position(|s| s.prefix == prefix)
-                {
-                    v.open(k);
-                }
-            }
         }
     }
 
@@ -1052,75 +1178,88 @@ impl App {
         // "simulation" tag give way, so the mark's group and the screens'
         // never overlap; the title takes what is left and elides.
         let narrow = ui.ctx().content_rect().width() < NARROW;
-        let panel = egui::Panel::top("header").show(ui, |ui| {
-            let size = Vec2::new(ui.available_width(), HEADER_H);
-            let t = theme(ui);
-            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // The wordmark is the way to the site (the About window links
-                // it, on a phone).
-                if !narrow {
-                    let mark = Self::wordmark(ui, t.accent).tip(format!("Opens {SITE_URL} in a new tab."));
-                    hits.push(("mark".to_string(), mark.rect));
-                    if mark.clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
-                    }
-                }
-                self.menus(ui, engineer, waiting, &mut hits);
-                if !narrow {
-                    ui.separator();
-                    self.actions(ui, &mut hits);
-                }
-                // The right-hand group, laid out from the window's edge
-                // leftwards (the order below is right to left).
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // ? keeps the very corner (Nick, 2026-11-01: in place
-                    // of the ⋯, whose items are the View menu's and About's).
-                    let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
-                    hits.push(("help".to_string(), m.rect));
-                    if m.clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
-                    }
-                    self.login_button(ui, &mut hits);
-                    self.screen_toggle(ui, &mut hits);
-                    if let Some(n) = waiting.filter(|n| *n > 0) {
-                        let b =
-                            egui::Button::new(RichText::new(format!("{n} waiting")).strong().color(BLACK))
-                                .fill(YELLOW);
-                        let r = ui
-                            .add(b)
-                            .tip("Proposals waiting for an approver. Click to review them.");
-                        hits.push(("proposals waiting".to_string(), r.rect));
-                        if r.clicked() {
-                            self.screen = Screen::Proposals;
+        let panel = egui::Panel::top("header")
+            .frame(crate::theme::float_frame(ui))
+            .show(ui, |ui| {
+                let size = Vec2::new(ui.available_width(), HEADER_H);
+                let t = theme(ui);
+                ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // The wordmark is the way to the site (the About window links
+                    // it, on a phone).
+                    if !narrow {
+                        let mark =
+                            Self::wordmark(ui, t.accent).tip(format!("Opens {SITE_URL} in a new tab."));
+                        hits.push(("mark".to_string(), mark.rect));
+                        if mark.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
                         }
                     }
-                    ui.separator();
-                    self.dirty_mark(ui, &mut hits);
-                    if self.source == Source::Sim && !narrow {
-                        ui.label(RichText::new("simulation").color(t.muted))
-                            .tip("The program runs in this page. Nothing reaches a controller.");
+                    self.menus(ui, engineer, waiting, &mut hits);
+                    if !narrow {
+                        ui.separator();
+                        self.actions(ui, &mut hits);
                     }
-                    // A phone signed out has a letter's room left here:
-                    // "T…" says nothing, so the title waits for room.
-                    if !narrow || ui.available_width() >= TITLE_ROOM {
-                        let r = ui
-                            .add(
-                                egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
-                                    .truncate(),
+                    // The right-hand group, laid out from the window's edge
+                    // leftwards (the order below is right to left).
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // ? keeps the very corner (Nick, 2026-11-01: in place
+                        // of the ⋯, whose items are the View menu's and About's).
+                        let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
+                        hits.push(("help".to_string(), m.rect));
+                        if m.clicked() {
+                            ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
+                        }
+                        self.login_button(ui, &mut hits);
+                        self.screen_toggle(ui, &mut hits);
+                        if let Some(n) = waiting.filter(|n| *n > 0) {
+                            let b = egui::Button::new(
+                                RichText::new(format!("{n} waiting")).strong().color(BLACK),
                             )
-                            .tip("The open project.");
-                        hits.push(("title".to_string(), r.rect));
-                    }
-                    m.rect
+                            .fill(YELLOW);
+                            let r = ui
+                                .add(b)
+                                .tip("Proposals waiting for an approver. Click to review them.");
+                            hits.push(("proposals waiting".to_string(), r.rect));
+                            if r.clicked() {
+                                self.screen = Screen::Proposals;
+                            }
+                        }
+                        ui.separator();
+                        self.dirty_mark(ui, &mut hits);
+                        if self.source == Source::Sim && !narrow {
+                            ui.label(RichText::new("simulation").color(t.muted))
+                                .tip("The program runs in this page. Nothing reaches a controller.");
+                        }
+                        // A phone signed out has a letter's room left here:
+                        // "T…" says nothing, so the title waits for room.
+                        if narrow && self.screen == Screen::Monitor {
+                            // Where the title would be: the programs' lamps and
+                            // names, elided to what is left of the row.
+                            self.monitor_status(ui, &mut hits, true);
+                        } else if !narrow || ui.available_width() >= TITLE_ROOM {
+                            let r = ui
+                                .add(egui::Label::new(RichText::new(&title).strong().color(t.fg)).truncate())
+                                .tip("The open project.");
+                            hits.push(("title".to_string(), r.rect));
+                        }
+                        m.rect
+                    })
+                    .inner
                 })
                 .inner
-            })
-            .inner
-        });
+            });
         hits.push(("header".to_string(), panel.response.rect));
         let menu_at = panel.inner;
+        if let Some(r) = &mut self.review
+            && std::mem::take(&mut r.open_login)
+        {
+            self.login = true;
+        }
         if self.login {
             self.login_ui(ui.ctx(), menu_at, &mut hits);
+        } else {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::hide_login_form();
         }
         if self.about {
             self.about_ui(ui.ctx(), &mut hits);
@@ -1216,14 +1355,18 @@ impl App {
                 if on { BLACK } else { t.fg },
             );
             hits.push((key.to_string(), r));
+            crate::glyphs::badge(
+                ui,
+                r,
+                Some(match screen {
+                    Screen::Editor => Action::Editor,
+                    _ => Action::Monitor,
+                }),
+            );
             // A click on either side flips (Nick, 2026-11-01), so from the
             // active side too; from Proposals either side goes to the Editor.
             if resp.clicked() {
-                self.screen = match self.screen {
-                    Screen::Editor => Screen::Monitor,
-                    Screen::Monitor | Screen::Proposals => Screen::Editor,
-                };
-                let _ = screen;
+                self.flip_screen();
             }
         }
     }
@@ -1302,6 +1445,12 @@ impl App {
             .as_ref()
             .map(|b| self.monitor.targets(&b.state.modules))
             .unwrap_or_default();
+        // On a Skipper's page: how many simulated inputs Reset would set.
+        let skipper_sims = self
+            .boxv
+            .as_ref()
+            .filter(|b| b.watches_node)
+            .map(crate::box_view::BoxView::sim_inputs);
         let on_box = self
             .boxv
             .as_ref()
@@ -1312,7 +1461,8 @@ impl App {
                 (any, running)
             });
 
-        egui::Area::new(egui::Id::unique("glyphs"))
+        let mut save_at = None;
+        let strip = egui::Area::new(egui::Id::unique("glyphs"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at)
@@ -1324,18 +1474,30 @@ impl App {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             if let Some((text, color, tip)) = &status {
-                                let r = ui
-                                    .label(RichText::new(text).monospace().strong().color(*color))
-                                    .tip(tip);
-                                hits.push(("state".to_string(), r.rect));
+                                // The state in words is Inter; its clock is a
+                                // live value, mono at a fixed width.
+                                let (word, clock) = text.split_once(" · ").unwrap_or((text.as_str(), ""));
+                                let w = ui.label(RichText::new(word).strong().color(*color));
+                                let mut rect = w.rect;
+                                if !clock.is_empty() {
+                                    let c = crate::theme::live(ui, clock, *color, 8);
+                                    rect = rect.union(c.rect);
+                                    c.tip(tip);
+                                }
+                                w.tip(tip);
+                                hits.push(("state".to_string(), rect));
                             }
                             let mut g =
                                 |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
-                                    let r = glyphs::button(ui, icon, enabled, on, tip);
+                                    // A box takes no key for its run or restart.
+                                    let shown = (!(on_box.is_some() && matches!(a, Action::RunStop | Action::Restart)))
+                                        .then_some(a);
+                                    let r = glyphs::button_keyed(ui, icon, enabled, on, tip, shown);
                                     hits.push((key.to_string(), r.rect));
                                     if r.clicked() {
                                         act.push(a);
                                     }
+                                    r.rect
                                 };
                             if let Some((built, running)) = sim {
                                 let (icon, tip) = if !built {
@@ -1402,18 +1564,22 @@ impl App {
                                     )
                                 };
                                 g(ui, "run", icon, any, false, tip, Action::RunStop);
-                                g(
-                                    ui,
-                                    "restart",
-                                    glyphs::Icon::Restart,
-                                    any,
-                                    false,
-                                    "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
-                                    Action::Restart,
-                                );
+                                // Nick 2026-11-25: on a real device the reset
+                                // is for the simulated I/O only.
+                                let (enabled, tip) = match skipper_sims {
+                                    Some(n) => (
+                                        n > 0,
+                                        "Reset the simulated inputs, each back to off or 0. The program keeps running and the real I/O is not touched.",
+                                    ),
+                                    None => (
+                                        any,
+                                        "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
+                                    ),
+                                };
+                                g(ui, "restart", glyphs::Icon::Restart, enabled, false, tip, Action::Restart);
                                 ui.separator();
                             }
-                            g(
+                            save_at = Some(g(
                                 ui,
                                 "save",
                                 glyphs::Icon::Save,
@@ -1421,7 +1587,7 @@ impl App {
                                 false,
                                 &save_tip,
                                 Action::Save,
-                            );
+                            ));
                             g(
                                 ui,
                                 "upload",
@@ -1443,7 +1609,11 @@ impl App {
                         });
                     });
             });
+        self.chrome.glyph_strip = strip.response.rect;
         let ctx = ui.ctx().clone();
+        if let Some(at) = save_at {
+            self.save_flash(&ctx, at, &mut hits);
+        }
         for a in act {
             // On a box the run and restart glyphs are the box's (the
             // simulation's are not drawn there): every module it runs.
@@ -1454,6 +1624,39 @@ impl App {
             }
         }
         self.chrome.hits.extend(hits);
+    }
+
+    /// "Saved" or "Deployed" in a small popup under the save glyph for
+    /// [`crate::box_projects::FLASH_S`] after one went through (Nick,
+    /// 2026-11-26: not a note in the Messages). The hit is `save flash`.
+    fn save_flash(&self, ctx: &egui::Context, save: Rect, hits: &mut Vec<(String, Rect)>) {
+        let Some(f) = self
+            .boxv
+            .as_ref()
+            .filter(|_| self.source == Source::Box)
+            .and_then(|b| b.projects.flash.as_ref())
+        else {
+            return;
+        };
+        let now = ctx.input(|i| i.time);
+        let age = now - f.at;
+        if !(0.0..crate::box_projects::FLASH_S).contains(&age) {
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(
+            crate::box_projects::FLASH_S - age,
+        ));
+        let r = egui::Area::new(egui::Id::unique("save flash"))
+            .order(egui::Order::Tooltip)
+            .pivot(egui::Align2::CENTER_TOP)
+            .fixed_pos(save.center_bottom() + Vec2::new(0.0, 6.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(RichText::new(f.word).color(theme(ui).accent));
+                });
+            });
+        hits.push(("save flash".to_string(), r.response.rect));
     }
 
     /// View › Pane layouts…: the popup, and the browser's side of its
@@ -1743,6 +1946,24 @@ impl App {
                 {
                     w.undo(&ctx, true);
                 }
+                // The box's, projects or not (a Skipper's page may have none).
+                let map = self.source == Source::Box
+                    && self.boxv.as_ref().is_some_and(crate::box_view::BoxView::can_edit_map);
+                if map {
+                    ui.separator();
+                    if menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "edit map",
+                        "Edit map…",
+                        false,
+                        "",
+                        "Opens the I/O map this Skipper runs in a window: edit it, check its devices, download it.",
+                    ) && let Some(b) = self.boxv.as_mut()
+                    {
+                        b.edit_map();
+                    }
+                }
                 ui.separator();
                 if menu_item_keyed(
                     ui,
@@ -1963,19 +2184,18 @@ impl App {
                     self.tour = Some(crate::tour::Tour::new());
                     self.screen = Screen::Editor;
                 }
-                if self.source == Source::Sim
-                    && menu_item(
-                        ui,
-                        &mut chrome,
-                        "help front",
-                        "Front page",
-                        false,
-                        "The page a first visit opens on: a tank, its program and the proofs that it holds safe.",
-                    )
-                {
-                    self.front = Some(crate::front::Front::new());
-                }
                 ui.separator();
+                let shown = chrome.hotkeys;
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "help hotkeys",
+                    "Show hotkeys",
+                    shown,
+                    "Writes each shortcut over its button, small, to learn them. Kept in this browser.",
+                ) {
+                    chrome.hotkeys = !shown;
+                }
                 if menu_item(
                     ui,
                     &mut chrome,
@@ -2021,6 +2241,10 @@ impl App {
     /// The open view's actions in the header: the simulation's run
     /// controls, scan period and status; a box's status and notices.
     fn actions(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        if self.screen == Screen::Monitor {
+            self.monitor_status(ui, hits, false);
+            return;
+        }
         if self.screen != Screen::Editor {
             return;
         }
@@ -2042,6 +2266,67 @@ impl App {
         self.chrome = chrome;
     }
 
+    /// The Monitor's part of the header (Nick, 2026-11-26): each program
+    /// shown, its state's lamp (green running, red faulted, yellow held,
+    /// grey stopped, and grey whatever it was while the data is stale) and
+    /// its state in a word. The tooltip has the rest: the fault, who
+    /// stopped it, the scan detail.
+    fn monitor_status(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>, compact: bool) {
+        use crate::monitor::Run;
+        let t = theme(ui);
+        let now = ui.ctx().input(|i| i.time);
+        let engineer = is_engineer(self.session().as_ref()).is_ok();
+        let detail = engineer && self.chrome.scan;
+        let banners = match self.source {
+            Source::Box => self
+                .boxv
+                .as_ref()
+                .map(|b| self.monitor.banner(&b.state, now, detail)),
+            Source::Sim => self.sim.as_ref().map(|s| self.monitor.banner(s, now, detail)),
+        }
+        .unwrap_or_default();
+        let lamp = |b: &crate::monitor::Banner| {
+            if b.stale {
+                t.muted
+            } else {
+                match b.run {
+                    Run::Running => t.ink(crate::monitor::GREEN),
+                    Run::Faulted(_) => t.ink(crate::monitor::RED),
+                    Run::Held => t.ink(YELLOW),
+                    Run::Stopped(_) | Run::Starting => t.muted,
+                }
+            }
+        };
+        if compact {
+            // A phone: the lamp and the name, the word in the tooltip.
+            // Inter: a name and a state are not code or a live value.
+            let font = egui::FontId::proportional(crate::theme::BODY);
+            let mut job = egui::text::LayoutJob::default();
+            for (i, b) in banners.iter().enumerate() {
+                let dot = egui::TextFormat::simple(font.clone(), lamp(b));
+                let name = egui::TextFormat::simple(font.clone(), t.fg);
+                job.append(if i == 0 { "● " } else { "  ● " }, 0.0, dot);
+                job.append(&b.name, 0.0, name);
+            }
+            if !banners.is_empty() {
+                let tip: Vec<&str> = banners.iter().map(|b| b.tip.as_str()).collect();
+                let r = ui.add(egui::Label::new(job).truncate()).tip(tip.join("\n\n"));
+                hits.push(("monitor program 0".to_string(), r.rect));
+            }
+            return;
+        }
+        ui.horizontal(|ui| {
+            for (i, b) in banners.iter().enumerate() {
+                let color = lamp(b);
+                ui.label(RichText::new("●").color(color)).tip(&b.tip);
+                let r = ui.label(RichText::new(&b.name).strong().color(t.fg)).tip(&b.tip);
+                hits.push((format!("monitor program {i}"), r.rect));
+                let w = ui.label(RichText::new(b.word).color(color)).tip(&b.tip);
+                hits.push((format!("monitor state {i}"), w.rect));
+            }
+        });
+    }
+
     /// The edited-not-saved mark (Save and Deploy are the File menu's and
     /// the glyphs'). Not on a phone's width.
     fn dirty_mark(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
@@ -2057,8 +2342,8 @@ impl App {
     }
 
     /// Sign in, or who is signed in: on a box only. Signed in, the role's
-    /// glyph leads the name: a hard hat for an operator, a wrench and a
-    /// screwdriver for an engineer or an integrator (Nick, 2026-11-07).
+    /// user glyph leads the name, the same for every role (Nick,
+    /// 2026-11-25; the role is in the tip).
     fn login_button(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         if self.source != Source::Box {
             return;
@@ -2069,28 +2354,27 @@ impl App {
             self.login = false;
             self.login_seen.clone_from(&who);
         }
-        let icon = session.as_ref().map(|s| match s.role.as_str() {
-            "operator" => (glyphs::Icon::HardHat, YELLOW, "an operator"),
-            _ => (glyphs::Icon::Tools, theme(ui).fg, "an engineer"),
-        });
-        let text = who.clone().unwrap_or_else(|| "Sign in".to_string());
-        let tip = match (&who, icon) {
-            (Some(w), Some((_, _, role))) => {
-                format!("Signed in as {w}, {role}. Click to sign out or change who is signed in.")
-            }
-            _ => "Sign in to edit, deploy, force inputs and approve proposals.".to_string(),
+        // The name alone (Nick, 2026-11-25: "The (engineer) portion should
+        // also be excluded"): a call the role does not allow says so.
+        let name = session
+            .as_ref()
+            .map(|s| s.user.clone().unwrap_or_else(|| s.role.clone()));
+        let text = name.clone().unwrap_or_else(|| "Sign in".to_string());
+        let tip = match &who {
+            Some(w) => format!("Signed in as {w}. Click to sign out or change who is signed in."),
+            None => "Sign in to edit, deploy, force inputs and approve proposals.".to_string(),
         };
         let mut clicked = false;
-        if let Some((icon, color, _)) = icon {
+        if name.is_some() {
             let side = ui.spacing().interact_size.y;
             let (at, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::click());
-            glyphs::paint(ui.painter(), at.shrink(side * 0.12), icon, color);
-            let key = if icon == glyphs::Icon::HardHat {
-                "operator"
-            } else {
-                "engineer"
-            };
-            hits.push((format!("role {key}"), at));
+            glyphs::paint(
+                ui.painter(),
+                at.shrink(side * 0.12),
+                glyphs::Icon::User,
+                theme(ui).fg,
+            );
+            hits.push(("user glyph".to_string(), at));
             clicked |= r.tip(&tip).clicked();
         }
         let b = ui
@@ -2108,6 +2392,25 @@ impl App {
         let Some(r) = &mut self.review else { return };
         let was = r.state.session.is_some();
         r.rects.clear();
+        // In the browser a box with accounts signs in through a real HTML
+        // form, so the browser's password manager can save and fill it.
+        // Signed in, the egui panel (Sign out) is drawn as before.
+        #[cfg(target_arch = "wasm32")]
+        {
+            if r.state.accounts() && !was {
+                if let Some((user, password)) = crate::web::take_login() {
+                    r.state.login(&user, password);
+                }
+                let t = crate::theme::Theme::for_mode(ctx.global_style().visuals.dark_mode);
+                crate::web::show_login_form(ctx, &t, r.state.login_problem.as_deref(), r.state.logging_in);
+                if crate::web::take_login_closed() {
+                    self.login = false;
+                    crate::web::hide_login_form();
+                }
+                return;
+            }
+            crate::web::hide_login_form();
+        }
         let panel = egui::Area::new(egui::Id::unique("header-login"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
@@ -2141,14 +2444,13 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.show(ui);
+        #[cfg(target_arch = "wasm32")]
+        crate::web::take_copies(ui.ctx());
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
         storage.set_string(crate::pane_layout::LAYOUTS_KEY, self.layouts.saved());
-        if self.front_seen {
-            storage.set_string(FRONT_KEY, "seen".into());
-        }
     }
 
     /// The layout string above is all that is kept per browser. egui's

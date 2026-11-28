@@ -648,11 +648,11 @@ impl ProposalUi {
             chrome.hit("proposal name", r.rect);
         });
         if let Some(why) = &self.refusals.name {
-            ui.add(egui::Label::new(RichText::new(why).color(theme(ui).ink(RED))).wrap());
+            crate::messages::error_link(ui, chrome, "proposal refusal", why, theme(ui).ink(RED));
         }
         // The buttons come before the long parts, so they are in view.
         for line in &self.refusals.general {
-            ui.add(egui::Label::new(RichText::new(line).color(theme(ui).ink(RED))).wrap());
+            crate::messages::error_link(ui, chrome, "proposal refusal", line, theme(ui).ink(RED));
         }
         self.buttons_ui(ui, chrome, can);
         // What the agent says it read.
@@ -702,7 +702,13 @@ impl ProposalUi {
                     });
                     if let Some(list) = self.refusals.channels.get(&c.name) {
                         for why in list {
-                            ui.add(egui::Label::new(RichText::new(why).color(theme(ui).ink(RED))).wrap());
+                            crate::messages::error_link(
+                                ui,
+                                chrome,
+                                "proposal refusal",
+                                why,
+                                theme(ui).ink(RED),
+                            );
                         }
                     }
                 }
@@ -812,8 +818,12 @@ impl ProposalUi {
                     });
             }
             Some(Err(why)) => {
-                ui.add(
-                    egui::Label::new(RichText::new(clean(&why, 200, false)).color(theme(ui).ink(RED))).wrap(),
+                crate::messages::error_link(
+                    ui,
+                    chrome,
+                    "proposal refusal",
+                    &clean(&why, 200, false),
+                    theme(ui).ink(RED),
                 );
             }
             None => {
@@ -848,12 +858,12 @@ impl ProposalUi {
         match self.publishing.clone() {
             Publishing::Idle | Publishing::Refused(_) => {
                 if let Publishing::Refused(why) = &self.publishing {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("Not sent: {}.", why.trim_end_matches('.')))
-                                .color(theme(ui).ink(RED)),
-                        )
-                        .wrap(),
+                    crate::messages::error_link(
+                        ui,
+                        chrome,
+                        "proposal refusal",
+                        &format!("Not sent: {}.", why.trim_end_matches('.')),
+                        theme(ui).ink(RED),
                     );
                 }
                 let can = self.ctx.engineer.is_ok();

@@ -62,6 +62,9 @@ wasm = ["dep:wasmi"]
 
 [dev-dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
+# tests/node_map.rs holds the edge node's map codecs to this crate's drivers
+# (a path crate already in the lock, used by tests only).
+helmsman-nodecore = { path = "../helmsman-nodecore" }
 # Tests and examples run the enip-io driver against the simulated E1213.
 helmsman-io = { path = ".", features = ["enip-sim", "profinet-sim", "profinet-raw", "wasm"] }
 # The WASM driver tests' adversarial guests are hand-written WAT,

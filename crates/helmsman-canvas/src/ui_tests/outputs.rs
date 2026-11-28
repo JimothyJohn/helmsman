@@ -62,10 +62,31 @@ fn fifty_outputs_with_long_names_keep_the_panel_at_its_default_width() {
     );
     h.press("io head inputs");
     h.wait(0.2);
-    assert!(h.drew("driven by"), "a card says what drives it");
+    // One line each (Nick, 2026-11-27): what drives an output is in its
+    // details, and they open inside the width too.
+    assert!(!h.drew("driven by"), "no links on a closed card");
+    let first = "io card conveyor_section_0_motor_contactor_with_a_long_name";
+    h.wait(1.0);
+    let r = h.rect(first);
+    h.click(eframe::egui::pos2(r.center().x, r.bottom() - 6.0));
+    h.wait(0.3);
+    assert!(h.drew("driven by"), "its details say what drives it");
+    let open = h.rect(first);
     assert!(
-        outs.width() > RIGHT_W * 0.8,
-        "one card to a row, at the pane's width: {outs:?}"
+        open.left() >= h.size.x - RIGHT_W - 8.0 && open.right() <= h.size.x,
+        "the open card {open:?} stays in the {RIGHT_W} pt panel"
+    );
+    assert!(
+        (h.rect("right").left() - right.left()).abs() <= 8.0,
+        "the panel grew with a card open"
+    );
+    // One card to a row, at the pane's width: from the ribbon that holds
+    // the pane's hide button along its inner edge (2026-11-26) to the
+    // pane's right margin.
+    let ribbon = h.rect("right");
+    assert!(
+        (outs.left() - ribbon.right()).abs() <= 4.0 && h.size.x - outs.right() <= 30.0,
+        "one card to a row, at the pane's width: {outs:?} beside the ribbon {ribbon:?}"
     );
 }
 
@@ -104,7 +125,14 @@ fn on_a_box_the_cards_come_from_its_module_and_a_tap_lights_from_its_scan() {
     h.frame(vec![]);
     h.press("tab io");
     h.wait(0.3);
-    assert!(h.drew("driven by"), "cards on a box's I/O tab");
+    assert!(
+        h.has("io card conveyor") && h.has("io outputs"),
+        "cards on a box's I/O tab"
+    );
+    assert!(
+        !h.drew("driven by"),
+        "one line each: the links are in the details"
+    );
     let cards = h.app.boxv.as_ref().unwrap().view.as_ref().unwrap().output_cards();
     let names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
     assert!(names.contains(&"CONVEYOR"), "{names:?}");

@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value as Json, json};
 
-use super::{Ctx, Journey, deploy_project, ensure_running, expect, wait_for};
+use super::{Ctx, Journey, deploy_project, ensure_running, expect, module_names, wait_for};
 use crate::client;
 
 /// This area's journeys; `None` is pending.
@@ -14,6 +14,7 @@ pub const JOURNEYS: &[(&str, Option<Journey>)] = &[
     ("bundles", Some(bundles)),
     ("audit", Some(audit)),
     ("forces", Some(forces)),
+    ("sim-points", Some(sim_points)),
     ("trends", Some(trends)),
     ("layout", Some(layout)),
     ("drivers", Some(drivers)),
@@ -295,6 +296,79 @@ fn forces(c: &Ctx) -> Result<String, String> {
     // Whatever happened, leave no force on the box.
     expect(c, "DELETE", "/api/forces", None, 200)?;
     result
+}
+
+/// A program and a map of placeholder points only: no device behind any of them.
+const SIM_PROGRAM: &str = "PROGRAM simline\nVAR_INPUT sw : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\n  lamp := sw;\nEND_PROGRAM\n";
+const SIM_MAP: &str = "in sw bool sim\nout lamp bool sim\n";
+
+fn sim_points(c: &Ctx) -> Result<String, String> {
+    ensure_running(c)?;
+    let name = "parity-sim";
+    expect(c, "POST", "/api/projects", Some(&json!({ "name": name })), 201)?;
+    for (f, text) in [("main.st", SIM_PROGRAM), ("io.map", SIM_MAP)] {
+        expect(
+            c,
+            "PUT",
+            &format!("/api/projects/{name}/files/{f}"),
+            Some(&json!({ "text": text })),
+            200,
+        )?;
+    }
+    let check = expect(
+        c,
+        "POST",
+        &format!("/api/projects/{name}/check"),
+        Some(&json!({})),
+        200,
+    )?;
+    if check["ok"] != true {
+        return Err(format!("check: {check}"));
+    }
+    let r = expect(
+        c,
+        "POST",
+        &format!("/api/projects/{name}/replay"),
+        Some(&json!({})),
+        201,
+    )?;
+    let n = r["replay"]
+        .as_u64()
+        .ok_or_else(|| format!("replay: no number in {r}"))?;
+    expect(
+        c,
+        "POST",
+        &format!("/api/projects/{name}/deploy"),
+        Some(&json!({ "replay": n })),
+        200,
+    )?;
+    wait_for(
+        "the sim line running",
+        || Ok(module_names(c)?.contains("simline")),
+    )?;
+    let one = expect(c, "GET", "/api/signals/sw", None, 200)?;
+    if one["sim"] != true {
+        return Err(format!("sw is not marked sim: {one}"));
+    }
+    let set = expect(c, "PUT", "/api/signals/sw", Some(&json!({ "value": true })), 200)?;
+    if set != json!({ "name": "sw", "value": true }) {
+        return Err(format!("PUT /api/signals/sw: {set}"));
+    }
+    wait_for("lamp follows the set sw", || {
+        Ok(signal_value(c, "lamp")? == json!(true))
+    })?;
+    expect(c, "PUT", "/api/signals/sw", Some(&json!({ "value": false })), 200)?;
+    wait_for("lamp falls with sw", || {
+        Ok(signal_value(c, "lamp")? == json!(false))
+    })?;
+    expect(
+        c,
+        "PUT",
+        "/api/signals/lamp",
+        Some(&json!({ "value": true })),
+        409,
+    )?;
+    Ok("sw set true: lamp followed, set false: lamp fell; an output is refused".into())
 }
 
 fn trends(c: &Ctx) -> Result<String, String> {

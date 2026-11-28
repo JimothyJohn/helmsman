@@ -34,6 +34,20 @@ fn set_draft(ui: &egui::Ui, id: Id, text: Option<String>) {
 /// (`500 ms`; typing it back is optional), editable in place. Returns
 /// what the frame committed; the caller parses and bounds it, and leaves
 /// the value alone on nonsense.
+/// The width a number box needs to show `text` whole: the text and its margins.
+#[must_use]
+pub fn box_width(ui: &egui::Ui, text: &str) -> f32 {
+    ui.fonts_mut(|f| {
+        f.layout_no_wrap(
+            text.to_owned(),
+            egui::TextStyle::Monospace.resolve(ui.style()),
+            egui::Color32::WHITE,
+        )
+        .size()
+        .x
+    }) + 14.0
+}
+
 pub fn number(ui: &mut egui::Ui, id: Id, value: &str, suffix: &str, size: Vec2, hint: &str) -> Commit {
     let editing = draft(ui, id);
     let shown = if suffix.is_empty() {
@@ -42,9 +56,14 @@ pub fn number(ui: &mut egui::Ui, id: Id, value: &str, suffix: &str, size: Vec2, 
         format!("{value} {suffix}")
     };
     let mut text = editing.clone().unwrap_or_else(|| shown.clone());
+    // Never narrower than the number it shows: a cut digit reads as
+    // another number.
+    let need = box_width(ui, &shown);
+    let size = Vec2::new(size.x.max(need), size.y);
     let field = egui::TextEdit::singleline(&mut text)
         .id(id)
         .desired_width(size.x)
+        .margin(egui::Margin::symmetric(3, 2))
         .font(egui::TextStyle::Monospace);
     let r = ui.add_sized(size, field).on_hover_text(hint);
     if r.gained_focus()

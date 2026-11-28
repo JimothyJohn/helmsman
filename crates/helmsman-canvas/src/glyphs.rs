@@ -5,6 +5,7 @@
 
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, Vec2};
 
+use crate::hotkeys::Action;
 use crate::st_view::TAP;
 use crate::st_view::brand::{GREEN, RED, YELLOW};
 use crate::theme::theme;
@@ -30,10 +31,10 @@ pub enum Icon {
     Download,
     /// ? in a ring.
     Help,
-    /// A hard hat: an operator is signed in (Nick, 2026-11-07).
-    HardHat,
-    /// A wrench crossed with a screwdriver: an engineer is signed in.
-    Tools,
+    /// A head and shoulders: who is signed in, whatever the role (Nick,
+    /// 2026-11-25: "the standard user glyph, not a glyph based on the
+    /// role").
+    User,
     /// < > : the Agent changes the program (its mode toggle, Nick,
     /// 2026-11-08); [`Icon::Help`] is the other side.
     Code,
@@ -85,12 +86,28 @@ pub enum Icon {
     Copy,
     /// A bin: empty the Messages.
     Clear,
-    /// An open hand: pan the diagram (the corner controls).
-    Hand,
+    /// Arrows out to four sides: pan the diagram (the corner controls;
+    /// a hand it was, which no handful of strokes draws well small).
+    Pan,
     /// A magnifier with a plus: zoom in.
     ZoomIn,
     /// A magnifier with a minus: zoom out.
     ZoomOut,
+    /// A magnifier with a frame in it: fit the diagram, or the blocks
+    /// selected, to the view.
+    ZoomFit,
+    /// A line that rises and falls: the bottom panel's Trend tab.
+    Trend,
+    /// ↑ : move up (the Trend's ticked signals, a lane).
+    Up,
+    /// ↓ : move down.
+    Down,
+    /// A painter's palette: pick a color.
+    Palette,
+    /// A pencil: edit (a device's row on the Devices tab).
+    Edit,
+    /// A tick: apply a held change (Show Changes, Nick, 2026-11-27).
+    Apply,
 }
 
 /// An action button of a panel (Send, Stop, Undo; Nick, 2026-11-12: the
@@ -113,53 +130,65 @@ pub fn action_wide(ui: &mut egui::Ui, icon: Icon, enabled: bool, primary: bool, 
     let (rect, r) = ui.allocate_exact_size(size, sense);
     let t = theme(ui);
     let painter = ui.painter();
-    let hot = enabled && r.hovered();
     let (fill, ink) = match (enabled, primary) {
         (false, _) => (t.rule.gamma_multiply(0.5), t.muted.gamma_multiply(0.5)),
         (true, true) => (
-            if hot { YELLOW.gamma_multiply(0.85) } else { YELLOW },
+            crate::theme::mix(
+                YELLOW,
+                Color32::BLACK,
+                0.15 * crate::theme::ease(ui, &r, "hover", r.hovered()),
+            ),
             crate::st_view::brand::BLACK,
         ),
-        (true, false) => (
-            if hot {
-                ui.style().interact(&r).bg_fill
-            } else {
-                t.rule
-            },
-            t.fg,
-        ),
+        (true, false) => (crate::theme::eased_fill(ui, &r, t.rule), t.fg),
     };
     painter.rect_filled(rect, CornerRadius::same(5), fill);
-    let ink = if enabled && icon == Icon::Stop {
-        t.ink(RED)
-    } else {
-        ink
-    };
+    if enabled {
+        crate::theme::focus_ring(ui, &r, rect, 5);
+    }
+    // Stop is neutral like every other action (Nick, 2026-11-27).
+    draw(painter, glyph_box(rect), icon, ink);
+    r
+}
+
+/// Send when the agent cannot be reached (Nick, 2026-11-26): the arrow in
+/// red on the gray of a deactivated button, which still takes a click.
+/// The caller tips it with why.
+pub fn send_off(ui: &mut egui::Ui, width: f32) -> Response {
+    let size = Vec2::new(width, TAP * 0.75);
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    let t = theme(ui);
+    let painter = ui.painter();
+    painter.rect_filled(rect, CornerRadius::same(5), t.rule.gamma_multiply(0.5));
     let side = rect.height() * 0.56;
     draw(
         painter,
         Rect::from_center_size(rect.center(), Vec2::splat(side)),
-        icon,
-        ink,
+        Icon::Send,
+        t.ink(RED),
     );
     r
 }
 
 /// How wide the Deploy button is, points.
-pub const DEPLOY_W: f32 = TAP * 1.6;
+pub const DEPLOY_W: f32 = ROW * 1.7;
 
-/// Deploy as a button that reads as one (Nick, 2026-11-23): filled
-/// green, a black arrow, bigger than the glyphs beside it. The caller
-/// tips it.
+/// Deploy as a button that reads as one (Nick, 2026-11-23) without
+/// outgrowing its row (Nick, 2026-11-24: "too big, green, and awkward"):
+/// the height of the glyphs beside it, filled in the brand yellow with a
+/// black arrow, as Send is. The caller tips it.
 pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
-    let size = Vec2::new(DEPLOY_W, TAP * 0.85);
+    let size = Vec2::new(DEPLOY_W, ROW);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, r) = ui.allocate_exact_size(size, sense);
     let t = theme(ui);
-    let hot = enabled && r.hovered();
     let (fill, ink) = if enabled {
         (
-            if hot { GREEN.gamma_multiply(0.85) } else { GREEN },
+            crate::theme::mix(
+                YELLOW,
+                Color32::BLACK,
+                0.15 * crate::theme::ease(ui, &r, "hover", r.hovered()),
+            ),
             crate::st_view::brand::BLACK,
         )
     } else {
@@ -167,13 +196,17 @@ pub fn deploy(ui: &mut egui::Ui, enabled: bool) -> Response {
     };
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(5), fill);
+    if enabled {
+        crate::theme::focus_ring(ui, &r, rect, 5);
+    }
     let side = rect.height() * 0.5;
     draw(
         painter,
-        Rect::from_center_size(rect.center(), Vec2::new(side * 1.4, side)),
+        Rect::from_center_size(rect.center(), Vec2::new(side * 1.3, side)),
         Icon::Deploy,
         ink,
     );
+    badge(ui, rect, Some(Action::Deploy));
     r
 }
 
@@ -187,6 +220,21 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str)
     button_sized(ui, icon, SIZE, enabled, on, tip)
 }
 
+/// [`button`] for a control whose shortcut is not its glyph's usual one:
+/// `key` is the action Help › Show hotkeys writes on it, or none.
+pub fn button_keyed(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    enabled: bool,
+    on: bool,
+    tip: &str,
+    key: Option<Action>,
+) -> Response {
+    let r = button_raw(ui, icon, SIZE, enabled, on, tip);
+    badge(ui, r.rect, key);
+    r
+}
+
 /// [`button`] at `size` points a side: a glyph in a text row takes the
 /// row's height, not the toolbar's.
 pub fn button_sized(
@@ -197,28 +245,40 @@ pub fn button_sized(
     on: bool,
     tip: &str,
 ) -> Response {
+    let r = button_raw(ui, icon, size, enabled, on, tip);
+    badge(ui, r.rect, button_action(icon));
+    r
+}
+
+fn button_raw(ui: &mut egui::Ui, icon: Icon, size: f32, enabled: bool, on: bool, tip: &str) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
     let r = r.on_hover_text(tip);
     let t = theme(ui);
     let painter = ui.painter();
     let hot = enabled && r.hovered();
-    if hot || on {
-        let tint = if on {
-            YELLOW.gamma_multiply(0.2)
-        } else {
-            ui.style().interact(&r).bg_fill
-        };
-        painter.rect_filled(rect, CornerRadius::same(5), tint);
+    // Hover and press ease in and out (about 100 ms); the glyph is alone on
+    // its ground, which is nothing at rest.
+    let tint = if on {
+        YELLOW.gamma_multiply(0.2)
+    } else if enabled {
+        crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT)
+    } else {
+        Color32::TRANSPARENT
+    };
+    painter.rect_filled(rect, CornerRadius::same(5), tint);
+    if enabled {
+        crate::theme::focus_ring(ui, &r, rect, 5);
     }
+    // Stop is neutral: red is a state, not a button colour (Nick,
+    // 2026-11-27), so it is the glyph alone like the rest.
     let color = match (enabled, icon) {
         (false, _) => t.muted.gamma_multiply(0.5),
         (true, Icon::Run | Icon::Deploy) => crate::theme::theme(ui).ink(GREEN),
-        (true, Icon::Stop) => crate::theme::theme(ui).ink(RED),
         (true, _) if hot => t.accent,
         (true, _) => t.fg,
     };
-    draw(painter, rect.shrink(size * 0.26), icon, color);
+    draw(painter, glyph_box(rect), icon, color);
     r
 }
 
@@ -246,10 +306,11 @@ pub fn tab_sensed(
     let red = t.ink(RED);
     if let Some(a) = alarm {
         painter.rect_filled(rect, CornerRadius::same(5), RED.gamma_multiply(0.15 + 0.55 * a));
-    } else if r.hovered() {
-        let tint = ui.style().interact(&r).bg_fill;
+    } else {
+        let tint = crate::theme::eased_fill(ui, &r, Color32::TRANSPARENT);
         painter.rect_filled(rect, CornerRadius::same(5), tint);
     }
+    crate::theme::focus_ring(ui, &r, rect, 5);
     let color = match alarm {
         // On a strong red ground the page's ink reads; on a faint one, red.
         Some(a) if a > 0.5 => t.fg,
@@ -258,16 +319,108 @@ pub fn tab_sensed(
         None if r.hovered() => t.accent,
         None => t.muted,
     };
-    draw(painter, rect.shrink(size * 0.24), icon, color);
+    draw(painter, glyph_box(rect), icon, color);
     if on {
         painter.hline(
             (rect.left() + 4.0)..=(rect.right() - 4.0),
-            rect.bottom() - 1.0,
+            crate::theme::px(ui, rect.bottom() - 1.0),
             Stroke::new(2.0, if alarm.is_some() { red } else { t.accent }),
         );
     }
+    badge(ui, rect, tab_action(icon));
     r
 }
+
+/// The shortcut a glyph button's icon stands for. Stop is left out: the
+/// simulation's, a box's and the Agent's differ, so its caller says
+/// ([`button_keyed`]).
+const fn button_action(icon: Icon) -> Option<Action> {
+    match icon {
+        Icon::Run | Icon::Pause => Some(Action::RunStop),
+        Icon::Step => Some(Action::Step),
+        Icon::Save => Some(Action::Save),
+        Icon::Deploy => Some(Action::Deploy),
+        Icon::Find => Some(Action::Find),
+        _ => None,
+    }
+}
+
+/// The view a tab's icon opens.
+const fn tab_action(icon: Icon) -> Option<Action> {
+    match icon {
+        Icon::Files => Some(Action::Files),
+        Icon::Devices => Some(Action::Devices),
+        Icon::Code => Some(Action::St),
+        Icon::Agent => Some(Action::Describe),
+        Icon::Io => Some(Action::Io),
+        Icon::Help => Some(Action::HelpTab),
+        Icon::Messages => Some(Action::Messages),
+        Icon::Trend => Some(Action::Trend),
+        _ => None,
+    }
+}
+
+/// The id of the flag [`set_hotkeys`] sets and the list [`badges`] reads.
+fn flag() -> egui::Id {
+    egui::Id::NULL.with("show-hotkeys")
+}
+
+/// Called at the start of each frame with Help › Show hotkeys: clears the
+/// last frame's badges and says whether this frame draws any.
+pub fn set_hotkeys(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| {
+        d.insert_temp(flag(), on);
+        d.insert_temp(flag().with("list"), Vec::<(Action, String, Rect)>::new());
+    });
+}
+
+/// The superscripts drawn this frame: the action, its text and where.
+#[must_use]
+#[cfg(test)]
+pub fn badges(ctx: &egui::Context) -> Vec<(Action, String, Rect)> {
+    ctx.data(|d| d.get_temp(flag().with("list"))).unwrap_or_default()
+}
+
+/// Writes `action`'s shortcut over the top-right corner of `rect`, while
+/// Help › Show hotkeys is on: every glyph control draws through here, so
+/// one that gains a shortcut shows it with no new code. Painted over, on
+/// an opaque chip, and no widget: nothing moves and no click is eaten.
+pub fn badge(ui: &egui::Ui, rect: Rect, action: Option<Action>) {
+    let ctx = ui.ctx();
+    let Some(action) = action else { return };
+    if !ctx.data(|d| d.get_temp::<bool>(flag())).unwrap_or(false) {
+        return;
+    }
+    let text = crate::hotkeys::short(ctx, action);
+    if text.is_empty() {
+        return;
+    }
+    let t = theme(ui);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.clone(), egui::FontId::proportional(BADGE), t.accent);
+    let chip = Rect::from_min_size(
+        Pos2::new(rect.right() - galley.size().x - 6.0, rect.top() - 3.0),
+        galley.size() + Vec2::new(6.0, 2.0),
+    );
+    let p = ui.painter().with_clip_rect(ctx.content_rect());
+    p.rect_filled(chip, CornerRadius::same(4), t.bg);
+    p.rect_stroke(
+        chip,
+        CornerRadius::same(4),
+        Stroke::new(1.0, t.accent.gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
+    p.galley(chip.min + Vec2::new(3.0, 1.0), galley, t.accent);
+    ctx.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<(Action, String, Rect)>>(flag().with("list"))
+            .push((action, text, chip));
+    });
+}
+
+/// The superscript's text size, points: smaller than the page's text,
+/// which it is no part of, and a chip on a glyph.
+const BADGE: f32 = 13.0;
 
 /// `icon` drawn in `rect` in `color`, outside a button (the header's
 /// signed-in role).
@@ -275,8 +428,36 @@ pub fn paint(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
     draw(p, rect, icon, color);
 }
 
+/// An open arrowhead at `tip` pointing along `dir` (a unit vector), its
+/// two strokes `size` long on each axis: one line, so the point is a
+/// clean corner and not two butted ends.
+fn head(p: &egui::Painter, tip: Pos2, dir: Vec2, size: f32, stroke: Stroke) {
+    let side = Vec2::new(-dir.y, dir.x);
+    p.add(egui::Shape::line(
+        vec![
+            tip - dir * size + side * size,
+            tip,
+            tip - dir * size - side * size,
+        ],
+        stroke,
+    ));
+}
+
+/// The one stroke weight of the glyph set, points (a glyph under
+/// [`SMALL_GLYPH`] a side takes 1.5).
+const ICON_STROKE: f32 = 2.0;
+const SMALL_GLYPH: f32 = 14.0;
+/// The side every glyph in a button or a tab is drawn at, centred on the
+/// button: the same size and the same optical middle across the toolbar
+/// and the tabs (a smaller button gets 55% of its side).
+const GLYPH: f32 = 18.0;
+
+fn glyph_box(button: Rect) -> Rect {
+    Rect::from_center_size(button.center(), Vec2::splat((button.width() * 0.55).min(GLYPH)))
+}
+
 fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
-    let w = (b.width() * 0.13).max(1.5);
+    let w = if b.width() < SMALL_GLYPH { 1.5 } else { ICON_STROKE };
     let stroke = Stroke::new(w, color);
     let (l, t, r, bt) = (b.left(), b.top(), b.right(), b.bottom());
     let c = b.center();
@@ -299,17 +480,21 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             }
         }
         Icon::Files => {
-            // The tab on the folder's back, then its front.
-            let top = t + b.height() * 0.3;
-            let tab = [
-                Pos2::new(l, top),
-                Pos2::new(l, t + b.height() * 0.1),
-                Pos2::new(l + b.width() * 0.4, t + b.height() * 0.1),
-                Pos2::new(l + b.width() * 0.52, top),
-            ];
-            p.add(egui::Shape::line(tab.to_vec(), stroke));
-            let front = Rect::from_min_max(Pos2::new(l, top), Pos2::new(r, bt - b.height() * 0.06));
-            p.rect_stroke(front, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
+            // One outline: the tab at the top left, its slope down to the
+            // body's top edge, the body.
+            let h = w * 0.5;
+            let (top, tab) = (t + b.height() * 0.3, t + b.height() * 0.1);
+            p.add(egui::Shape::closed_line(
+                vec![
+                    Pos2::new(l + h, bt - b.height() * 0.08),
+                    Pos2::new(l + h, tab),
+                    Pos2::new(l + b.width() * 0.38, tab),
+                    Pos2::new(l + b.width() * 0.52, top),
+                    Pos2::new(r - h, top),
+                    Pos2::new(r - h, bt - b.height() * 0.08),
+                ],
+                stroke,
+            ));
         }
         Icon::Devices => {
             let body = Rect::from_min_max(
@@ -324,14 +509,13 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             }
         }
         Icon::Io => {
-            let head = b.width() * 0.24;
+            let size = b.width() * 0.22;
+            let inset = w * 0.7;
             let (y1, y2) = (t + b.height() * 0.27, bt - b.height() * 0.27);
-            p.line_segment([Pos2::new(l, y1), Pos2::new(r, y1)], stroke);
-            p.line_segment([Pos2::new(r, y1), Pos2::new(r - head, y1 - head)], stroke);
-            p.line_segment([Pos2::new(r, y1), Pos2::new(r - head, y1 + head)], stroke);
-            p.line_segment([Pos2::new(l, y2), Pos2::new(r, y2)], stroke);
-            p.line_segment([Pos2::new(l, y2), Pos2::new(l + head, y2 - head)], stroke);
-            p.line_segment([Pos2::new(l, y2), Pos2::new(l + head, y2 + head)], stroke);
+            p.line_segment([Pos2::new(l, y1), Pos2::new(r - inset, y1)], stroke);
+            head(p, Pos2::new(r - inset, y1), Vec2::new(1.0, 0.0), size, stroke);
+            p.line_segment([Pos2::new(l + inset, y2), Pos2::new(r, y2)], stroke);
+            head(p, Pos2::new(l + inset, y2), Vec2::new(-1.0, 0.0), size, stroke);
         }
         Icon::Agent => {
             // A bubble with its tail at the bottom left, two lines in it.
@@ -478,15 +662,17 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             ];
             p.add(egui::Shape::line(tray.to_vec(), stroke));
             let (a, z) = if up {
-                (Pos2::new(c.x, bt - b.height() * 0.35), Pos2::new(c.x, t))
+                (
+                    Pos2::new(c.x, bt - b.height() * 0.35),
+                    Pos2::new(c.x, t + w * 0.7),
+                )
             } else {
                 (Pos2::new(c.x, t), Pos2::new(c.x, bt - b.height() * 0.35))
             };
             p.line_segment([a, z], stroke);
-            let head = b.width() * 0.28;
-            let dir = if up { -1.0 } else { 1.0 };
-            p.line_segment([z, z + Vec2::new(-head, -dir * head)], stroke);
-            p.line_segment([z, z + Vec2::new(head, -dir * head)], stroke);
+            let dir = Vec2::new(0.0, if up { -1.0 } else { 1.0 });
+            // The point's corner reaches a little past the tip.
+            head(p, z, dir, b.width() * 0.26, stroke);
         }
         Icon::Diagram => {
             // A block low on the left, one high on the right, a wire
@@ -508,6 +694,20 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 stroke,
             ));
         }
+        Icon::Trend => {
+            let at = |x: f32, y: f32| Pos2::new(l + (r - l) * x, t + (bt - t) * y);
+            let line = [
+                at(0.0, 0.7),
+                at(0.25, 0.3),
+                at(0.5, 0.6),
+                at(0.75, 0.15),
+                at(1.0, 0.45),
+            ];
+            for w in line.windows(2) {
+                p.line_segment([w[0], w[1]], stroke);
+            }
+            p.line_segment([at(0.0, 1.0), at(1.0, 1.0)], stroke);
+        }
         Icon::List => {
             for k in [0.14, 0.5, 0.86] {
                 let y = t + b.height() * k;
@@ -521,25 +721,16 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 p.rect_stroke(q, CornerRadius::same(1), stroke, egui::StrokeKind::Inside);
             }
         }
-        Icon::Hand => {
-            // A palm with four fingers up and a thumb out to the side.
-            let palm = Rect::from_min_max(
-                Pos2::new(l + b.width() * 0.12, t + b.height() * 0.5),
-                Pos2::new(r - b.width() * 0.12, bt),
-            );
-            p.rect_stroke(palm, CornerRadius::same(3), stroke, egui::StrokeKind::Inside);
-            for k in 0..4_u8 {
-                let x = palm.left() + palm.width() * (0.12 + 0.253 * f32::from(k));
-                let up = t + b.height() * if (1..=2).contains(&k) { 0.0 } else { 0.1 };
-                p.line_segment([Pos2::new(x, palm.top()), Pos2::new(x, up)], stroke);
-            }
-            p.line_segment(
-                [
-                    Pos2::new(palm.left(), palm.top() + palm.height() * 0.3),
-                    Pos2::new(l, c.y),
-                ],
-                stroke,
-            );
+        Icon::Pan => {
+            // A cross of two shafts, an arrowhead at each of its four ends.
+            let inset = w * 0.7;
+            let size = b.width() * 0.17;
+            p.line_segment([Pos2::new(l + inset, c.y), Pos2::new(r - inset, c.y)], stroke);
+            p.line_segment([Pos2::new(c.x, t + inset), Pos2::new(c.x, bt - inset)], stroke);
+            head(p, Pos2::new(r - inset, c.y), Vec2::new(1.0, 0.0), size, stroke);
+            head(p, Pos2::new(l + inset, c.y), Vec2::new(-1.0, 0.0), size, stroke);
+            head(p, Pos2::new(c.x, t + inset), Vec2::new(0.0, -1.0), size, stroke);
+            head(p, Pos2::new(c.x, bt - inset), Vec2::new(0.0, 1.0), size, stroke);
         }
         Icon::ZoomIn | Icon::ZoomOut => {
             // A lens up and to the left, its handle down and to the right.
@@ -554,19 +745,73 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 p.line_segment([lens - Vec2::new(0.0, bar), lens + Vec2::new(0.0, bar)], stroke);
             }
         }
-        Icon::Back | Icon::Forward => {
-            // A shaft across the middle, an open arrowhead at one end.
-            let (from, to) = if icon == Icon::Back { (r, l) } else { (l, r) };
-            let dir = if icon == Icon::Back { 1.0 } else { -1.0 };
-            p.line_segment([Pos2::new(from, c.y), Pos2::new(to, c.y)], stroke);
-            let head = b.width() * 0.4;
-            p.line_segment(
-                [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y - head)],
+        Icon::Up | Icon::Down => {
+            // A shaft down the middle, an open arrowhead at one end.
+            let inset = w * 0.7;
+            let (from, to, dir) = if icon == Icon::Up {
+                (bt, t + inset, -1.0)
+            } else {
+                (t, bt - inset, 1.0)
+            };
+            p.line_segment([Pos2::new(c.x, from), Pos2::new(c.x, to)], stroke);
+            head(
+                p,
+                Pos2::new(c.x, to),
+                Vec2::new(0.0, dir),
+                b.height() * 0.36,
                 stroke,
             );
-            p.line_segment(
-                [Pos2::new(to, c.y), Pos2::new(to + dir * head, c.y + head)],
+        }
+        Icon::Palette => {
+            // The board, and three wells of paint on it.
+            let rad = b.width() * 0.46;
+            p.circle_stroke(c, rad, stroke);
+            for (dx, dy) in [(-0.2, -0.16), (0.12, -0.24), (0.24, 0.06)] {
+                p.circle_filled(
+                    Pos2::new(c.x + b.width() * dx, c.y + b.height() * dy),
+                    w * 0.9,
+                    color,
+                );
+            }
+            p.circle_stroke(
+                Pos2::new(c.x - b.width() * 0.12, c.y + b.height() * 0.2),
+                w * 1.1,
                 stroke,
+            );
+        }
+        Icon::Back | Icon::Forward => {
+            // A shaft across the middle, an open arrowhead at one end.
+            let inset = w * 0.7;
+            let (from, to, dir) = if icon == Icon::Back {
+                (r, l + inset, -1.0)
+            } else {
+                (l, r - inset, 1.0)
+            };
+            p.line_segment([Pos2::new(from, c.y), Pos2::new(to, c.y)], stroke);
+            head(
+                p,
+                Pos2::new(to, c.y),
+                Vec2::new(dir, 0.0),
+                b.width() * 0.36,
+                stroke,
+            );
+        }
+        Icon::ZoomFit => {
+            // The lens and handle of Find, a small frame in the lens.
+            let rad = b.width() * 0.32;
+            let at = Pos2::new(l + rad + w * 0.5, t + rad + w * 0.5);
+            p.circle_stroke(at, rad, stroke);
+            let d = rad * std::f32::consts::FRAC_1_SQRT_2;
+            p.line_segment(
+                [Pos2::new(at.x + d, at.y + d), Pos2::new(r, bt)],
+                Stroke::new(w * 1.3, color),
+            );
+            let side = rad * 0.95;
+            p.rect_stroke(
+                Rect::from_center_size(at, Vec2::splat(side)),
+                CornerRadius::same(1),
+                Stroke::new(w * 0.8, color),
+                egui::StrokeKind::Middle,
             );
         }
         Icon::Find => {
@@ -583,81 +828,65 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
         Icon::Deploy => {
             // A shaft from the left edge, an arrowhead at the right.
             let shaft = Stroke::new(w * 1.3, color);
-            p.line_segment([Pos2::new(l, c.y), Pos2::new(r - w, c.y)], shaft);
-            let head = b.width() * 0.36;
-            p.line_segment([Pos2::new(r, c.y), Pos2::new(r - head, c.y - head)], shaft);
-            p.line_segment([Pos2::new(r, c.y), Pos2::new(r - head, c.y + head)], shaft);
+            let tip = Pos2::new(r - w * 0.9, c.y);
+            p.line_segment([Pos2::new(l, c.y), tip], shaft);
+            head(
+                p,
+                tip,
+                Vec2::new(1.0, 0.0),
+                b.height().min(b.width()) * 0.36,
+                shaft,
+            );
         }
         Icon::Wrap => {
             // A full line, a second that turns down and back with an
             // arrowhead, and the short start of a third.
             let (y1, y2, y3) = (t + b.height() * 0.12, c.y, bt - b.height() * 0.12);
-            let turn = r - w;
+            let turn = r - w * 0.5;
+            let back = c.x + w * 0.7;
             p.line_segment([Pos2::new(l, y1), Pos2::new(r, y1)], stroke);
-            p.line_segment([Pos2::new(l, y2), Pos2::new(turn, y2)], stroke);
-            p.line_segment([Pos2::new(turn, y2), Pos2::new(turn, y3)], stroke);
-            p.line_segment([Pos2::new(turn, y3), Pos2::new(c.x, y3)], stroke);
-            let head = b.width() * 0.22;
-            p.line_segment([Pos2::new(c.x, y3), Pos2::new(c.x + head, y3 - head)], stroke);
-            p.line_segment([Pos2::new(c.x, y3), Pos2::new(c.x + head, y3 + head)], stroke);
-            p.line_segment([Pos2::new(l, y3), Pos2::new(l + b.width() * 0.3, y3)], stroke);
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(l, y2),
+                    Pos2::new(turn, y2),
+                    Pos2::new(turn, y3),
+                    Pos2::new(back, y3),
+                ],
+                stroke,
+            ));
+            head(
+                p,
+                Pos2::new(back, y3),
+                Vec2::new(-1.0, 0.0),
+                b.width() * 0.16,
+                stroke,
+            );
+            p.line_segment([Pos2::new(l, y3), Pos2::new(l + b.width() * 0.26, y3)], stroke);
         }
-        Icon::HardHat => {
-            // The dome over the brim, a ridge up its middle.
-            let radius = b.width() * 0.4;
-            let base = bt - b.height() * 0.22;
+        Icon::User => {
+            // A round head over rounded shoulders.
+            let head = b.width() * 0.2;
+            p.circle_filled(Pos2::new(c.x, t + b.height() * 0.3), head, color);
+            let radius = b.width() * 0.36;
+            let base = bt - b.height() * 0.04;
             let n = 16;
-            let mut dome: Vec<Pos2> = (0..=n)
+            let mut body: Vec<Pos2> = (0..=n)
                 .map(|k| {
                     #[allow(clippy::cast_precision_loss)]
                     let a = std::f32::consts::PI * (k as f32 / n as f32);
-                    Pos2::new(c.x - radius * a.cos(), base - radius * a.sin())
+                    Pos2::new(c.x - radius * a.cos(), base - radius * 0.9 * a.sin())
                 })
                 .collect();
-            dome.push(Pos2::new(c.x + radius, base));
-            p.add(egui::Shape::convex_polygon(dome, color, Stroke::NONE));
-            let brim = Rect::from_min_max(Pos2::new(l, base), Pos2::new(r, base + w * 1.4));
-            p.rect_filled(brim, CornerRadius::same(1), color);
-            p.line_segment(
-                [Pos2::new(c.x, base - radius), Pos2::new(c.x, base)],
-                Stroke::new(w * 0.7, Color32::from_black_alpha(90)),
-            );
-        }
-        Icon::Tools => {
-            // The screwdriver from top left to bottom right: a thick
-            // handle low, a thin shaft up to its tip.
-            let thin = Stroke::new(w, color);
-            let thick = Stroke::new(w * 2.6, color);
-            let a = Pos2::new(l + w, t + w);
-            let z = Pos2::new(r - w, bt - w);
-            let mid = a + (z - a) * 0.55;
-            p.line_segment([a, mid], thin);
-            p.line_segment([mid, z], thick);
-            // The wrench from bottom left to top right: a shaft and an
-            // open jaw at the top.
-            let wa = Pos2::new(l + w * 1.5, bt - w * 1.5);
-            let jaw = Pos2::new(r - b.width() * 0.22, t + b.height() * 0.22);
-            p.line_segment([wa, jaw], Stroke::new(w * 1.4, color));
-            let radius = b.width() * 0.2;
-            let n = 12;
-            let ring: Vec<Pos2> = (0..=n)
-                .map(|k| {
-                    // From the shaft's side round to the gap facing up-right.
-                    #[allow(clippy::cast_precision_loss)]
-                    let ang = std::f32::consts::FRAC_PI_4
-                        + 0.9
-                        + (k as f32 / n as f32) * (std::f32::consts::TAU - 1.8);
-                    Pos2::new(jaw.x + radius * ang.cos(), jaw.y - radius * ang.sin())
-                })
-                .collect();
-            p.add(egui::Shape::line(ring, Stroke::new(w * 1.2, color)));
+            body.push(Pos2::new(c.x + radius, base));
+            p.add(egui::Shape::convex_polygon(body, color, Stroke::NONE));
         }
         Icon::Code => {
             // Two angle brackets, each a chevron a third of the width.
-            let dx = b.width() * 0.3;
+            // Apart, or the pair reads as a diamond.
+            let dx = b.width() * 0.26;
             let dy = b.height() * 0.38;
-            let la = l + w;
-            let ra = r - w;
+            let la = l + w * 0.7;
+            let ra = r - w * 0.7;
             p.add(egui::Shape::line(
                 vec![
                     Pos2::new(la + dx, c.y - dy),
@@ -721,6 +950,35 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             ));
             p.rect_stroke(front, CornerRadius::same(2), stroke, egui::StrokeKind::Inside);
         }
+        Icon::Edit => {
+            // A pencil on the diagonal: its tip at the lower left, a
+            // shoulder where the point ends, the body to the upper right.
+            let u = b.width();
+            let d = Vec2::new(1.0, -1.0).normalized();
+            let n = Vec2::new(1.0, 1.0).normalized();
+            let tip = Pos2::new(l + u * 0.06, bt - u * 0.06);
+            let hw = u * 0.15;
+            let shoulder = tip + d * u * 0.34;
+            let end = tip + d * u * 1.22;
+            p.add(egui::Shape::closed_line(
+                vec![
+                    tip,
+                    shoulder + n * hw,
+                    end + n * hw,
+                    end - n * hw,
+                    shoulder - n * hw,
+                ],
+                stroke,
+            ));
+            p.line_segment([shoulder + n * hw, shoulder - n * hw], stroke);
+        }
+        Icon::Apply => {
+            let u = b.width();
+            let a = Pos2::new(l + u * 0.12, t + b.height() * 0.55);
+            let m = Pos2::new(l + u * 0.4, bt - b.height() * 0.15);
+            let e = Pos2::new(r - u * 0.08, t + b.height() * 0.15);
+            p.add(egui::Shape::line(vec![a, m, e], stroke));
+        }
         Icon::Clear => {
             // A bin: the lid and its handle over a tapering body.
             let lid = t + b.height() * 0.22;
@@ -749,7 +1007,7 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             p.line_segment([c + Vec2::new(-k, k), c + Vec2::new(k, -k)], stroke);
         }
         Icon::Help => {
-            p.circle_stroke(c, b.width() * 0.5, stroke);
+            p.circle_stroke(c, b.width() * 0.5 - w * 0.5, stroke);
             p.text(
                 c + Vec2::new(0.0, -w * 0.2),
                 egui::Align2::CENTER_CENTER,

@@ -70,7 +70,7 @@ pub struct PaneLayout {
     pub left: bool,
     pub right: bool,
     pub trend: bool,
-    /// The Messages under the left pane's tab are open.
+    /// The bottom panel shows its Messages tab, not the Trend.
     pub msgs: bool,
     pub sizes: Sizes,
 }
@@ -131,7 +131,7 @@ pub struct Preset {
 /// The ready-made layouts, the page's first arrangement among them.
 #[must_use]
 pub fn presets() -> Vec<Preset> {
-    use Pane::{Claude, Code, Devices, Files, History, Io};
+    use Pane::{Claude, Code, Devices, Files, Help, Io};
     let base = PaneLayout::default();
     vec![
         Preset {
@@ -143,7 +143,7 @@ pub fn presets() -> Vec<Preset> {
             name: "Programming",
             tip: "The Describe tab on the left and the code on the right, with the trend along the bottom.",
             layout: PaneLayout {
-                lefts: vec![Claude, Files, History],
+                lefts: vec![Claude, Files, Help],
                 rights: vec![Code, Io, Devices],
                 pane: Claude,
                 side: Code,
@@ -159,7 +159,7 @@ pub fn presets() -> Vec<Preset> {
             name: "Commissioning",
             tip: "The devices on the left and the live I/O on the right, with the trend along the bottom.",
             layout: PaneLayout {
-                lefts: vec![Devices, Files, Claude, Code, History],
+                lefts: vec![Devices, Files, Claude, Code, Help],
                 rights: vec![Io],
                 pane: Devices,
                 side: Io,
@@ -608,14 +608,17 @@ impl Layouts {
         let list_h = if on_box.is_some() { 150.0 } else { 240.0 };
         let m = egui::Modal::new(egui::Id::unique("pane-layouts")).show(ctx, |ui| {
             let t = theme(ui);
-            ui.set_max_width(360.0);
+            // One width for every row: the presets, the name and its Save.
+            ui.set_width(320.0);
             ui.label(RichText::new("Pane layouts").strong().size(20.0))
                 .tip("Where the side tabs sit, which panes are open and how wide they are, kept by name.");
             ui.add_space(6.0);
             ui.label(RichText::new("Ready-made").color(t.muted))
                 .tip("Layouts that come with the page.");
             for p in presets() {
-                let r = ui.add(egui::Button::new(p.name).min_size(wide)).tip(p.tip);
+                let r = ui
+                    .add(egui::Button::new(p.name).min_size(Vec2::new(ui.available_width(), wide.y)))
+                    .tip(p.tip);
                 hits.push((format!("layouts preset {}", p.name.to_lowercase()), r.rect));
                 if r.clicked() {
                     chrome.apply(&p.layout);
@@ -724,7 +727,7 @@ impl Layouts {
                         egui::TextEdit::singleline(&mut self.name)
                             .hint_text("Name")
                             .char_limit(MAX_NAME)
-                            .desired_width(wide.x - 8.0),
+                            .desired_width((ui.available_width() - 72.0).max(80.0)),
                     )
                     .tip("A name for the panes as they are now. A name already in the list replaces that layout.");
                 hits.push(("layouts name".to_string(), f.rect));

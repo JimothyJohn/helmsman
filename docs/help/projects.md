@@ -9,17 +9,17 @@ shows them.
 
 ## Files
 
-- **The heading** at the top of the Files tab says where the projects are
-  kept: "Files in this browser" on the simulation page, "Files on the box"
-  when you are connected to one. Under it, **My Files** holds your own
+- **The heading** at the top of the Files tab on the simulation page says
+  the projects are kept in this browser; a box's tab has none. **My Files** holds your own
   projects and **Examples** the built-in ones (a box has none, so it shows
   only My Files). Each shows how many it holds; a click on its name folds
   it away or opens it again, and the editor remembers which are folded.
 
 - **New project** and **Copy project** are in the File menu; a right-click
   on the pane's blank space offers New project too, and a right-click on a
-  project offers Copy, Rename and Delete. A copy of an example is how
-  you begin from one.
+  project offers Copy, Rename and Delete. A new project opens on
+  `main.st`, a small program ready to describe or edit. A copy of an
+  example is how you begin from one.
 - **New file** is the button under the files. A file is Structured Text
   (`.st`), the I/O map, or one of the editor's own. A double click on a
   file opens it on the Code tab.

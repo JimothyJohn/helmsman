@@ -185,6 +185,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, list: &mut IoList) {
         n => format!("Name the I/O first ({n} points)"),
     };
     let fold = egui::CollapsingHeader::new(RichText::new(title).size(size))
+        .icon(crate::theme::fold_icon)
         .id_salt("io names")
         .default_open(false)
         .show(ui, |ui| {

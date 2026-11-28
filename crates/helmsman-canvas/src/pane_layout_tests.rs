@@ -28,21 +28,18 @@ fn whole(l: &PaneLayout) {
 
 #[test]
 fn a_tab_placed_in_its_own_pane_moves_and_the_shown_one_stays() {
-    use Pane::{Claude, Code, Devices, Files, History, Io};
+    use Pane::{Claude, Code, Devices, Files, Help, Io};
     let mut c = Chrome::default();
-    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files, History]);
-    c.place(History, false, Some(Claude));
-    assert_eq!(
-        c.lefts,
-        [History, Claude, Code, Io, Devices, Files],
-        "to the front"
-    );
-    c.place(History, false, None);
-    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files, History], "to the end");
+    // Help (Nick, 2026-11-26) joins at the end.
+    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Files, Help]);
+    c.place(Files, false, Some(Claude));
+    assert_eq!(c.lefts, [Files, Claude, Code, Io, Devices, Help], "to the front");
+    c.place(Files, false, None);
+    assert_eq!(c.lefts, [Claude, Code, Io, Devices, Help, Files], "to the end");
     c.place(Code, false, Some(Files));
-    assert_eq!(c.lefts, [Claude, Io, Devices, Code, Files, History], "rightwards");
+    assert_eq!(c.lefts, [Claude, Io, Devices, Help, Code, Files], "rightwards");
     c.place(Files, false, Some(Io));
-    assert_eq!(c.lefts, [Claude, Files, Io, Devices, Code, History], "leftwards");
+    assert_eq!(c.lefts, [Claude, Files, Io, Devices, Help, Code], "leftwards");
     // Onto itself, or before the tab it is already before: nothing moves.
     let was = c.lefts.clone();
     c.place(Io, false, Some(Io));
@@ -69,7 +66,7 @@ fn a_tab_placed_in_the_other_pane_docks_at_that_place() {
 
 #[test]
 fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
-    use Pane::{Claude, Code, History};
+    use Pane::{Claude, Code};
     let mut c = Chrome::default();
     c.hide(Claude);
     assert_eq!(c.hidden, [Claude]);
@@ -85,10 +82,11 @@ fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
     c.show(Claude);
     assert!(c.hidden.is_empty() && c.showing(Claude));
     assert_eq!(c.lefts.last(), Some(&Claude));
-    // The last tab of a pane hidden: the one before shows.
+    // The last tab of a pane hidden: the one before shows (Help, last
+    // of the defaults since 2026-11-26).
     c.pane = Claude;
     c.hide(Claude);
-    assert_eq!(c.pane, History);
+    assert_eq!(c.pane, Pane::Help);
     // Every tab hidden: nothing to show, and a toggle still brings one back.
     for p in Pane::ALL {
         c.hide(p);
@@ -103,7 +101,7 @@ fn a_hidden_tab_leaves_its_pane_and_comes_back_when_shown() {
 fn the_browser_keeps_hidden_tabs_and_a_text_from_before_reads_as_none() {
     let mut c = Chrome::default();
     c.dock(Pane::Io, true);
-    c.hide(Pane::History);
+    c.hide(Pane::Code);
     c.hide(Pane::Files);
     c.place(Pane::Devices, false, Some(Pane::Claude));
     let back = Chrome::restored(&c.saved());
@@ -126,10 +124,14 @@ fn applying_a_layout_arranges_the_panes_and_asks_for_its_sizes() {
     c.wrap = false;
     let p = presets();
     let programming = &p.iter().find(|p| p.name == "Programming").unwrap().layout;
+    assert!(
+        !c.msgs,
+        "the bottom panel shows the Trend first (Nick, 2026-11-26)"
+    );
     c.apply(programming);
     assert_eq!(c.layout().lefts, programming.lefts);
     assert_eq!(c.side, Pane::Code);
-    assert!(c.msgs, "the Messages stay as they were");
+    assert!(!c.msgs, "the bottom panel's tab stays as it was");
     assert_eq!(
         c.resize,
         Some(Sizes {
@@ -161,7 +163,7 @@ fn every_ready_made_layout_is_whole_and_default_is_the_first_page() {
 fn layouts_go_to_a_file_and_come_back_the_same() {
     let mut c = Chrome::default();
     c.dock(Pane::Io, true);
-    c.hide(Pane::History);
+    c.hide(Pane::Files);
     c.left = false;
     c.msgs = false;
     c.sizes = Sizes {
@@ -271,7 +273,7 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
         r#"{{"format":"{FORMAT}","layouts":[
             7, null, {{}}, {{"name":""}}, {{"name":17}},
             {{"name":"Odd","left":["code","code","../../etc/passwd",5,"io"],"right":"io",
-              "hidden":["io","history"],"left_shows":"nope","right_shows":"files",
+              "hidden":["io","devices"],"left_shows":"nope","right_shows":"files",
               "left_open":"yes","bottom_shows":"cellar","messages_open":"yes",
               "left_width":1e30,"right_width":-5,"bottom_height":"tall"}},
             {{"name":"Default","left":["files"]}},
@@ -296,13 +298,13 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
         [Pane::Code, Pane::Io],
         "a tab once, unknown ones dropped"
     );
-    assert_eq!(odd.hidden, [Pane::History], "io kept its first place");
+    assert_eq!(odd.hidden, [Pane::Devices], "io kept its first place");
     assert!(odd.rights.is_empty(), "a list that is not a list is empty");
     assert_eq!(odd.pane, Pane::Claude, "an unknown shown tab: the first page's");
     assert!(odd.left, "a flag that is not a flag keeps the first page's value");
     assert!(
-        odd.msgs,
-        "a flag that is not a flag: Messages open, as the first page has them"
+        !odd.msgs,
+        "a flag that is not a flag: the bottom panel on the Trend, as the first page has it"
     );
     assert_eq!(
         odd.sizes,
@@ -331,8 +333,9 @@ fn a_hostile_file_is_refused_or_held_to_the_rules() {
 }
 
 /// A layout file written when the bottom panel had tabs (`bottom_shows`)
-/// still reads: its panes come back as they were and the Messages are
-/// open, as the first page has them.
+/// still reads: its panes come back as they were. The Messages' key of
+/// those files, `messages_open`, still reads into the tab the bottom panel
+/// shows (Nick, 2026-11-26).
 #[test]
 fn a_layout_file_from_the_tabbed_bottom_panel_still_reads() {
     let file = format!(
@@ -347,12 +350,24 @@ fn a_layout_file_from_the_tabbed_bottom_panel_still_reads() {
     assert_eq!(l.lefts[..2], [Pane::Files, Pane::Claude]);
     assert_eq!(l.pane, Pane::Files);
     assert_eq!(l.side, Pane::Code);
-    assert!(l.right && !l.trend && l.msgs);
+    assert!(l.right && !l.trend);
     assert_eq!((l.sizes.left, l.sizes.bottom), (Some(300.0), Some(210.0)));
-    // And one that keeps the Messages folded keeps them so.
-    let mut c = Chrome::default();
-    c.msgs = false;
-    let json = c.layout().to_json("Folded").to_string();
-    let file = format!(r#"{{"format":"{FORMAT}","layouts":[{json}]}}"#);
-    assert!(!parse(&file).unwrap()[0].1.msgs);
+    // `messages_open`, from the days the Messages were under the left
+    // pane, reads into the bottom panel's tab either way.
+    for open in [true, false] {
+        let file = format!(
+            r#"{{"format":"{FORMAT}","layouts":[
+                {{"name":"Older","left":["files","claude"],"left_shows":"files","messages_open":{open}}}
+            ]}}"#
+        );
+        assert_eq!(parse(&file).unwrap()[0].1.msgs, open, "messages_open {open}");
+    }
+    // And what this page writes comes back the same.
+    for msgs in [true, false] {
+        let mut c = Chrome::default();
+        c.msgs = msgs;
+        let json = c.layout().to_json("Mine").to_string();
+        let file = format!(r#"{{"format":"{FORMAT}","layouts":[{json}]}}"#);
+        assert_eq!(parse(&file).unwrap()[0].1.msgs, msgs);
+    }
 }

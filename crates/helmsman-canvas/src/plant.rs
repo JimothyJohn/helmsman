@@ -448,7 +448,7 @@ impl PlantUi {
         for s in &self.states {
             let (dot, tail) = match &s.measured_by {
                 Some(m) => (
-                    RichText::new("●").color(t.accent),
+                    RichText::new("●").color(t.ink(crate::st_view::brand::GREEN)),
                     format!(
                         "← {} {}{}",
                         m.device,

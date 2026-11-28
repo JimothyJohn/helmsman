@@ -28,6 +28,11 @@ pub struct Find {
     /// `start_button`): the query came from a signal's card, not from
     /// typing. Typing in the box ends it.
     pub word: bool,
+    /// The whole-words toggle (Nick, 2026-11-25: `slew` matched inside
+    /// his `slews`): `None` until the toggle is pressed, when a plain
+    /// identifier query matches whole words and anything else matches
+    /// as typed; `Some` is the engineer's choice.
+    pub whole: Option<bool>,
     /// The replace row under the find box, while it is open: what a
     /// match is replaced with.
     pub replace: Option<String>,
@@ -94,15 +99,28 @@ impl Find {
         }
     }
 
+    /// Whether only whole words match: asked by a card, chosen with the
+    /// toggle, or by default for a plain identifier.
+    #[must_use]
+    pub fn whole_words(&self) -> bool {
+        self.word || self.whole.unwrap_or_else(|| plain_name(&self.query))
+    }
+
     /// Where this box's query occurs in `text`.
     #[must_use]
     pub fn all(&self, text: &str) -> Vec<Range<usize>> {
-        if self.word {
+        if self.whole_words() {
             names(text, &self.query)
         } else {
             matches(text, &self.query)
         }
     }
+}
+
+/// A query of letters, digits and underscores only, and not empty.
+#[must_use]
+pub fn plain_name(query: &str) -> bool {
+    !query.is_empty() && query.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// [`matches`] kept to whole names: a match with a letter, a digit or an
@@ -217,6 +235,11 @@ pub fn row(
     let mut replace: Option<bool> = None;
     let owned = buf.as_str().to_owned();
     let text = owned.as_str();
+    // The toggle's choice outlives the box, for the session.
+    let pref_id = egui::Id::NULL.with("find-whole-words");
+    if f.whole.is_none() {
+        f.whole = ui.data(|d| d.get_temp::<bool>(pref_id));
+    }
     // Stacked, each part on a row of its own: the field, then the count
     // and the buttons. In one wrapping row the buttons were laid over the
     // field and over the code's first line, their second row given no
@@ -285,6 +308,18 @@ pub fn row(
             .clicked()
         {
             f.step = 1;
+            f.reveal = true;
+        }
+        let whole = f.whole_words();
+        if ui
+            .add(egui::Button::new(RichText::new("ab").underline()).selected(whole))
+            .tip("Whole words only")
+            .clicked()
+        {
+            f.whole = Some(!whole);
+            f.word = false;
+            ui.data_mut(|d| d.insert_temp(pref_id, !whole));
+            f.current = 0;
             f.reveal = true;
         }
         if editable

@@ -31,7 +31,7 @@ the same order. Copy is taken from `docs/index.html`; change it there first.
 ## The app footage is real
 
 `assets/app-latch.mp4` is the published playground (`docs/playground/`)
-running the Start/stop latch example, recorded headless:
+running the Start/stop latch example, recorded headless. It is not committed (no video goes in git); Nick's copy is under `~/Movies/helmsman-marketing/`, laid out like this repo, until the file server exists. To record it:
 
     python3 -I marketing/helmsman-ad/tools/capture.py docs target/ad-capture
     (cd target/ad-capture && ffmpeg -f concat -safe 0 -i frames.txt -vf fps=30 \

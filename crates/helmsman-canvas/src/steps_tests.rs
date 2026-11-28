@@ -192,6 +192,12 @@ fn an_answer_that_ran_out_of_room_goes_in_steps_written_once_at_the_end() {
 
     reply(&mut v, &answer(&horn_latched(), &latches()));
     assert!(!v.instruct.busy());
+    assert_eq!(
+        v.proj.files["main.st"], LAMP,
+        "held: the last step waits for Apply"
+    );
+    assert_eq!(v.proj.revisions().len(), revs);
+    crate::instruct_tests::apply(&mut v);
     let o = v.instruct.outcome.as_ref().unwrap();
     assert_eq!(o.kind, Kind::Applied, "{o:?}");
     assert!(
@@ -350,6 +356,8 @@ fn a_big_ask_is_planned_first_and_one_step_needs_no_approval() {
             &latches(),
         ),
     );
+    assert_eq!(v.proj.files["main.st"], LAMP, "held, not written");
+    crate::instruct_tests::apply(&mut v);
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
 }
 
@@ -424,6 +432,8 @@ fn a_plan_answered_with_code_is_taken_as_the_answer() {
     send(&mut v, "add a horn and latch the lamp");
     cut_off(&mut v);
     reply(&mut v, &answer(&horn(), &horn_follows()));
+    assert_eq!(v.proj.files["main.st"], LAMP, "held, not written");
+    crate::instruct_tests::apply(&mut v);
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
     assert_eq!(v.proj.files["main.st"], horn());
 }

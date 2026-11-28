@@ -7,7 +7,7 @@
 
 use eframe::egui::{self, RichText, Vec2};
 
-use crate::device_form::{self, Kind, PROFILES, check_settings, param, schema, set_param};
+use crate::device_form::{self, Kind, PROFILES, check_settings_for, param, schema, set_param};
 use crate::devices::{DeviceAct, DevicesUi, NewDevice, PROTOCOLS, QuickAdd};
 use crate::editor::Chrome;
 use crate::st_view::TAP;
@@ -19,11 +19,6 @@ const RED: egui::Color32 = egui::Color32::from_rgb(255, 110, 100);
 const WIDTH: f32 = 520.0;
 
 impl DevicesUi {
-    /// Opens the form on `d`.
-    pub fn open(&mut self, d: NewDevice) {
-        self.adding = Some(d);
-    }
-
     /// The form. Returns the wiring once Add is pressed with rows that pass.
     pub fn form_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
         let mut d = self.adding.clone()?;
@@ -47,6 +42,9 @@ impl DevicesUi {
             fields(ui, chrome, &mut d, &eds_files, simple);
             if d.editing.is_none() {
                 ui.add_space(6.0);
+                let target = crate::device_vendor::Target::new(d.endpoint.trim(), 0, 0, "");
+                self.vendor.show_row(ui, chrome, &target);
+                ui.add_space(6.0);
                 ui.add(
                     egui::Label::new(
                         RichText::new("Its inputs and outputs are added under it on the Devices tab, with + Add I/O.")
@@ -57,7 +55,7 @@ impl DevicesUi {
             }
             if let Some(err) = &d.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(crate::theme::theme(ui).ink(RED))).wrap());
+                crate::messages::error_link(ui, chrome, "device error", err, crate::theme::theme(ui).ink(RED));
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -81,10 +79,18 @@ impl DevicesUi {
                         Some(old) => device_form::map_without(&self.map, old),
                         None => self.map.clone(),
                     };
+                    // Spaces are stored as underscores.
+                    d.name = d.name.trim().replace(' ', "_");
                     let taken = map.devices.iter().any(|x| x.name == d.name);
-                    let w = check_settings(d.driver(), &d.params)
+                    let on_skipper = !self.skipper.is_empty();
+                    let w = check_settings_for(d.driver(), &d.params, d.editing.is_some())
                         .and_then(|()| {
-                            if taken {
+                            if on_skipper && d.name.len() > crate::skipper_map::NAME_MAX {
+                                Err(format!(
+                                    "A Skipper names a device in at most {} characters.",
+                                    crate::skipper_map::NAME_MAX
+                                ))
+                            } else if taken {
                                 Err(format!("A device called {} is in io.map already.", d.name))
                             } else {
                                 d.line()
@@ -133,8 +139,9 @@ impl DevicesUi {
                 ui.label("Name").tip("What the program calls the device. A channel you add is named after it: rio and DI-04 give rio_di_04.");
                 let r = ui
                     .add(egui::TextEdit::singleline(&mut q.name).desired_width(200.0))
-                    .tip("The device's name in the program: a letter, then letters, digits or _.");
+                    .tip("The device's name in the program: a letter, then letters, digits or _. Spaces become _; at most 32 characters.");
                 chrome.hit("quick name", r.rect);
+                tidy_name(&mut q.name);
             });
             ui.add_space(6.0);
             match &q.profile {
@@ -142,7 +149,7 @@ impl DevicesUi {
                     ui.label(RichText::new("Reading its channels from the device library…").color(theme(ui).muted));
                 }
                 Some(Err(why)) => {
-                    ui.add(egui::Label::new(RichText::new(why).color(theme(ui).ink(RED))).wrap());
+                    crate::messages::error_link(ui, chrome, "device error", why, theme(ui).ink(RED));
                 }
                 Some(Ok((_, skim))) => {
                     let n = skim.channels.len();
@@ -165,7 +172,7 @@ impl DevicesUi {
             }
             if let Some(err) = &q.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(theme(ui).ink(RED))).wrap());
+                crate::messages::error_link(ui, chrome, "device error", err, theme(ui).ink(RED));
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -180,7 +187,7 @@ impl DevicesUi {
                     .tip("Closes the form. Nothing is added.");
                 chrome.hit("quick cancel", no.rect);
                 if ok.clicked() {
-                    match quick_add(&q, &self.map) {
+                    match quick_add(&q, &self.map, !self.skipper.is_empty()) {
                         Ok(a) => {
                             out = Some(DeviceAct::Quick(a));
                             done = true;
@@ -197,6 +204,82 @@ impl DevicesUi {
             self.quick = None;
         } else {
             self.quick = Some(q);
+        }
+        out
+    }
+
+    /// The name form of a found device the library does not know (a click
+    /// on it in the scan's list): only its name is asked. Add writes a
+    /// typed device at the address it answered from, the New device form's
+    /// defaults for its protocol.
+    pub fn named_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
+        let mut n = self.named.clone()?;
+        let mut out = None;
+        let mut done = false;
+        let m = crate::theme::near_pointer(ctx, "device-named").show(ctx, |ui| {
+            ui.set_min_width(WIDTH * 0.75);
+            ui.set_max_width(WIDTH * 0.75);
+            ui.label(RichText::new(format!("Add {}", n.title)).strong().size(20.0));
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Name").tip("What the program calls the device. A channel you add is named after it.");
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut n.name).desired_width(200.0))
+                    .tip("The device's name in the program: a letter, then letters, digits or _. Spaces become _; at most 32 characters.");
+                chrome.hit("named name", r.rect);
+                tidy_name(&mut n.name);
+            });
+            ui.add_space(6.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new("The library does not know this device, so it is added by its address. Its inputs and outputs are added under it, with + Add I/O.")
+                        .color(theme(ui).muted),
+                )
+                .wrap(),
+            );
+            if let Some(err) = &n.error {
+                ui.add_space(4.0);
+                crate::messages::error_link(ui, chrome, "device error", err, theme(ui).ink(RED));
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let ok = ui
+                    .add(egui::Button::new(RichText::new("Add").strong()).min_size(tall))
+                    .tip("Adds the device to io.map by the address it answered from.");
+                chrome.hit("named ok", ok.rect);
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Closes the form. Nothing is added.");
+                chrome.hit("named cancel", no.rect);
+                if ok.clicked() {
+                    let d = n.device();
+                    let w = if self.map.devices.iter().any(|x| x.name == d.name) {
+                        Err(format!("A device called {} is in io.map already.", d.name))
+                    } else {
+                        check_settings_for(d.driver(), &d.params, false)
+                            .and_then(|()| d.line())
+                            .and_then(|line| {
+                                device_form::wiring(&d.name, line, &d.points, &self.program, &self.map)
+                            })
+                    };
+                    match w {
+                        Ok(w) => {
+                            out = Some(DeviceAct::Add(w));
+                            done = true;
+                        }
+                        Err(e) => n.error = Some(e),
+                    }
+                } else if no.clicked() {
+                    done = true;
+                }
+            });
+        });
+        chrome.hit("named form", m.response.rect);
+        if done || crate::theme::escaped(&m) {
+            self.named = None;
+        } else {
+            self.named = Some(n);
         }
         out
     }
@@ -229,8 +312,12 @@ impl DevicesUi {
                     true
                 }
                 Some(Err(why)) if text != old => {
-                    ui.add(
-                        egui::Label::new(RichText::new(why).color(crate::theme::theme(ui).ink(RED))).wrap(),
+                    crate::messages::error_link(
+                        ui,
+                        chrome,
+                        "device error",
+                        why,
+                        crate::theme::theme(ui).ink(RED),
                     );
                     false
                 }
@@ -324,8 +411,8 @@ impl DevicesUi {
 
 /// Name, protocol, address, then the protocol's settings: one grid,
 /// labels on the left, and the device's io.map line under it. `simple`
-/// (an edit with Advanced off): the name alone; how the device is
-/// reached stays as it is.
+/// (an edit with Advanced off): the name and the address; the protocol
+/// and the timing stay as they are.
 fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: &[String], simple: bool) {
     let t = theme(ui);
     egui::Grid::new("device-fields")
@@ -339,22 +426,21 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
                 .tip(name_tip);
             chrome.hit("device name", n.rect);
             ui.end_row();
-            if simple {
-                return;
-            }
-            ui.label("Protocol").tip("How the controller talks to the device.");
-            ui.horizontal_wrapped(|ui| {
-                for (k, (driver, title, _, _)) in PROTOCOLS.iter().enumerate() {
-                    let r = ui
-                        .add(egui::Button::selectable(d.protocol == k, *title))
-                        .tip(format!("{title}, over Ethernet. Fills in its usual settings."));
-                    chrome.hit(format!("device {driver}"), r.rect);
-                    if r.clicked() {
-                        d.set_protocol(k);
+            if !simple {
+                ui.label("Protocol").tip("How the controller talks to the device.");
+                ui.horizontal_wrapped(|ui| {
+                    for (k, (driver, title, _, _)) in PROTOCOLS.iter().enumerate() {
+                        let r = ui
+                            .add(egui::Button::selectable(d.protocol == k, *title))
+                            .tip(format!("{title}, over Ethernet. Fills in its usual settings."));
+                        chrome.hit(format!("device {driver}"), r.rect);
+                        if r.clicked() {
+                            d.set_protocol(k);
+                        }
                     }
-                }
-            });
-            ui.end_row();
+                });
+                ui.end_row();
+            }
             let hint = PROTOCOLS.get(d.protocol).map_or("", |p| p.2);
             let addr_tip = format!(
                 "The device's IP address, e.g. {hint}, or its identity (mac=… or cip=…) so a new address never loses it."
@@ -365,6 +451,9 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
                 .tip(&addr_tip);
             chrome.hit("device endpoint", e.rect);
             ui.end_row();
+            if simple {
+                return;
+            }
             let driver = d.driver();
             for s in schema(driver) {
                 ui.label(s.label).tip(s.tip);
@@ -414,19 +503,10 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
             }
         });
     if simple {
-        ui.add(
-            egui::Label::new(
-                RichText::new(
-                    "How it is reached (protocol, address, timing) is under Advanced on the Devices tab.",
-                )
-                .color(t.muted),
-            )
-            .wrap(),
-        );
         return;
     }
-    if let Err(e) = check_settings(d.driver(), &d.params) {
-        ui.add(egui::Label::new(RichText::new(e).color(crate::theme::theme(ui).ink(RED))).wrap());
+    if let Err(e) = check_settings_for(d.driver(), &d.params, d.editing.is_some()) {
+        crate::messages::error_link(ui, chrome, "device error", &e, crate::theme::theme(ui).ink(RED));
     }
     // The line io.map gets, read-only.
     // One line, cut at the edge: a wrap would change the centred form's
@@ -441,15 +521,18 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
 
 /// What the quick form's Add writes, or why not: the name an identifier
 /// the map does not have yet, the profile as a project file, and the
-/// device line `device NAME device:PROFILE IDENTITY`. No signal: every
-/// channel is in the profile, and joins io.map when it is added under the
-/// device (`device_io.rs`).
+/// device line `device NAME device:PROFILE IDENTITY`, or the address it
+/// answered at when `at_address` (a Skipper's page: a Skipper does not
+/// look a device up by its identity). No signal: every channel is in the
+/// profile, and joins io.map when it is added under the device
+/// (`device_io.rs`).
 ///
 /// # Errors
 /// The name, in words.
 pub fn quick_add(
     q: &crate::devices::Quick,
     map: &helmsman_project::iomap::MapText,
+    at_address: bool,
 ) -> Result<QuickAdd, String> {
     let name = q.name.trim();
     if !helmsman_project::iomap::device_name_ok(name) {
@@ -472,7 +555,10 @@ pub fn quick_add(
         text: text.clone(),
         wiring: device_form::Wiring {
             device: name.to_string(),
-            device_line: format!("device {name} device:{stem} {}", q.identity),
+            device_line: format!(
+                "device {name} device:{stem} {}",
+                if at_address { &q.address } else { &q.identity }
+            ),
             signals: Vec::new(),
             replace: Vec::new(),
             declare: Vec::new(),
@@ -480,4 +566,12 @@ pub fn quick_add(
             extend: false,
         },
     })
+}
+
+/// A device name as it is typed: spaces stored as underscores, at most the
+/// 32 characters a Skipper's map takes.
+fn tidy_name(name: &mut String) {
+    if name.contains(' ') || name.chars().count() > 32 {
+        *name = name.replace(' ', "_").chars().take(32).collect();
+    }
 }

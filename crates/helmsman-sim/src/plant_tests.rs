@@ -34,6 +34,29 @@ fn run(p: &mut Plant, ms: u64, dt: u64, outs: &[(&str, Val)]) -> BTreeMap<String
     last
 }
 
+#[test]
+fn a_port_switched_off_is_not_driven_and_not_read_and_comes_back_on() {
+    let text = "heater h heat=on_h temp=t max=100 tau=1s\n";
+    let outs = [("on_h", Val::Bool(true))];
+    let mut p = plant(text);
+    let f = run(&mut p, 5000, 100, &outs);
+    assert!(num(&f, "t") > 90.0, "the heater runs");
+    let mut p = plant(&format!("{text}off t\n"));
+    let f = run(&mut p, 5000, 100, &outs);
+    assert!(!f.contains_key("t"), "an input that is off is never driven");
+    let mut p = plant(&format!("{text}off on_h\n"));
+    let f = run(&mut p, 5000, 100, &outs);
+    assert!(
+        num(&f, "t") < 21.0,
+        "an output that is off is not read: the heater stays cold"
+    );
+    let mut p = plant(text);
+    assert!(
+        num(&run(&mut p, 5000, 100, &outs), "t") > 90.0,
+        "taking the line out restores it"
+    );
+}
+
 fn num(f: &BTreeMap<String, Feed>, name: &str) -> f64 {
     match f[name].value {
         Some(Val::Num(x)) => x,

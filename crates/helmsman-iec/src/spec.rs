@@ -457,57 +457,6 @@ fn asserts(src: &str) -> Vec<Check> {
         .collect()
 }
 
-/// One `VAR_INPUT` or `VAR_OUTPUT` of a program, as declared: what
-/// [`declared_ports`] reads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Declared {
-    /// Upper case, as the parser holds an ST name.
-    pub name: String,
-    /// `VAR_INPUT` (else `VAR_OUTPUT`).
-    pub input: bool,
-    /// The type as written, upper case (`BOOL`; `ARRAY` for an array).
-    pub ty: String,
-    /// The `(* ... *)` comment on its declaration line, one line: what
-    /// the port is. Read the way an `ASSERT`'s words are ([`asserts`]).
-    pub what: Option<String>,
-}
-
-/// The inputs, then the outputs, of the first PROGRAM in `src`, each with
-/// the comment on its declaration line. Empty when `src` does not parse
-/// or holds no PROGRAM.
-#[must_use]
-pub fn declared_ports(src: &str) -> Vec<Declared> {
-    let Ok(unit) = ast::parse(src) else {
-        return Vec::new();
-    };
-    let Some(prog) = unit.pous.iter().find(|p| matches!(p.kind, PouKind::Program)) else {
-        return Vec::new();
-    };
-    let lines: Vec<&str> = src.lines().collect();
-    let read = |section: Section| {
-        prog.vars
-            .iter()
-            .filter(move |v| v.section == section)
-            .map(|v| {
-                let line = usize::try_from(v.pos.line).unwrap_or(0).saturating_sub(1);
-                Declared {
-                    name: v.name.clone(),
-                    input: section == Section::Input,
-                    ty: match &v.ty {
-                        TypeRef::Named(n, _) => n.to_ascii_uppercase(),
-                        TypeRef::Array { .. } => "ARRAY".to_string(),
-                        TypeRef::Str(..) => "STRING".to_string(),
-                    },
-                    what: lines.get(line).and_then(|l| first_comment(l)),
-                }
-            })
-            .collect::<Vec<_>>()
-    };
-    let mut out = read(Section::Input);
-    out.extend(read(Section::Output));
-    out
-}
-
 /// A port of the program declared in the test's wrong section
 /// ([`Outcome::Misdeclared`]), the first one.
 fn misdeclared(src: &str, ports: &[Port]) -> Option<Outcome> {
@@ -1606,28 +1555,6 @@ END_PROGRAM
         let single = super::plan([("main.st", main)]);
         assert_eq!(single.main, main);
         assert_eq!(single.tests, []);
-    }
-
-    #[test]
-    fn declared_ports_read_each_declaration_lines_comment() {
-        let src = "PROGRAM p\nVAR_INPUT\n  start : BOOL; (* on while start is pressed *)\n  level : INT;\nEND_VAR\nVAR_OUTPUT\n  pump : BOOL; // not a block comment\n  speed : REAL; (* set point,\n    in rpm *)\nEND_VAR\nVAR hidden : BOOL; (* not a port *) END_VAR\nEND_PROGRAM\n";
-        let ports = declared_ports(src);
-        let got: Vec<(&str, bool, &str, Option<&str>)> = ports
-            .iter()
-            .map(|p| (p.name.as_str(), p.input, p.ty.as_str(), p.what.as_deref()))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                ("START", true, "BOOL", Some("on while start is pressed")),
-                ("LEVEL", true, "INT", None),
-                ("PUMP", false, "BOOL", None),
-                // A comment that ends on a later line is not read.
-                ("SPEED", false, "REAL", None),
-            ]
-        );
-        assert_eq!(declared_ports("not st at all"), []);
-        assert_eq!(declared_ports(""), []);
     }
 
     #[test]

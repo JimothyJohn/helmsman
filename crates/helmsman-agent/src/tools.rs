@@ -650,6 +650,10 @@ pub fn run_with(
 
 fn unexpected(what: &str, status: u16, body: &Json) -> Outcome {
     let why = body["error"].as_str().unwrap_or("no reason given");
+    if matches!(status, 401 | 403) {
+        // Said as a refusal, so the model does not read it as broken data.
+        return fail(format!("refused: {what}: the box answered {status}: {why}"));
+    }
     fail(format!("{what}: the box answered {status}: {why}"))
 }
 

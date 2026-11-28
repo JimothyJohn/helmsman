@@ -13,6 +13,11 @@ use eframe::egui::{self, Color32};
 
 use crate::st_view::brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
 
+/// The dark canvas, the darkest layer: the chrome floats 16 levels above it
+/// (`CHROME_DARK`), a widget at rest 14 above that, so the layers separate.
+const CANVAS_DARK: Color32 = Color32::from_gray(0x0C);
+const CHROME_DARK: Color32 = Color32::from_gray(0x1C);
+
 /// The colours of one theme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -66,16 +71,16 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             dark: true,
-            bg: BLACK,
+            bg: CANVAS_DARK,
             panel: PANEL,
             fg: WHITE,
             muted: STEEL,
             rule: GRAPHITE,
             shade: Color32::from_rgb(0x55, 0x55, 0x55),
-            chart: BLACK,
+            chart: CANVAS_DARK,
             idle: GRAPHITE.gamma_multiply(1.6),
             edge: Color32::from_black_alpha(200),
-            veil: BLACK.gamma_multiply(0.75),
+            veil: CANVAS_DARK.gamma_multiply(0.75),
             code: Color32::from_gray(230),
             bad: Color32::from_rgb(0x4A, 0x16, 0x14),
             accent: YELLOW,
@@ -87,16 +92,16 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             dark: false,
-            bg: Color32::from_rgb(0xF4, 0xF4, 0xF4),
+            bg: Color32::from_rgb(0xEA, 0xEA, 0xEA),
             panel: WHITE,
             fg: BLACK,
             muted: Color32::from_rgb(0x66, 0x66, 0x66),
             rule: Color32::from_rgb(0xD0, 0xD0, 0xD0),
             shade: Color32::from_rgb(0xB8, 0xB8, 0xB8),
-            chart: Color32::from_rgb(0xFA, 0xFA, 0xFA),
+            chart: Color32::from_rgb(0xF6, 0xF6, 0xF6),
             idle: Color32::from_rgb(0xB4, 0xB4, 0xB4),
             edge: Color32::from_black_alpha(70),
-            veil: Color32::from_rgba_unmultiplied(0xF4, 0xF4, 0xF4, 0xC0),
+            veil: Color32::from_rgba_unmultiplied(0xEA, 0xEA, 0xEA, 0xC0),
             code: Color32::from_gray(25),
             bad: Color32::from_rgb(0xFF, 0xD9, 0xD6),
             accent: Color32::from_rgb(0x7A, 0x5A, 0x00),
@@ -233,14 +238,14 @@ struct Tones {
 fn tones(dark: bool) -> Tones {
     if dark {
         Tones {
-            rest: Color32::from_gray(0x26),
-            hover: Color32::from_gray(0x30),
-            press: Color32::from_gray(0x3A),
-            raised: Color32::from_gray(0x20),
-            hairline: Color32::from_gray(0x2C),
+            rest: Color32::from_gray(0x2A),
+            hover: Color32::from_gray(0x37),
+            press: Color32::from_gray(0x44),
+            raised: Color32::from_gray(0x26),
+            hairline: Color32::from_gray(0x30),
             field_edge: Color32::TRANSPARENT,
-            ink: Color32::from_gray(0xE6),
-            shadow: 120,
+            ink: Color32::from_gray(0xEE),
+            shadow: 150,
         }
     } else {
         Tones {
@@ -251,7 +256,7 @@ fn tones(dark: bool) -> Tones {
             hairline: Color32::from_gray(0xE2),
             field_edge: Color32::from_gray(0xDA),
             ink: Color32::from_gray(0x1A),
-            shadow: 30,
+            shadow: 44,
         }
     }
 }
@@ -267,9 +272,9 @@ fn style(s: &mut egui::Style, dark: bool) {
     let none = Stroke::NONE;
     let v = &mut s.visuals;
     v.panel_fill = if dark {
-        Color32::from_gray(0x1A)
+        CHROME_DARK
     } else {
-        Color32::from_gray(0xF7)
+        Color32::from_gray(0xFA)
     };
     v.window_fill = k.raised;
     v.window_stroke = Stroke::new(1.0, k.hairline);
@@ -283,7 +288,7 @@ fn style(s: &mut egui::Style, dark: bool) {
     };
     v.window_shadow = shadow;
     v.popup_shadow = shadow;
-    v.extreme_bg_color = if dark { Color32::from_gray(0x10) } else { WHITE };
+    v.extreme_bg_color = if dark { Color32::from_gray(0x12) } else { WHITE };
     v.faint_bg_color = k.raised;
     v.code_bg_color = k.rest;
     v.hyperlink_color = t.accent;
@@ -292,6 +297,11 @@ fn style(s: &mut egui::Style, dark: bool) {
     v.selection.bg_fill = k.hover;
     v.selection.stroke = Stroke::new(1.0, t.accent);
     v.indent_has_left_vline = false;
+    // A slider's thumb is a pill, not egui's round knob, and its track is
+    // filled to the thumb in the accent (the checkbox and the caret are
+    // painted in `check` and `caret`).
+    v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.5 };
+    v.slider_trailing_fill = true;
 
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = v.panel_fill;
@@ -317,13 +327,43 @@ fn style(s: &mut egui::Style, dark: bool) {
     w.open.fg_stroke = Stroke::new(1.0, t.fg);
 
     let sp = &mut s.spacing;
-    sp.item_spacing = vec2(8.0, 6.0);
+    // On the 4/8 pt grid: 8 between rows as between items.
+    sp.item_spacing = vec2(8.0, 8.0);
     sp.button_padding = vec2(10.0, 4.0);
     sp.window_margin = Margin::same(12);
     sp.menu_margin = Margin::same(8);
     sp.menu_spacing = 4.0;
     s.text_styles = text_styles();
 }
+
+/// The frame of floating chrome (a side pane, the bottom pane, the header):
+/// the chrome layer's fill, rounded corners, a shadow, and `FLOAT_INSET` of
+/// the canvas left around it (Nick, 2026-11-27), as the diagram's corner
+/// controls sit.
+pub fn float_frame(ui: &egui::Ui) -> egui::Frame {
+    let dark = ui.visuals().dark_mode;
+    egui::Frame::new()
+        .fill(ui.visuals().panel_fill)
+        .corner_radius(egui::CornerRadius::same(RADIUS + 4))
+        .shadow(egui::Shadow {
+            offset: [0, 4],
+            blur: 16,
+            spread: 0,
+            color: Color32::from_black_alpha(tones(dark).shadow),
+        })
+        .inner_margin(egui::Margin {
+            left: 8,
+            right: 8,
+            top: 8,
+            // The corner's radius, so a scrolled list is cut above the curve.
+            bottom: 12,
+        })
+        .outer_margin(egui::Margin::same(FLOAT_INSET))
+}
+
+/// How far floating chrome sits in from the window's edges and from its
+/// neighbours, in points (8 to 12 by the decision, on the 4 pt grid).
+pub const FLOAT_INSET: i8 = 8;
 
 /// A tab (or a toggle chip): its label, muted until it is the one on,
 /// which gets a 2 pt accent bar under it. Frameless until the pointer is
@@ -347,7 +387,7 @@ pub fn tab(ui: &mut egui::Ui, on: bool, text: &str, min: egui::Vec2) -> egui::Re
     if on {
         ui.painter().hline(
             (r.rect.left() + pad)..=(r.rect.right() - pad),
-            r.rect.bottom() - 1.0,
+            px(ui, r.rect.bottom() - 1.0),
             egui::Stroke::new(2.0, t.accent),
         );
     }
@@ -356,6 +396,186 @@ pub fn tab(ui: &mut egui::Ui, on: bool, text: &str, min: egui::Vec2) -> egui::Re
 
 /// A tab's padding either side of its label.
 const TAB_PAD: f32 = 6.0;
+
+/// How long a hover or a press takes to ease in or out, seconds (Nick,
+/// 2026-11-27: about 100 ms).
+pub const EASE: f32 = 0.1;
+
+/// A `from` to `to` mix of `amount` (0 to 1), channel by channel.
+#[must_use]
+pub fn mix(from: Color32, to: Color32, amount: f32) -> Color32 {
+    from.lerp_to_gamma(to, amount.clamp(0.0, 1.0))
+}
+
+/// How far a control is toward `on` (0 to 1), eased over [`EASE`], keyed
+/// by the response's own id and `key`, so one control can ease two things.
+pub fn ease(ui: &egui::Ui, r: &egui::Response, key: &str, on: bool) -> f32 {
+    ui.ctx()
+        .animate_bool_with_time(r.id.with(("ease", key)), on, EASE)
+}
+
+/// A control's ground between its rest (nothing, or `rest`) and the tone
+/// of the pointer over it or on it, eased: the hover and press of a
+/// painted control, which egui would swap in a frame.
+#[must_use]
+pub fn eased_fill(ui: &egui::Ui, r: &egui::Response, rest: Color32) -> Color32 {
+    let hover = ui.style().visuals.widgets.hovered.bg_fill;
+    let press = ui.style().visuals.widgets.active.bg_fill;
+    let h = ease(ui, r, "hover", r.hovered() || r.has_focus());
+    let p = ease(ui, r, "press", r.is_pointer_button_down_on());
+    mix(mix(rest, hover, h), press, p)
+}
+
+/// The ring keyboard focus shows on a painted control: the accent, 2 pt,
+/// just outside `rect`. Nothing unless `r` has focus.
+pub fn focus_ring(ui: &egui::Ui, r: &egui::Response, rect: egui::Rect, radius: u8) {
+    if r.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            egui::CornerRadius::same(radius + 2),
+            egui::Stroke::new(2.0, theme(ui).accent),
+            egui::StrokeKind::Outside,
+        );
+    }
+}
+
+/// `v` on the physical pixel grid: a rect's edge drawn there is crisp at
+/// any DPI.
+#[must_use]
+pub fn px(ui: &egui::Ui, v: f32) -> f32 {
+    let ppp = ui.pixels_per_point();
+    (v * ppp).round() / ppp
+}
+
+/// The fold caret, painted: a chevron pointing right when shut and down
+/// when open (`openness` 0 to 1 turns it), 2 pt, round-ended like the
+/// glyphs. Beside a title, in a collapsing header, instead of the stock
+/// triangle.
+pub fn caret(p: &egui::Painter, c: egui::Pos2, openness: f32, color: Color32) {
+    let a = openness.clamp(0.0, 1.0) * std::f32::consts::FRAC_PI_2;
+    let (sin, cos) = a.sin_cos();
+    let turn = |x: f32, y: f32| egui::pos2(c.x + x * cos - y * sin, c.y + x * sin + y * cos);
+    // Centred on the middle of the chevron's reach, not its tip.
+    let pts = vec![turn(-2.5, -4.5), turn(2.0, 0.0), turn(-2.5, 4.5)];
+    p.add(egui::Shape::line(pts, egui::Stroke::new(2.0, color)));
+}
+
+/// The icon of a `CollapsingHeader` (`.icon(theme::fold_icon)`): the
+/// [`caret`], muted until the pointer is on the header.
+pub fn fold_icon(ui: &mut egui::Ui, openness: f32, r: &egui::Response) {
+    let t = theme(ui);
+    let hot = ease(ui, r, "fold", r.hovered());
+    caret(ui.painter(), r.rect.center(), openness, mix(t.muted, t.fg, hot));
+}
+
+/// A checkbox painted to match the glyphs: a 20 pt square (radius 4), its
+/// ground eased on hover, the accent with a black tick when ticked, a
+/// focus ring from the keyboard. `text` may be empty (a bare box in a
+/// table). The response is clicked and changed on a toggle, as egui's.
+pub fn check(ui: &mut egui::Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let text = text.into();
+    let bare = text.is_empty();
+    let side = CHECK_SIDE;
+    let paint = |ui: &mut egui::Ui, on: bool, r: &egui::Response, rect: egui::Rect| {
+        let t = theme(ui);
+        let rest = if on { t.accent } else { tones(t.dark).rest };
+        let fill = if on {
+            mix(rest, Color32::WHITE, ease(ui, r, "hover", r.hovered()) * 0.15)
+        } else {
+            eased_fill(ui, r, rest)
+        };
+        let radius = 4;
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(radius), fill);
+        if !on && !t.dark {
+            ui.painter().rect_stroke(
+                rect,
+                egui::CornerRadius::same(radius),
+                egui::Stroke::new(1.0, tones(false).field_edge),
+                egui::StrokeKind::Inside,
+            );
+        }
+        if on {
+            let c = rect.center();
+            ui.painter().add(egui::Shape::line(
+                vec![
+                    egui::pos2(c.x - 5.0, c.y + 0.5),
+                    egui::pos2(c.x - 1.5, c.y + 4.0),
+                    egui::pos2(c.x + 5.0, c.y - 3.5),
+                ],
+                egui::Stroke::new(2.0, BLACK),
+            ));
+        }
+        focus_ring(ui, r, rect, radius);
+    };
+    if bare {
+        let (rect, mut r) = ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::click());
+        if r.clicked() {
+            *on = !*on;
+            r.mark_changed();
+        }
+        paint(ui, *on, &r, rect);
+        return r;
+    }
+    let mut rect = egui::Rect::NOTHING;
+    let inner = ui.horizontal(|ui| {
+        let (b, rb) = ui.allocate_exact_size(egui::Vec2::splat(side), egui::Sense::click());
+        rect = b;
+        let rl = ui.add(
+            egui::Label::new(text)
+                .sense(egui::Sense::click())
+                .wrap_mode(egui::TextWrapMode::Extend),
+        );
+        (rb, rl)
+    });
+    let (rb, rl) = inner.inner;
+    let mut r = rb.union(rl);
+    if r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    paint(ui, *on, &r, rect);
+    r
+}
+
+/// The width [`live`] takes for `text` in a slot of `chars` digits.
+#[must_use]
+pub fn live_slot(ui: &egui::Ui, text: &str, chars: usize) -> f32 {
+    let font = egui::FontId::monospace(MONO);
+    ui.fonts_mut(|f| {
+        let a = f
+            .layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE)
+            .size()
+            .x;
+        let b = f.layout_no_wrap("0".repeat(chars), font, Color32::WHITE).size().x;
+        a.max(b)
+    })
+}
+
+/// A live number (a clock, a value) in the mono face, right-aligned in a
+/// slot as wide as `chars` digits, so it does not jitter or move what is
+/// beside it as its figures change (Nick, 2026-11-27: mono is for code and
+/// live values only, and live numbers have a fixed width).
+pub fn live(ui: &mut egui::Ui, text: &str, color: Color32, chars: usize) -> egui::Response {
+    let font = egui::FontId::monospace(MONO);
+    let (galley, slot) = ui.fonts_mut(|f| {
+        (
+            f.layout_no_wrap(text.to_owned(), font.clone(), color),
+            f.layout_no_wrap("0".repeat(chars), font, color).size().x,
+        )
+    });
+    let size = egui::vec2(slot.max(galley.size().x), galley.size().y);
+    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter().galley(
+        egui::pos2(rect.right() - galley.size().x, rect.top()),
+        galley,
+        color,
+    );
+    r
+}
+
+/// The side of a [`check`] box, points.
+pub const CHECK_SIDE: f32 = 20.0;
 
 /// Keeps egui's theme on the one the layout asks for (`light`), so the
 /// page, its widgets and [`Theme`] agree from the first frame, with the
@@ -419,10 +639,14 @@ pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
         .kind(egui::UiKind::Modal)
         .sense(egui::Sense::hover())
         .order(egui::Order::Foreground)
+        // No fade-in: the question is readable from the first frame it is up.
+        .fade_in(false)
         .interactable(true)
         .pivot(egui::Align2::CENTER_TOP)
         .fixed_pos(at + egui::vec2(0.0, 14.0))
-        .constrain(true);
+        .constrain(true)
+        // Inset from the window's edge as the floating chrome is, not flush.
+        .constrain_to(screen.shrink(f32::from(FLOAT_INSET)));
     egui::Modal::new(egui::Id::unique(key)).area(area)
 }
 
@@ -500,7 +724,7 @@ mod tests {
     fn dark_is_the_old_palette_and_light_inverts_the_page() {
         let d = Theme::dark();
         assert!(d.dark);
-        assert_eq!((d.bg, d.fg, d.accent), (BLACK, WHITE, YELLOW));
+        assert_eq!((d.bg, d.fg, d.accent), (super::CANVAS_DARK, WHITE, YELLOW));
         let l = Theme::light();
         assert!(!l.dark);
         assert_eq!((l.panel, l.fg), (WHITE, BLACK));
@@ -518,7 +742,7 @@ mod tests {
         use crate::st_view::brand::{GREEN, RED, WARN};
         let l = Theme::light();
         let rgb = |c: eframe::egui::Color32| [c.r(), c.g(), c.b()];
-        let grounds = [rgb(l.bg), rgb(l.panel), [0xF7; 3], [0xEB; 3]];
+        let grounds = [rgb(l.bg), rgb(l.panel), [0xFA; 3], [0xEB; 3]];
         for (name, c) in [
             ("accent", l.accent),
             ("muted", l.muted),

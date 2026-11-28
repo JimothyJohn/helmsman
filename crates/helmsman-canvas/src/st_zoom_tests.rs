@@ -308,7 +308,7 @@ fn the_diagram_under_the_pointer_stays_under_it_when_the_level_changes() {
 }
 
 #[test]
-fn q_and_e_still_step_through_stops_at_each_level_without_changing_it() {
+fn period_and_comma_still_step_through_stops_at_each_level_without_changing_it() {
     let mut h = Harness::new(SRC);
     let at = Harness::centre();
     for (z, level) in [(1.0, Level::Near), (0.5, Level::Middle), (0.2, Level::Far)] {
@@ -320,7 +320,7 @@ fn q_and_e_still_step_through_stops_at_each_level_without_changing_it() {
             h.frame(vec![
                 Event::PointerMoved(at),
                 Event::Key {
-                    key: egui::Key::E,
+                    key: egui::Key::Period,
                     physical_key: None,
                     pressed: true,
                     repeat: false,
@@ -433,13 +433,14 @@ impl Harness {
         self.session.trace.as_ref().map(|t| t as &dyn Scan)
     }
 
-    /// The rect of corner control `k` (0 hand, 1 zoom in, 2 zoom out).
+    /// The rect of corner control `k` (0 hand, 1 zoom in, 2 zoom out, 3 fit).
     fn control(&self, k: u8) -> Rect {
+        // The four glyphs make the row (no rung's name since 2026-11-26).
         let row = self.view.corner_rect(self.area(), self.scan());
-        let step = row.width() / 3.0;
+        let step = TAP + 8.0;
         Rect::from_min_size(
             row.min + Vec2::new(step * f32::from(k), 0.0),
-            Vec2::new(step, row.height()),
+            Vec2::new(TAP, row.height()),
         )
     }
 
@@ -572,6 +573,7 @@ fn the_hand_makes_a_drag_on_empty_space_pan_and_off_it_selects() {
 
 #[test]
 fn zoom_in_and_out_step_the_zoom_and_stop_at_the_wheels_limits() {
+    use helmsman_diagram::fold::ladder::{MAX_ZOOM, MIN_ZOOM};
     let mut h = shipped(SRC);
     let z0 = h.cam().zoom;
     h.click(h.control(1).center());
@@ -579,27 +581,31 @@ fn zoom_in_and_out_step_the_zoom_and_stop_at_the_wheels_limits() {
     assert!((z1 / z0 - super::super::ZOOM_STEP).abs() < 1e-3, "{z0} -> {z1}");
     h.click(h.control(2).center());
     assert!((h.cam().zoom - z0).abs() < 1e-3);
+    // The limits are the zoom ladder's: its closest and farthest rungs.
     for _ in 0..30 {
         h.click(h.control(1).center());
     }
-    assert!((h.cam().zoom - 3.0).abs() < 1e-3, "{}", h.cam().zoom);
+    assert!((h.cam().zoom - MAX_ZOOM).abs() < 1e-3, "{}", h.cam().zoom);
     for _ in 0..60 {
         h.click(h.control(2).center());
     }
-    assert!((h.cam().zoom - 0.15).abs() < 1e-3, "{}", h.cam().zoom);
+    assert!((h.cam().zoom - MIN_ZOOM).abs() < 1e-3, "{}", h.cam().zoom);
     // None of it changed what is drawn or counted as an edit.
     assert_eq!(h.view.zoom_level(), Level::Near);
     assert_eq!(h.view.edits, 0);
 }
 
 #[test]
-fn the_corner_controls_are_tap_sized_inside_a_narrow_view_and_clear_of_the_lamps() {
+/// The corner has pan, zoom in, zoom out and fit (Nick, 2026-11-26; the
+/// lamp fixture that shared the corner is gone): four tap-sized glyphs
+/// inside the view, a narrow one too.
+fn the_four_corner_controls_are_tap_sized_inside_a_narrow_view() {
     let mut h = shipped(SRC);
     for size in [Vec2::new(1200.0, 800.0), Vec2::new(300.0, 400.0)] {
         h.size = size;
         h.frame(vec![]);
         h.frame(vec![]);
-        for k in 0..3 {
+        for k in 0..4 {
             let r = h.control(k);
             assert!(h.area().contains_rect(r), "{size:?} control {k}: {r:?}");
             assert!(
@@ -607,12 +613,31 @@ fn the_corner_controls_are_tap_sized_inside_a_narrow_view_and_clear_of_the_lamps
                 "{size:?} {k}: {r:?}"
             );
         }
-        // The lamp fixture of the program's BOOL outputs keeps its corner.
-        let fixture = h.view.fixture(h.scan()).expect("the program has BOOL outputs");
-        let lamps = crate::lamps::rect(h.area(), &fixture);
-        let row = h.view.corner_rect(h.area(), h.scan());
-        if size.x > 600.0 {
-            assert!(!row.intersects(lamps), "{row:?} over the lamps {lamps:?}");
-        }
+        let row = h.view.corner_rect(h.area(), None);
+        assert!(h.area().contains_rect(row), "{size:?}: {row:?}");
     }
+}
+
+#[test]
+/// The fit glyph with nothing selected fits the whole diagram again after
+/// the view was zoomed in and panned away, and counts as no edit.
+fn the_fit_glyph_with_nothing_selected_frames_the_whole_diagram() {
+    let mut h = shipped(SRC);
+    h.frame(vec![]);
+    let z0 = h.cam().zoom;
+    for _ in 0..4 {
+        h.click(h.control(1).center());
+    }
+    assert!(h.cam().zoom > z0 * 1.5, "zoomed in: {z0} -> {}", h.cam().zoom);
+    h.click(h.control(3).center());
+    // The fit eases in: give it time.
+    for _ in 0..90 {
+        h.frame(vec![]);
+    }
+    let z = h.cam().zoom;
+    assert!(
+        (z / z0 - 1.0).abs() < 0.05,
+        "fit returns to the fitted zoom: {z0} vs {z}"
+    );
+    assert_eq!(h.view.edits, 0, "a fit is no edit");
 }

@@ -186,20 +186,6 @@ pub fn example_project(src: &str) -> (String, String) {
 /// nothing wired; a number output on the screen.
 #[must_use]
 pub fn example_io_map(src: &str) -> String {
-    io_map_of(src, true)
-}
-
-/// [`example_io_map`] for a box: the same lines, except that a number
-/// input gets none. A box refuses `in NAME int screen NAME` (a screen tile
-/// is something the box shows, an out signal), and no other line is the
-/// right one without knowing the device, so the input has no signal until
-/// it is assigned to a device channel.
-#[must_use]
-pub fn box_io_map(src: &str) -> String {
-    io_map_of(src, false)
-}
-
-fn io_map_of(src: &str, screen_inputs: bool) -> String {
     use crate::playground::Dir;
     use helmsman_iec::Ty;
     let s = crate::playground::Session::new(src);
@@ -207,8 +193,8 @@ fn io_map_of(src: &str, screen_inputs: bool) -> String {
         "# This example's inputs and outputs, on the box's own channels so it\n\
          # runs with nothing wired. If this box's own channels are wired to\n\
          # anything, these lines drive it: check them first. To use a remote\n\
-         # I/O module: Devices tab, Scan, then Use this device; it offers\n\
-         # to move these lines onto the module.\n",
+         # I/O module: Devices tab, Scan for Device, add the module, then\n\
+         # Add I/O on it and give each point to its variable.\n",
     );
     let (mut di, mut dq) = (0, 0);
     for p in s.inputs().chain(s.outputs()) {
@@ -223,10 +209,7 @@ fn io_map_of(src: &str, screen_inputs: bool) -> String {
                 format!("out {name} bool box do:{} safe=false", dq - 1)
             }
             (Dir::Out, _) => format!("out {name} int screen {name} safe=0"),
-            (Dir::In, _) if screen_inputs => format!("in  {name} int screen {name}"),
-            (Dir::In, _) => {
-                format!("# {name} is a number input: assign it to a device channel, then it gets its line")
-            }
+            (Dir::In, _) => format!("in  {name} int screen {name}"),
         };
         out.push_str(&line);
         out.push('\n');
@@ -263,15 +246,10 @@ const fn group_of(_name: &str) -> Group {
     Group::FirstSteps
 }
 
-/// What a new project starts with.
+/// What a new project starts with: a program and nothing in it (Nick,
+/// 2026-11-25: "Run and lamp always shows up on a new file but it's not
+/// necessary"). Describe or the editor fills it.
 pub const STARTER: &str = "PROGRAM main
-VAR_INPUT
-  run : BOOL;
-END_VAR
-VAR_OUTPUT
-  lamp : BOOL;
-END_VAR
-lamp := run;
 END_PROGRAM
 ";
 
